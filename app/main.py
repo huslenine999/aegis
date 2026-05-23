@@ -282,43 +282,18 @@ def run_scan():
         target_ext = Path(target_path).suffix.lower()
         is_dir = Path(target_path).is_dir()
         
-        # Check which languages are present
+        # Check if Python files are present
         has_python = False
-        has_c = False
-        has_js = False
-        has_java = False
-
         if is_dir:
             for root, dirs, files in os.walk(target_path):
-                for file in files:
-                    ext = Path(file).suffix.lower()
-                    if ext == ".py":
-                        has_python = True
-                    elif ext in (".c", ".cpp", ".cc", ".h", ".hpp"):
-                        has_c = True
-                    elif ext in (".js", ".ts", ".jsx", ".tsx"):
-                        has_js = True
-                    elif ext == ".java":
-                        has_java = True
+                if any(file.endswith(".py") for file in files):
+                    has_python = True
+                    break
         else:
             if target_ext == ".py":
                 has_python = True
-            elif target_ext in (".c", ".cpp", ".cc", ".h", ".hpp"):
-                has_c = True
-            elif target_ext in (".js", ".ts", ".jsx", ".tsx"):
-                has_js = True
-            elif target_ext == ".java":
-                has_java = True
 
-        flawfinder_report_path = SCANS_DIR / "flawfinder-report.json"
-        eslint_report_path = SCANS_DIR / "eslint-report.json"
-        pmd_report_path = SCANS_DIR / "pmd-report.json"
         bandit_report_path = SCANS_DIR / "bandit-report.json"
-
-        empty_flawfinder = {"runs": []}
-        empty_eslint = []
-        empty_pmd = {"violations": []}
-        empty_bandit = {"results": []}
 
         # 1. Run Python SAST (Bandit)
         if has_python:
@@ -339,153 +314,7 @@ def run_scan():
             subprocess.run(bandit_cmd, cwd=PROJECT_ROOT, check=False)
         else:
             with open(bandit_report_path, "w") as f:
-                json.dump(empty_bandit, f)
-
-        # 2. Run C/C++ SAST (Flawfinder)
-        if has_c:
-            flawfinder_bin = "flawfinder"
-            if sys_exec_dir:
-                local_bin = Path(sys_exec_dir) / "flawfinder"
-                if local_bin.exists():
-                    flawfinder_bin = str(local_bin)
-            with open(flawfinder_report_path, "w") as f_out:
-                flawfinder_cmd = [
-                    flawfinder_bin,
-                    "--sarif",
-                    target_path
-                ]
-                subprocess.run(flawfinder_cmd, cwd=PROJECT_ROOT, stdout=f_out, check=False)
-        else:
-            with open(flawfinder_report_path, "w") as f:
-                json.dump(empty_flawfinder, f)
-
-        # 3. Run JavaScript/TypeScript SAST (ESLint + eslint-plugin-security)
-        if has_js:
-            eslint_env_dir = PROJECT_ROOT / "bin" / "eslint-env"
-            eslint_env_dir.mkdir(exist_ok=True, parents=True)
-            
-            pkg_json = eslint_env_dir / "package.json"
-            if not pkg_json.exists():
-                pkg_json.write_text(json.dumps({
-                    "name": "eslint-env",
-                    "version": "1.0.0",
-                    "dependencies": {
-                        "eslint": "^8.57.0",
-                        "eslint-plugin-security": "^3.0.1"
-                    }
-                }))
-                subprocess.run(["npm", "install", "--prefix", str(eslint_env_dir)], cwd=PROJECT_ROOT, check=False)
-                
-            eslint_legacy_config = eslint_env_dir / ".eslintrc.json"
-            eslint_legacy_config.write_text(json.dumps({
-                "plugins": ["security"],
-                "rules": {
-                    "security/detect-eval-with-expression": "error",
-                    "security/detect-non-literal-require": "warn",
-                    "security/detect-object-injection": "warn",
-                    "security/detect-unsafe-regex": "error",
-                    "security/detect-buffer-noassert": "error",
-                    "security/detect-child-process": "warn",
-                    "security/detect-disable-mustache-escape": "error",
-                    "security/detect-no-csrf-before-method-override": "error",
-                    "security/detect-non-literal-fs-filename": "warn",
-                    "security/detect-non-literal-regexp": "warn",
-                    "security/detect-pseudoRandomBytes": "warn"
-                },
-                "parserOptions": {
-                    "ecmaVersion": 2021
-                },
-                "env": {
-                    "es2021": True,
-                    "node": True
-                }
-            }))
-                
-            # Clean up old flat config to prevent ESLint v8 from defaulting to flat config mode
-            old_cfg = eslint_env_dir / "eslint.config.js"
-            if old_cfg.exists():
-                try:
-                    old_cfg.unlink()
-                except Exception:
-                    pass
-
-            eslint_bin = eslint_env_dir / "node_modules" / "eslint" / "bin" / "eslint.js"
-            eslint_cmd = [
-                "node",
-                str(eslint_bin),
-                "--no-eslintrc",
-                "-c",
-                str(eslint_legacy_config),
-                "-f",
-                "json",
-                "-o",
-                str(eslint_report_path),
-                target_path
-            ]
-            subprocess.run(eslint_cmd, cwd=PROJECT_ROOT, check=False, env={**os.environ, "ESLINT_USE_FLAT_CONFIG": "false"})
-        else:
-            with open(eslint_report_path, "w") as f:
-                json.dump(empty_eslint, f)
-
-        # 4. Run Java SAST (PMD)
-        if has_java:
-            pmd_bin_dir = PROJECT_ROOT / "bin" / "pmd-bin-7.0.0"
-            pmd_executable = None
-            
-            if pmd_bin_dir.exists():
-                for p in pmd_bin_dir.rglob("pmd"):
-                    if p.is_file():
-                        try:
-                            p.chmod(0o755)
-                        except Exception:
-                            pass
-                        pmd_executable = str(p)
-                        break
-
-            if not pmd_executable:
-                import urllib.request
-                import zipfile
-                pmd_zip = SCANS_DIR / "pmd.zip"
-                url = "https://github.com/pmd/pmd/releases/download/pmd_releases/7.0.0/pmd-dist-7.0.0-bin.zip"
-                try:
-                    print(f"[Aegis] Downloading PMD from {url}...")
-                    urllib.request.urlretrieve(url, pmd_zip)
-                    print("[Aegis] Extracting PMD...")
-                    with zipfile.ZipFile(pmd_zip, 'r') as zip_ref:
-                        zip_ref.extractall(str(PROJECT_ROOT / "bin"))
-                    pmd_zip.unlink()
-                    
-                    for p in pmd_bin_dir.rglob("pmd"):
-                        if p.is_file():
-                            try:
-                                p.chmod(0o755)
-                            except Exception:
-                                pass
-                            pmd_executable = str(p)
-                            break
-                except Exception as e:
-                    print(f"[WARN] Failed to download/install PMD: {e}")
-
-            if pmd_executable:
-                pmd_cmd = [
-                    pmd_executable,
-                    "check",
-                    "-d",
-                    target_path,
-                    "-R",
-                    "category/java/security.xml",
-                    "-f",
-                    "json",
-                    "-r",
-                    str(pmd_report_path)
-                ]
-                subprocess.run(pmd_cmd, cwd=PROJECT_ROOT, check=False)
-            else:
-                with open(pmd_report_path, "w") as f:
-                    json.dump(empty_pmd, f)
-        else:
-            with open(pmd_report_path, "w") as f:
-                json.dump(empty_pmd, f)
+                json.dump({"results": []}, f)
         
         # Run the policy engine
         engine_path = PROJECT_ROOT / "policy_engine.py"
@@ -669,9 +498,6 @@ def export_dossier():
             return None
 
     bandit_report = load_json(SCANS_DIR / "bandit-report.json")
-    flawfinder_report = load_json(SCANS_DIR / "flawfinder-report.json")
-    eslint_report = load_json(SCANS_DIR / "eslint-report.json")
-    pmd_report = load_json(SCANS_DIR / "pmd-report.json")
     safety_report = load_json(SCANS_DIR / "safety-report.json")
     trivy_report = load_json(SCANS_DIR / "trivy-report.json")
 
@@ -685,66 +511,6 @@ def export_dossier():
         bandit_total = len(bandit_results)
         bandit_blocking = len([r for r in bandit_results if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}])
         bandit_status = "FAIL" if bandit_blocking > 0 else "PASS"
-
-    # Determine status & counts for Flawfinder
-    if not (SCANS_DIR / "flawfinder-report.json").exists():
-        flawfinder_status = "MISSING"
-        flawfinder_total = 0
-        flawfinder_blocking = 0
-    else:
-        flawfinder_results = []
-        if flawfinder_report:
-            for run in flawfinder_report.get("runs", []):
-                for r in run.get("results", []):
-                    flawfinder_results.append(r)
-        flawfinder_total = len(flawfinder_results)
-        flawfinder_blocking = len([r for r in flawfinder_results if r.get("rank", 0) >= 0.4])
-        flawfinder_status = "FAIL" if flawfinder_blocking > 0 else "PASS"
-
-    # Determine status & counts for ESLint
-    if not (SCANS_DIR / "eslint-report.json").exists():
-        eslint_status = "MISSING"
-        eslint_total = 0
-        eslint_blocking = 0
-    else:
-        eslint_results = []
-        if eslint_report:
-            for file_res in eslint_report:
-                for msg in file_res.get("messages", []):
-                    eslint_results.append((file_res.get("filePath", "unknown"), msg))
-        eslint_total = len(eslint_results)
-        eslint_blocking = len([r[1] for r in eslint_results if r[1].get("severity", 1) >= 1])
-        eslint_status = "FAIL" if eslint_blocking > 0 else "PASS"
-
-    # Determine status & counts for PMD
-    if not (SCANS_DIR / "pmd-report.json").exists():
-        pmd_status = "MISSING"
-        pmd_total = 0
-        pmd_blocking = 0
-    else:
-        pmd_results = []
-        if pmd_report:
-            for f in pmd_report.get("files", []):
-                filename = f.get("filename", "unknown")
-                for v in f.get("violations", []):
-                    pmd_results.append({
-                        "rule": v.get("rule"),
-                        "priority": v.get("priority", 3),
-                        "file": filename,
-                        "beginLine": v.get("beginLine", 0),
-                        "description": v.get("description", "")
-                    })
-            for v in pmd_report.get("violations", []):
-                pmd_results.append({
-                    "rule": v.get("rule"),
-                    "priority": v.get("priority", 3),
-                    "file": v.get("file", "unknown"),
-                    "beginLine": v.get("beginLine", 0),
-                    "description": v.get("description", "")
-                })
-        pmd_total = len(pmd_results)
-        pmd_blocking = len([r for r in pmd_results if r.get("priority", 3) <= 3])
-        pmd_status = "FAIL" if pmd_blocking > 0 else "PASS"
 
     # Determine status & counts for Safety
     if not (SCANS_DIR / "safety-report.json").exists():
@@ -780,9 +546,6 @@ def export_dossier():
     missing_tools = []
     for tool, status in [
         ("Bandit", bandit_status),
-        ("Flawfinder", flawfinder_status),
-        ("ESLint", eslint_status),
-        ("PMD", pmd_status),
         ("Safety", safety_status),
         ("Trivy", trivy_status)
     ]:
@@ -821,93 +584,6 @@ def export_dossier():
             bandit_findings += "  ------------------------------------------------------------------\n"
     else:
         bandit_findings = "  No issues detected.\n"
-
-    # Format Flawfinder findings
-    flawfinder_findings = ""
-    if flawfinder_report:
-        flawfinder_results = []
-        for run in flawfinder_report.get("runs", []):
-            for r in run.get("results", []):
-                flawfinder_results.append(r)
-        if flawfinder_results:
-            for issue in flawfinder_results[:5]:
-                rank = issue.get("rank", 0)
-                if rank >= 0.8:
-                    severity = "HIGH"
-                elif rank >= 0.4:
-                    severity = "MEDIUM"
-                else:
-                    severity = "LOW"
-                loc = "unknown"
-                start_line = 0
-                locs = issue.get("locations", [])
-                if locs:
-                    physical = locs[0].get("physicalLocation", {})
-                    loc = physical.get("artifactLocation", {}).get("uri", "unknown")
-                    start_line = physical.get("region", {}).get("startLine", 0)
-                flawfinder_findings += f"  - ID: {issue.get('ruleId')} | Severity: {severity} | Rank: {rank}\n"
-                flawfinder_findings += f"    Location: {loc}:{start_line}\n"
-                flawfinder_findings += f"    Details: {issue.get('message', {}).get('text', '')}\n"
-                flawfinder_findings += "  ------------------------------------------------------------------\n"
-        else:
-            flawfinder_findings = "  No issues detected.\n"
-    else:
-        flawfinder_findings = "  No report file found.\n"
-
-    # Format ESLint findings
-    eslint_findings = ""
-    if eslint_report:
-        eslint_results = []
-        for file_res in eslint_report:
-            for msg in file_res.get("messages", []):
-                eslint_results.append((file_res.get("filePath", "unknown"), msg))
-        if eslint_results:
-            for filepath, issue in eslint_results[:5]:
-                raw_sev = issue.get("severity", 1)
-                severity = "HIGH" if raw_sev == 2 else ("MEDIUM" if raw_sev == 1 else "LOW")
-                eslint_findings += f"  - ID: {issue.get('ruleId')} | Severity: {severity}\n"
-                eslint_findings += f"    Location: {filepath}:{issue.get('line', 0)}\n"
-                eslint_findings += f"    Details: {issue.get('message', '')}\n"
-                eslint_findings += "  ------------------------------------------------------------------\n"
-        else:
-            eslint_findings = "  No issues detected.\n"
-    else:
-        eslint_findings = "  No report file found.\n"
-
-    # Format PMD findings
-    pmd_findings = ""
-    if pmd_report:
-        violations = []
-        for f in pmd_report.get("files", []):
-            filename = f.get("filename", "unknown")
-            for v in f.get("violations", []):
-                violations.append({
-                    "rule": v.get("rule"),
-                    "priority": v.get("priority", 3),
-                    "file": filename,
-                    "beginLine": v.get("beginLine", 0),
-                    "description": v.get("description", "")
-                })
-        for v in pmd_report.get("violations", []):
-            violations.append({
-                "rule": v.get("rule"),
-                "priority": v.get("priority", 3),
-                "file": v.get("file", "unknown"),
-                "beginLine": v.get("beginLine", 0),
-                "description": v.get("description", "")
-            })
-        if violations:
-            for issue in violations[:5]:
-                priority = issue.get("priority", 3)
-                severity = "HIGH" if priority <= 2 else ("MEDIUM" if priority == 3 else "LOW")
-                pmd_findings += f"  - Rule: {issue.get('rule')} | Severity: {severity} | Priority: {priority}\n"
-                pmd_findings += f"    Location: {issue.get('file', 'unknown')}:{issue.get('beginLine', 0)}\n"
-                pmd_findings += f"    Details: {issue.get('description', '')}\n"
-                pmd_findings += "  ------------------------------------------------------------------\n"
-        else:
-            pmd_findings = "  No issues detected.\n"
-    else:
-        pmd_findings = "  No report file found.\n"
 
     # Format Safety findings
     safety_findings = ""
@@ -983,34 +659,7 @@ Blocking Issues: {bandit_blocking}
 FINDINGS (Top 5):
 {bandit_findings}
 
-[2] C/C++ SECURITY SCANNER - FLAWFINDER
---------------------------------------------------------------------------------
-Status: {flawfinder_status}
-Total Issues Detected: {flawfinder_total}
-Blocking Issues: {flawfinder_blocking}
-
-FINDINGS (Top 5):
-{flawfinder_findings}
-
-[3] JAVASCRIPT SECURITY LINTER - ESLINT
---------------------------------------------------------------------------------
-Status: {eslint_status}
-Total Issues Detected: {eslint_total}
-Blocking Issues: {eslint_blocking}
-
-FINDINGS (Top 5):
-{eslint_findings}
-
-[4] JAVA STATIC ANALYZER - PMD
---------------------------------------------------------------------------------
-Status: {pmd_status}
-Total Issues Detected: {pmd_total}
-Blocking Issues: {pmd_blocking}
-
-FINDINGS (Top 5):
-{pmd_findings}
-
-[5] SOFTWARE COMPOSITION ANALYSIS (SCA) - SAFETY
+[2] SOFTWARE COMPOSITION ANALYSIS (SCA) - SAFETY
 --------------------------------------------------------------------------------
 Status: {safety_status}
 Total Issues Detected: {safety_total}
@@ -1019,7 +668,7 @@ Blocking Issues: {safety_blocking}
 FINDINGS (Top 5):
 {safety_findings}
 
-[6] CONTAINER IMAGE SCANNING - TRIVY
+[3] CONTAINER IMAGE SCANNING - TRIVY
 --------------------------------------------------------------------------------
 Status: {trivy_status}
 Total Issues Detected: {trivy_total}

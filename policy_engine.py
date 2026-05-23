@@ -18,9 +18,6 @@ if not TEMPLATE_PATH.exists():
     TEMPLATE_PATH = script_dir / "app" / "templates" / "report_template.html"
 
 BANDIT_REPORT = SCAN_DIR / "bandit-report.json"
-FLAWFINDER_REPORT = SCAN_DIR / "flawfinder-report.json"
-ESLINT_REPORT = SCAN_DIR / "eslint-report.json"
-PMD_REPORT = SCAN_DIR / "pmd-report.json"
 SAFETY_REPORT = SCAN_DIR / "safety-report.json"
 TRIVY_REPORT = SCAN_DIR / "trivy-report.json"
 
@@ -36,9 +33,6 @@ def get_env_set(var_name: str, default: set) -> set:
 
 
 FAIL_ON_BANDIT_SEVERITIES = get_env_set("FAIL_ON_BANDIT", {"MEDIUM", "HIGH"})
-FAIL_ON_FLAWFINDER_SEVERITIES = get_env_set("FAIL_ON_FLAWFINDER", {"MEDIUM", "HIGH"})
-FAIL_ON_ESLINT_SEVERITIES = get_env_set("FAIL_ON_ESLINT", {"MEDIUM", "HIGH"})
-FAIL_ON_PMD_SEVERITIES = get_env_set("FAIL_ON_PMD", {"MEDIUM", "HIGH"})
 FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
 FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", {"MEDIUM", "HIGH", "CRITICAL"})
 
@@ -53,164 +47,6 @@ def load_json(path: Path) -> Any:
     except json.JSONDecodeError:
         print(f"[WARN] Invalid JSON report: {path}")
         return None
-
-
-def analyze_flawfinder(report: Dict[str, Any]) -> Dict[str, Any]:
-    if not report:
-        return {
-            "tool": "Flawfinder",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    results = []
-    runs = report.get("runs", [])
-    for run in runs:
-        for r in run.get("results", []):
-            rank = r.get("rank", 0)
-            if rank >= 0.8:
-                severity = "HIGH"
-            elif rank >= 0.4:
-                severity = "MEDIUM"
-            else:
-                severity = "LOW"
-            
-            start_line = None
-            filename = None
-            locs = r.get("locations", [])
-            if locs:
-                physical = locs[0].get("physicalLocation", {})
-                start_line = physical.get("region", {}).get("startLine")
-                filename = physical.get("artifactLocation", {}).get("uri")
-            
-            results.append({
-                "severity": severity,
-                "test_id": r.get("ruleId"),
-                "filename": filename or "unknown",
-                "line_number": start_line or 0,
-                "issue_text": r.get("message", {}).get("text", ""),
-            })
-
-    blocking_issues = [
-        issue for issue in results
-        if issue["severity"] in FAIL_ON_FLAWFINDER_SEVERITIES
-    ]
-
-    return {
-        "tool": "Flawfinder",
-        "total_issues": len(results),
-        "blocking_issues": len(blocking_issues),
-        "status": "FAIL" if blocking_issues else "PASS",
-        "examples": (blocking_issues if blocking_issues else results)[:5],
-    }
-
-
-def analyze_eslint(report: List[Any]) -> Dict[str, Any]:
-    if report is None:
-        return {
-            "tool": "ESLint",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    results = []
-    for file_res in report:
-        filepath = file_res.get("filePath", "unknown")
-        for msg in file_res.get("messages", []):
-            raw_sev = msg.get("severity", 1)
-            if raw_sev == 2:
-                severity = "HIGH"
-            elif raw_sev == 1:
-                severity = "MEDIUM"
-            else:
-                severity = "LOW"
-            
-            results.append({
-                "severity": severity,
-                "test_id": msg.get("ruleId", "generic-security-rule"),
-                "filename": filepath,
-                "line_number": msg.get("line", 0),
-                "issue_text": msg.get("message", ""),
-            })
-
-    blocking_issues = [
-        issue for issue in results
-        if issue["severity"] in FAIL_ON_ESLINT_SEVERITIES
-    ]
-
-    return {
-        "tool": "ESLint",
-        "total_issues": len(results),
-        "blocking_issues": len(blocking_issues),
-        "status": "FAIL" if blocking_issues else "PASS",
-        "examples": (blocking_issues if blocking_issues else results)[:5],
-    }
-
-
-def analyze_pmd(report: Dict[str, Any]) -> Dict[str, Any]:
-    if not report:
-        return {
-            "tool": "PMD",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    results = []
-    
-    # PMD 7 schema nests violations inside files list
-    for f in report.get("files", []):
-        filename = f.get("filename", "unknown")
-        for v in f.get("violations", []):
-            priority = v.get("priority", 3)
-            if priority <= 2:
-                severity = "HIGH"
-            elif priority == 3:
-                severity = "MEDIUM"
-            else:
-                severity = "LOW"
-            results.append({
-                "severity": severity,
-                "test_id": v.get("rule", "generic-pmd-rule"),
-                "filename": filename,
-                "line_number": v.get("beginLine", 0),
-                "issue_text": v.get("description", ""),
-            })
-
-    # Legacy flat violations schema fallback
-    for v in report.get("violations", []):
-        priority = v.get("priority", 3)
-        if priority <= 2:
-            severity = "HIGH"
-        elif priority == 3:
-            severity = "MEDIUM"
-        else:
-            severity = "LOW"
-        results.append({
-            "severity": severity,
-            "test_id": v.get("rule", "generic-pmd-rule"),
-            "filename": v.get("file", "unknown"),
-            "line_number": v.get("beginLine", 0),
-            "issue_text": v.get("description", ""),
-        })
-
-    blocking_issues = [
-        issue for issue in results
-        if issue["severity"] in FAIL_ON_PMD_SEVERITIES
-    ]
-
-    return {
-        "tool": "PMD",
-        "total_issues": len(results),
-        "blocking_issues": len(blocking_issues),
-        "status": "FAIL" if blocking_issues else "PASS",
-        "examples": (blocking_issues if blocking_issues else results)[:5],
-    }
 
 
 def analyze_bandit(report: Dict[str, Any]) -> Dict[str, Any]:
@@ -247,8 +83,6 @@ def analyze_bandit(report: Dict[str, Any]) -> Dict[str, Any]:
         "status": "FAIL" if blocking_issues else "PASS",
         "examples": (blocking_issues if blocking_issues else issues)[:5],
     }
-
-
 
 
 def analyze_safety(report: Any) -> Dict[str, Any]:
@@ -385,17 +219,11 @@ def main() -> int:
     print("=== Aegis Policy Engine ===")
 
     bandit_report = load_json(BANDIT_REPORT)
-    flawfinder_report = load_json(FLAWFINDER_REPORT)
-    eslint_report = load_json(ESLINT_REPORT)
-    pmd_report = load_json(PMD_REPORT)
     safety_report = load_json(SAFETY_REPORT)
     trivy_report = load_json(TRIVY_REPORT)
 
     results = [
         analyze_bandit(bandit_report),
-        analyze_flawfinder(flawfinder_report),
-        analyze_eslint(eslint_report),
-        analyze_pmd(pmd_report),
         analyze_safety(safety_report),
         analyze_trivy(trivy_report),
     ]

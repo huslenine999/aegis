@@ -1,12 +1,11 @@
 # Aegis Security Scan Summary
-**Generated on:** 2026-05-21 20:31:52
+**Generated on:** 2026-05-23 17:03:32
 **Final Decision:** DEPLOYMENT ALLOWED
 **Reason:** No blocking security issues found.
 
 ## Tool Results
 | Tool | Status | Total Issues | Blocking Issues |
 | --- | --- | --- | --- |
-| Semgrep | PASS | 0 | 0 |
 | Bandit | PASS | 0 | 0 |
 | Safety | PASS | 0 | 0 |
 | Trivy | PASS | 0 | 0 |
