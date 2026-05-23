@@ -650,7 +650,7 @@
                                 </span>
                                 {% endif %}
                                 <span class="finding-title">
-                                    {% if result.tool == 'Bandit' or result.tool == 'Semgrep' %}
+                                    {% if result.tool == 'Bandit' %}
                                         {{ example.issue_text }}
                                     {% elif result.tool == 'Safety' %}
                                         Insecure Package: {{ example.package_name }}
@@ -660,7 +660,7 @@
                                 </span>
                             </div>
                             <div class="finding-desc" data-tool="{{ result.tool }}">
-                                {% if result.tool == 'Bandit' or result.tool == 'Semgrep' %}
+                                {% if result.tool == 'Bandit' %}
                                     <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Source Code Violation detected.</span>
                                 {% elif result.tool == 'Safety' %}
                                     <span data-i18n="affected_versions">Affected Versions:</span> {{ example.affected_versions }} &bull; <span data-i18n="fixed_versions">Fixed Versions:</span> {{ example.fixed_versions }}<br>
@@ -671,7 +671,7 @@
                                 {% endif %}
                             </div>
                             <div class="finding-location">
-                                {% if result.tool == 'Bandit' or result.tool == 'Semgrep' %}
+                                {% if result.tool == 'Bandit' %}
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
                                 {% elif result.tool == 'Trivy' %}
                                     <span data-i18n="target_label">> TARGET:</span> {{ example.target }}
@@ -832,7 +832,7 @@
                 passed: "DEPLOYMENT_PASSED",
                 
                 // Reasons mapping
-                reason_blocked: "Blocking security issues found by: Semgrep",
+                reason_blocked: "Blocking security issues found by: Bandit",
                 reason_passed: "All scans passed. System safe for production.",
 
                 // Finding labels
@@ -874,7 +874,7 @@
                 passed: "배포_승인됨",
                 
                 // Reasons mapping
-                reason_blocked: "차단 보안 결함 발견됨: Semgrep",
+                reason_blocked: "차단 보안 결함 발견됨: Bandit",
                 reason_passed: "모든 보안 검사 통과. 안전하게 배포 가능합니다.",
 
                 // Finding labels
@@ -934,7 +934,7 @@
             const reasonEl = document.getElementById('reasonText');
             if (reasonEl) {
                 const rawReason = reasonEl.getAttribute('data-raw-reason');
-                if (rawReason.includes('Bandit') || rawReason.includes('Semgrep')) {
+                if (rawReason.includes('Bandit')) {
                     reasonEl.innerText = i18n[lang]['reason_blocked'];
                 } else if (rawReason.toLowerCase().includes('safe') || rawReason.toLowerCase().includes('pass')) {
                     reasonEl.innerText = i18n[lang]['reason_passed'];
