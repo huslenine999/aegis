@@ -343,11 +343,14 @@ def run_scan():
 
         # 2. Run C/C++ SAST (Flawfinder)
         if has_c:
+            flawfinder_bin = "flawfinder"
+            if sys_exec_dir:
+                local_bin = Path(sys_exec_dir) / "flawfinder"
+                if local_bin.exists():
+                    flawfinder_bin = str(local_bin)
             with open(flawfinder_report_path, "w") as f_out:
                 flawfinder_cmd = [
-                    python_bin,
-                    "-m",
-                    "flawfinder",
+                    flawfinder_bin,
                     "--sarif",
                     target_path
                 ]
