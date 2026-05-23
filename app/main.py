@@ -241,8 +241,13 @@ def run_scan():
         python_bin = sys.executable
         
         if uploaded_file and uploaded_file.filename:
-            is_custom_scan = True
             filename = secure_filename(uploaded_file.filename)
+            if not filename.lower().endswith('.py'):
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid file type. Only Python (.py) files are allowed for custom scans."
+                }), 400
+            is_custom_scan = True
             uuid_str = uuid.uuid4().hex
             temp_dir = SCANS_DIR / "uploads" / uuid_str
             temp_dir.mkdir(exist_ok=True, parents=True)

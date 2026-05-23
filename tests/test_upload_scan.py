@@ -105,3 +105,14 @@ def test_run_scan_secure_target(client):
 
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "ALLOWED" in report_html
+
+def test_run_scan_non_python_rejected(client):
+    """Ensure a custom scan with a non-Python file (e.g. .c) is rejected with 400 Bad Request."""
+    c_code = "#include <stdio.h>\n"
+    data = {
+        'file': (io.BytesIO(c_code.encode('utf-8')), 'test.c')
+    }
+    response = client.post('/run-scan', data=data, content_type='multipart/form-data')
+    assert response.status_code == 400
+    assert response.json['status'] == 'error'
+    assert "Invalid file type" in response.json['message']
