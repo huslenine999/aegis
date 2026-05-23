@@ -17,7 +17,10 @@ def test_run_scan_default(client):
     assert response.json['status'] == 'success'
     
     # Check that reports were generated
-    assert (SCANS_DIR / "semgrep-report.json").exists()
+    assert (SCANS_DIR / "bandit-report.json").exists()
+    assert (SCANS_DIR / "flawfinder-report.json").exists()
+    assert (SCANS_DIR / "eslint-report.json").exists()
+    assert (SCANS_DIR / "pmd-report.json").exists()
     assert (SCANS_DIR / "safety-report.json").exists()
     assert (SCANS_DIR / "trivy-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
@@ -41,13 +44,13 @@ def test_run_scan_custom_clean(client):
         assert len(subdirs) == 0
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
+    assert (SCANS_DIR / "bandit-report.json").exists()
+    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
     # Should find no issues
-    assert len(semgrep_report.get("results", [])) == 0
+    assert len(bandit_report.get("results", [])) == 0
 
 def test_run_scan_custom_vulnerable(client):
-    """Ensure a custom vulnerable Python file upload runs successfully but fails the policy gate due to Semgrep flagging it."""
+    """Ensure a custom vulnerable Python file upload runs successfully but fails the policy gate due to Bandit flagging it."""
     # Create a mock vulnerable python file using eval()
     vuln_code = "eval(input())\n"
     data = {
@@ -59,12 +62,12 @@ def test_run_scan_custom_vulnerable(client):
     assert response.json['status'] == 'success'
     
     # Ensure it contains the vulnerability
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) > 0
-    assert any("eval" in issue.get("extra", {}).get("message", "").lower() or "eval" in issue.get("check_id", "").lower() for issue in semgrep_report.get("results", []))
+    assert (SCANS_DIR / "bandit-report.json").exists()
+    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
+    assert len(bandit_report.get("results", [])) > 0
+    assert any("eval" in issue.get("issue_text", "").lower() or "b307" in issue.get("test_id", "").lower() for issue in bandit_report.get("results", []))
 
-    # The HTML report should reflect BLOCKED because of the medium/high vulnerability in Semgrep
+    # The HTML report should reflect BLOCKED because of the medium/high vulnerability in Bandit
     assert (SCANS_DIR / "report.html").exists()
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
@@ -86,9 +89,9 @@ def test_run_scan_custom_clean_js(client):
         subdirs = list(uploads_dir.iterdir())
         assert len(subdirs) == 0
 
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) == 0
+    assert (SCANS_DIR / "eslint-report.json").exists()
+    eslint_report = json.loads((SCANS_DIR / "eslint-report.json").read_text())
+    assert all(len(f.get("messages", [])) == 0 for f in eslint_report)
 
 def test_run_scan_custom_vulnerable_js(client):
     """Ensure a custom vulnerable JavaScript file upload runs successfully but fails the policy gate."""
@@ -101,14 +104,13 @@ def test_run_scan_custom_vulnerable_js(client):
     assert response.status_code == 200
     assert response.json['status'] == 'success'
     
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) > 0
+    assert (SCANS_DIR / "eslint-report.json").exists()
+    eslint_report = json.loads((SCANS_DIR / "eslint-report.json").read_text())
+    assert any(len(f.get("messages", [])) > 0 for f in eslint_report)
     
     assert (SCANS_DIR / "report.html").exists()
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
-
 
 def test_run_scan_custom_clean_c(client):
     """Ensure a custom clean C file upload runs successfully and passes the policy gate."""
@@ -133,10 +135,14 @@ int main() {
         subdirs = list(uploads_dir.iterdir())
         assert len(subdirs) == 0
 
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) == 0
-
+    assert (SCANS_DIR / "flawfinder-report.json").exists()
+    flawfinder_report = json.loads((SCANS_DIR / "flawfinder-report.json").read_text())
+    blocking_results = []
+    for run in flawfinder_report.get("runs", []):
+        for r in run.get("results", []):
+            if r.get("rank", 0) >= 0.4:
+                blocking_results.append(r)
+    assert len(blocking_results) == 0
 
 def test_run_scan_custom_vulnerable_c(client):
     """Ensure a custom vulnerable C file upload runs successfully but fails the policy gate."""
@@ -156,14 +162,13 @@ int main() {
     assert response.status_code == 200
     assert response.json['status'] == 'success'
     
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) > 0
+    assert (SCANS_DIR / "flawfinder-report.json").exists()
+    flawfinder_report = json.loads((SCANS_DIR / "flawfinder-report.json").read_text())
+    assert any(len(run.get("results", [])) > 0 for run in flawfinder_report.get("runs", []))
     
     assert (SCANS_DIR / "report.html").exists()
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
-
 
 def test_run_scan_custom_clean_java(client):
     """Ensure a custom clean Java file upload runs successfully and passes the policy gate."""
@@ -187,21 +192,19 @@ public class CleanTest {
         subdirs = list(uploads_dir.iterdir())
         assert len(subdirs) == 0
 
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) == 0
-
+    assert (SCANS_DIR / "pmd-report.json").exists()
+    pmd_report = json.loads((SCANS_DIR / "pmd-report.json").read_text())
+    assert len(pmd_report.get("violations", [])) == 0
 
 def test_run_scan_custom_vulnerable_java(client):
     """Ensure a custom vulnerable Java file upload runs successfully but fails the policy gate."""
     vuln_code = """
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import javax.crypto.spec.SecretKeySpec;
 
 public class VulnTest {
-    public static void main(String[] args) throws NoSuchAlgorithmException {
-        // MD5 is a weak cryptographic hash algorithm
-        MessageDigest md = MessageDigest.getInstance("MD5");
+    public static void main(String[] args) {
+        // Violates the rule: hard-coded key string
+        SecretKeySpec secretKeySpec = new SecretKeySpec("my secret here".getBytes(), "AES");
     }
 }
 """
@@ -213,39 +216,34 @@ public class VulnTest {
     assert response.status_code == 200
     assert response.json['status'] == 'success'
     
-    assert (SCANS_DIR / "semgrep-report.json").exists()
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
-    assert len(semgrep_report.get("results", [])) > 0
+    assert (SCANS_DIR / "pmd-report.json").exists()
+    pmd_report = json.loads((SCANS_DIR / "pmd-report.json").read_text())
+    violations_count = sum(len(f.get("violations", [])) for f in pmd_report.get("files", []))
+    violations_count += len(pmd_report.get("violations", []))
+    assert violations_count > 0
     
     assert (SCANS_DIR / "report.html").exists()
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
 
-
 def test_run_scan_vulnerable_target(client):
-    """Test that scanning the vulnerable target (main.py) triggers Semgrep and Bandit, and blocks the gate."""
+    """Test that scanning the vulnerable target (main.py) triggers Bandit and blocks the gate."""
     response = client.post('/run-scan', json={"target": "vulnerable"})
     assert response.status_code == 200
     assert response.json['status'] == 'success'
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "semgrep-report.json").exists()
     assert (SCANS_DIR / "bandit-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
 
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
     bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
 
-    # The vulnerable main.py has issues
-    assert len(semgrep_report.get("results", [])) > 0
-    
-    # If Bandit did not encounter internal errors (e.g. Python version compatibility), assert findings
+    # If Bandit did not encounter internal errors, assert findings
     if not bandit_report.get("errors"):
         assert len(bandit_report.get("results", [])) > 0
 
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
-
 
 def test_run_scan_secure_target(client):
     """Test that scanning the secure target (secure_main.py) has no issues and allows deployment."""
@@ -254,17 +252,13 @@ def test_run_scan_secure_target(client):
     assert response.json['status'] == 'success'
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "semgrep-report.json").exists()
     assert (SCANS_DIR / "bandit-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
 
-    semgrep_report = json.loads((SCANS_DIR / "semgrep-report.json").read_text())
     bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
 
-    # The secure secure_main.py has no issues (all false positives are nosemgrep/nosec ignored)
-    assert len(semgrep_report.get("results", [])) == 0
+    # The secure secure_main.py has no issues
     assert len(bandit_report.get("results", [])) == 0
 
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "ALLOWED" in report_html
-

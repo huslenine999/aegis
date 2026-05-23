@@ -108,3 +108,43 @@ You can use the patterns shown in Aegis to strengthen security in your productio
 1. **Adopt Automated Code Linters**: Run tools like `semgrep scan --config=auto --json -o semgrep-report.json` as a pre-commit hook or inside your PR tests.
 2. **Fail Fast with Policy Engines**: Use `policy_engine.py` to assert scan findings. Return `exit 1` to fail pipelines automatically when any `HIGH` or `CRITICAL` vulnerability is introduced.
 3. **Audit Third-Party Packages**: Run `safety check` to prevent outdated dependencies with known CVEs from reaching your production containers.
+
+---
+
+## 📦 Reusable GitHub Action Integration
+
+Aegis is packaged as a reusable composite GitHub Action, allowing external teams to run unified security gates directly in their workflows.
+
+### Usage Example
+
+Include the Aegis action in your repository's workflow (e.g., `.github/workflows/security.yml`):
+
+```yaml
+name: Security Scan Gate
+
+on: [push, pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Aegis Security Scan & Policy Gate
+        uses: huslenine/Aegis@main
+        with:
+          python-version: '3.11'
+          scan-target: 'app' # File or directory to scan
+          requirements-file: 'requirements.txt'
+          # Optional: Build and scan a container image (e.g., 'myapp:latest')
+          image-name: ''
+          # Thresholds
+          fail-on-semgrep: 'MEDIUM,HIGH'
+          fail-on-bandit: 'MEDIUM,HIGH'
+          fail-on-safety: 'true'
+          fail-on-trivy: 'MEDIUM,HIGH,CRITICAL'
+```
+
+This composite action installs dependencies, executes the scans (Semgrep, Bandit, Safety, and optional Trivy), executes the Aegis policy gate, generates static reports, and appends a security diagnostics summary to your GitHub Job Summary page.
+

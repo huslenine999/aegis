@@ -1,0 +1,243 @@
+name: 'Aegis Security Scan & Policy Gate'
+description: 'Runs dedicated language scanners (Bandit, Flawfinder, ESLint, PMD), Safety SCA, and optional Trivy scans, and enforces severity-based policy gatekeeping.'
+author: 'Aegis'
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.11'
+  scan-target:
+    description: 'The directory or file to scan with Bandit and other dedicated scanners'
+    required: false
+    default: 'app'
+  requirements-file:
+    description: 'Path to requirements.txt for Safety SCA scan'
+    required: false
+    default: 'requirements.txt'
+  image-name:
+    description: 'Docker image name to scan with Trivy (leave empty to skip)'
+    required: false
+    default: ''
+  fail-on-bandit:
+    description: 'Comma-separated list of Bandit severities to block on (e.g., MEDIUM,HIGH)'
+    required: false
+    default: 'MEDIUM,HIGH'
+  fail-on-flawfinder:
+    description: 'Comma-separated list of Flawfinder severities to block on (e.g., MEDIUM,HIGH)'
+    required: false
+    default: 'MEDIUM,HIGH'
+  fail-on-eslint:
+    description: 'Comma-separated list of ESLint severities to block on (e.g., MEDIUM,HIGH)'
+    required: false
+    default: 'MEDIUM,HIGH'
+  fail-on-pmd:
+    description: 'Comma-separated list of PMD severities to block on (e.g., MEDIUM,HIGH)'
+    required: false
+    default: 'MEDIUM,HIGH'
+  fail-on-safety:
+    description: 'Whether to block deployment on any vulnerability found by Safety (true/false)'
+    required: false
+    default: 'true'
+  fail-on-trivy:
+    description: 'Comma-separated list of Trivy severities to block on (e.g., MEDIUM,HIGH,CRITICAL)'
+    required: false
+    default: 'MEDIUM,HIGH,CRITICAL'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Aegis scanner dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety jinja2 flawfinder
+
+    - name: Create scans directory
+      shell: bash
+      run: mkdir -p scans
+
+    - name: Detect applicable languages in target
+      id: detect
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        HAS_PYTHON=false
+        HAS_C=false
+        HAS_JS=false
+        HAS_JAVA=false
+
+        if [ -d "$TARGET" ]; then
+          if find "$TARGET" -name "*.py" -print -quit | grep -q .; then HAS_PYTHON=true; fi
+          if find "$TARGET" \( -name "*.c" -o -name "*.cpp" -o -name "*.cc" -o -name "*.h" -o -name "*.hpp" \) -print -quit | grep -q .; then HAS_C=true; fi
+          if find "$TARGET" \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) -print -quit | grep -q .; then HAS_JS=true; fi
+          if find "$TARGET" -name "*.java" -print -quit | grep -q .; then HAS_JAVA=true; fi
+        elif [ -f "$TARGET" ]; then
+          ext="${TARGET##*.}"
+          if [ "$ext" = "py" ]; then HAS_PYTHON=true; fi
+          if [ "$ext" = "c" ] || [ "$ext" = "cpp" ] || [ "$ext" = "cc" ] || [ "$ext" = "h" ] || [ "$ext" = "hpp" ]; then HAS_C=true; fi
+          if [ "$ext" = "js" ] || [ "$ext" = "ts" ] || [ "$ext" = "jsx" ] || [ "$ext" = "tsx" ]; then HAS_JS=true; fi
+          if [ "$ext" = "java" ]; then HAS_JAVA=true; fi
+        fi
+
+        echo "has_python=$HAS_PYTHON" >> $GITHUB_OUTPUT
+        echo "has_c=$HAS_C" >> $GITHUB_OUTPUT
+        echo "has_js=$HAS_JS" >> $GITHUB_OUTPUT
+        echo "has_java=$HAS_JAVA" >> $GITHUB_OUTPUT
+
+    - name: Run Bandit SAST scan (Python)
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        if [ "${{ steps.detect.outputs.has_python }}" = "true" ]; then
+          echo "[Aegis] Running Bandit SAST scan on: $TARGET"
+          if [ -d "$TARGET" ]; then
+            bandit -r "$TARGET" -f json -o scans/bandit-report.json || true
+          else
+            bandit "$TARGET" -f json -o scans/bandit-report.json || true
+          fi
+        else
+          echo "[Aegis] Skipping Bandit scan. Writing empty Bandit report."
+          echo '{"results": []}' > scans/bandit-report.json
+        fi
+
+    - name: Run Flawfinder scan (C/C++)
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        if [ "${{ steps.detect.outputs.has_c }}" = "true" ]; then
+          echo "[Aegis] Running Flawfinder scan on C/C++ files: $TARGET"
+          flawfinder --sarif "$TARGET" > scans/flawfinder-report.json || true
+        else
+          echo "[Aegis] Skipping Flawfinder scan. Writing empty Flawfinder report."
+          echo '{"runs": []}' > scans/flawfinder-report.json
+        fi
+
+    - name: Run ESLint scan (JavaScript/TypeScript)
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        if [ "${{ steps.detect.outputs.has_js }}" = "true" ]; then
+          echo "[Aegis] Setting up local ESLint environment..."
+          mkdir -p bin/eslint-env
+          if [ ! -f bin/eslint-env/package.json ]; then
+            echo '{"name": "eslint-env", "version": "1.0.0", "dependencies": {"eslint": "^8.57.0", "eslint-plugin-security": "^3.0.1"}}' > bin/eslint-env/package.json
+            npm install --prefix bin/eslint-env || true
+          fi
+          
+          # Write hermetic .eslintrc.json config without circular extends properties
+          cat << 'EOF' > bin/eslint-env/.eslintrc.json
+{
+  "plugins": ["security"],
+  "rules": {
+    "security/detect-eval-with-expression": "error",
+    "security/detect-non-literal-require": "warn",
+    "security/detect-object-injection": "warn",
+    "security/detect-unsafe-regex": "error",
+    "security/detect-buffer-noassert": "error",
+    "security/detect-child-process": "warn",
+    "security/detect-disable-mustache-escape": "error",
+    "security/detect-no-csrf-before-method-override": "error",
+    "security/detect-non-literal-fs-filename": "warn",
+    "security/detect-non-literal-regexp": "warn",
+    "security/detect-pseudoRandomBytes": "warn"
+  },
+  "parserOptions": {
+    "ecmaVersion": 2021
+  },
+  "env": {
+    "es2021": true,
+    "node": true
+  }
+}
+EOF
+          # Clean up old configuration to prevent ESLint flat config auto-activation
+          rm -f bin/eslint-env/eslint.config.js || true
+
+          echo "[Aegis] Running ESLint scan on: $TARGET"
+          ESLINT_USE_FLAT_CONFIG=false node bin/eslint-env/node_modules/eslint/bin/eslint.js --no-eslintrc -c bin/eslint-env/.eslintrc.json -f json -o scans/eslint-report.json "$TARGET" || true
+        else
+          echo "[Aegis] Skipping ESLint scan. Writing empty ESLint report."
+          echo '[]' > scans/eslint-report.json
+        fi
+
+    - name: Run PMD scan (Java)
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        if [ "${{ steps.detect.outputs.has_java }}" = "true" ]; then
+          PMD_BIN_DIR="bin/pmd-bin-7.0.0"
+          PMD_EXECUTABLE=""
+          if [ -d "$PMD_BIN_DIR" ]; then
+            PMD_EXECUTABLE=$(find "$PMD_BIN_DIR" -type f -name pmd -perm +111 -print -quit)
+          fi
+          if [ -z "$PMD_EXECUTABLE" ]; then
+            echo "[Aegis] Downloading PMD..."
+            curl -sL https://github.com/pmd/pmd/releases/download/pmd_releases/7.0.0/pmd-dist-7.0.0-bin.zip -o scans/pmd.zip
+            mkdir -p bin
+            unzip -q scans/pmd.zip -d bin/
+            rm -f scans/pmd.zip
+            PMD_EXECUTABLE=$(find "$PMD_BIN_DIR" -type f -name pmd -perm +111 -print -quit)
+          fi
+          
+          if [ -n "$PMD_EXECUTABLE" ]; then
+            chmod +x "$PMD_EXECUTABLE" || true
+            echo "[Aegis] Running PMD scan on Java files: $TARGET"
+            "$PMD_EXECUTABLE" check -d "$TARGET" -R category/java/security.xml -f json -r scans/pmd-report.json || true
+          else
+            echo "[WARN] Could not find or execute PMD. Writing empty PMD report."
+            echo '{"violations": []}' > scans/pmd-report.json
+          fi
+        else
+          echo "[Aegis] Skipping PMD scan. Writing empty PMD report."
+          echo '{"violations": []}' > scans/pmd-report.json
+        fi
+
+    - name: Run Safety dependency scan
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.requirements-file }}" ]; then
+          echo "[Aegis] Running Safety SCA scan on: ${{ inputs.requirements-file }}"
+          safety check -r ${{ inputs.requirements-file }} --save-json scans/safety-report.json || true
+        else
+          echo "[Aegis] Requirements file '${{ inputs.requirements-file }}' not found. Skipping Safety scan."
+          echo '[]' > scans/safety-report.json
+        fi
+
+    - name: Run Trivy container scan
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.image-name }}" ]; then
+          echo "[Aegis] Setting up Trivy..."
+          mkdir -p ./bin
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ./bin v0.51.1
+          echo "[Aegis] Running Trivy image scan on: ${{ inputs.image-name }}"
+          ./bin/trivy image --format json --output scans/trivy-report.json ${{ inputs.image-name }} || true
+        else
+          echo "[Aegis] Image name not provided. Skipping Trivy scan."
+          echo '{"Results": []}' > scans/trivy-report.json
+        fi
+
+    - name: Execute Aegis policy engine
+      shell: bash
+      env:
+        FAIL_ON_BANDIT: ${{ inputs.fail-on-bandit }}
+        FAIL_ON_FLAWFINDER: ${{ inputs.fail-on-flawfinder }}
+        FAIL_ON_ESLINT: ${{ inputs.fail-on-eslint }}
+        FAIL_ON_PMD: ${{ inputs.fail-on-pmd }}
+        FAIL_ON_SAFETY: ${{ inputs.fail-on-safety }}
+        FAIL_ON_TRIVY: ${{ inputs.fail-on-trivy }}
+      run: |
+        python ${{ github.action_path }}/policy_engine.py
+
+    - name: Add report to Job Summary
+      shell: bash
+      if: always()
+      run: |
+        if [ -f scans/report.md ]; then
+          cat scans/report.md >> $GITHUB_STEP_SUMMARY
+        fi
