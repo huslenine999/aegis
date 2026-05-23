@@ -36,27 +36,7 @@
             --scanline-opacity: 0.3;
         }
 
-        /* Reverse-Video Light Mode */
-        body.light-mode {
-            --bg-base: #3dfb57;       /* High-illumination Phosphor Green */
-            --bg-surface: rgba(6, 15, 8, 0.15);
-            --bg-console: #2cd644;
-            
-            --primary: #060a07;       /* Dark Green/Black text */
-            --primary-glow: rgba(6, 10, 7, 0.3);
-            
-            --secondary: #b06b00;     /* Darker Amber */
-            --secondary-glow: rgba(176, 107, 0, 0.3);
-            
-            --danger: #cc0000;        /* Deep Red */
-            --danger-glow: rgba(204, 0, 0, 0.3);
-            
-            --text-main: #060a07;
-            --text-muted: #1c3621;
 
-            --canvas-opacity: 0.18;
-            --scanline-opacity: 0.45;
-        }
 
         body {
             font-family: 'Share Tech Mono', monospace;
@@ -709,6 +689,32 @@
             animation: shake 0.4s;
             animation-iteration-count: 1;
         }
+        /* Explainer boxes styling */
+        .explainer-box {
+            display: none;
+            background: rgba(61, 251, 87, 0.04);
+            border: 1px dashed var(--primary);
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+            color: var(--text-main);
+            line-height: 1.4;
+            box-shadow: inset 0 0 10px rgba(61, 251, 87, 0.05);
+            animation: pulse-glow 3s infinite ease-in-out;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: inset 0 0 5px rgba(61, 251, 87, 0.05); border-color: rgba(61, 251, 87, 0.4); }
+            50% { box-shadow: inset 0 0 12px rgba(61, 251, 87, 0.15); border-color: var(--primary); }
+        }
+        
+        .explainer-active .explainer-box {
+            display: block;
+        }
+        .explainer-active .explainer-subtext {
+            display: block !important;
+        }
     </style>
 </head>
 <body class="crt-glow">
@@ -719,9 +725,8 @@
             [&nbsp;AEGIS_SECURE_CONSOLE_v2.0&nbsp;]
         </div>
         <div class="navbar-controls">
-            <button id="soundToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ AUDIO: OFF ]</button>
+            <button id="explainToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ EXPLAIN: OFF ]</button>
             <button id="langToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ LANG: EN ]</button>
-            <button id="themeToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ CRT: DARK ]</button>
             <a href="/health" class="link mono" style="color: var(--primary); font-size: 0.9rem;">> TTY_HEALTH_DAEMON</a>
         </div>
     </nav>
@@ -758,6 +763,10 @@
                     EXPORT_ASCII_DOSSIER
                 </a>
             </div>
+            <!-- Target Codebase Explainer -->
+            <div id="targetDescBox" class="explainer-box mono" style="margin-top: 1.5rem; text-align: center; border-color: var(--secondary); color: var(--secondary); background: rgba(255, 176, 0, 0.03);">
+                <!-- Dynamic plain-English target file description -->
+            </div>
         </div>
 
         <h2 class="section-title reveal mono" data-i18n="threat_lab">> THREAT_LAB_MAINFRAME</h2>
@@ -769,6 +778,9 @@
                         > ATTACK_VECTOR_RADAR
                     </div>
                     <div class="badge mono" style="border-color: var(--primary); color: var(--primary);">SWEEPING</div>
+                </div>
+                <div class="explainer-box mono" data-i18n="exp_radar" style="margin: 1rem 1rem 0 1rem;">
+                    🎓 CYBER SECURITY RADAR: Hackers scan systems looking for open entry points. This interactive radar visualizes mock scanners scanning this server.
                 </div>
                 <div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; position: relative; background: rgba(0,0,0,0.3); border-top: 1px solid rgba(61,251,87,0.2); overflow: hidden;">
                     <canvas id="radar-canvas" style="width: 100%; height: 100%; min-height: 300px; display: block;"></canvas>
@@ -784,6 +796,10 @@
                     <div class="badge mono" style="border-color: var(--primary); color: var(--primary);">ARMED</div>
                 </div>
                 <div class="terminal-body" style="flex-grow: 1; display: flex; flex-direction: column; padding: 1.25rem; gap: 0.75rem;">
+                    <div class="explainer-box mono" data-i18n="exp_threat_lab" style="margin-bottom: 0.75rem;">
+                        🎓 THREAT SIMULATION LAB: Launch mock attacks below. Switch the WAF Firewall (analog switch) at the top of WAF custom rules to see how security blocks them, or leaves them exposed.
+                    </div>
+                    
                     <!-- Threat Actor Dropdown Selector -->
                     <div class="input-group" style="margin-bottom: 0.5rem;">
                         <label style="color: var(--secondary);">> THREAT_ACTOR_INTEL</label>
@@ -837,6 +853,9 @@
                     </div>
                 </div>
                 <div class="terminal-body" style="flex-grow: 1; display: flex; flex-direction: column; padding: 1.25rem; gap: 0.75rem;">
+                    <div class="explainer-box mono" data-i18n="exp_waf_editor" style="margin-bottom: 0.75rem;">
+                        🎓 FIREWALL (WAF): A digital security guard. It checks requests for known bad patterns (like database commands or file path tricks) and blocks them before they reach the app.
+                    </div>
                     <!-- Rules Listing Container -->
                     <div style="flex-grow: 1; overflow-y: auto; max-height: 200px; border: 1px solid rgba(61,251,87,0.2); background: rgba(0,0,0,0.5); padding: 0.5rem;" id="rulesContainer">
                         <!-- Loaded dynamically -->
@@ -863,6 +882,9 @@
                         <span data-i18n="stdout_stream" class="mono" style="font-weight: bold;">STDOUT_STREAM</span>
                         <span id="targetStatus" class="mono" style="color: var(--primary); font-size: 0.85rem;">TARGET: 127.0.0.1:5001</span>
                     </div>
+                    <div class="explainer-box mono" data-i18n="exp_stdout" style="margin: 0.75rem; margin-bottom: 0;">
+                        🎓 TECHNICAL STDOUT FEED: Real-time logs showing how the server processes payloads. Watch this to see details of success or blocked statuses.
+                    </div>
                     <div id="terminal" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 0.85rem; max-height: 140px; background: var(--bg-console);">
                         <div style="color: var(--text-muted);" data-i18n="sys_daemon_init">[SYSTEM_DAEMON] Initializing simulation stream...</div>
                         <div style="color: var(--text-muted);" data-i18n="sys_daemon_link">[SYSTEM_DAEMON] Tactical network node link established.</div>
@@ -875,6 +897,9 @@
                         <span class="mono" style="font-weight: bold;">> SYS_DAEMON_SYSLOG_MONITOR</span>
                         <span class="mono" style="animation: blink 1.2s step-start infinite; font-size: 0.8rem;">● ACTIVE_FEED</span>
                     </div>
+                    <div class="explainer-box mono" data-i18n="exp_syslog" style="margin: 0.75rem; margin-bottom: 0;">
+                        🎓 SYSTEM DAEMON FEED: Internal operating system logs showing services, cron jobs, database connections, and security interventions.
+                    </div>
                     <div id="syslog-stream" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 0.85rem; max-height: 140px; background: var(--bg-console); color: var(--text-muted); line-height: 1.4;">
                         <!-- Auto-generated logs -->
                     </div>
@@ -883,6 +908,9 @@
         </div>
 
         <h2 class="section-title reveal mono" data-i18n="detected_vulnerabilities">> DETECTED_VULNERABILITIES</h2>
+        <div class="explainer-box mono" data-i18n="exp_vulns" style="margin-bottom: 1.5rem;">
+            🎓 KNOWN SECURITY WEAKNESSES: Insecure features in the code. Hackers target these. Switch Target (in the header) to SECURE target to see how we fix them.
+        </div>
         <div class="status-grid">
             <div class="card reveal">
                 <div class="card-title" data-i18n="persistence_layer">
@@ -890,15 +918,25 @@
                     PERSISTENCE_LAYER
                 </div>
                 <div class="endpoint-list">
-                    <div class="endpoint-item">
-                        <span class="method">GET</span>
-                        <a href="/user?name=admin" class="link">/user?name=admin</a>
-                        <span class="badge badge-danger" style="margin-left: auto;">SQLi</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/user?name=admin" class="link">/user?name=admin</a>
+                            <span class="badge badge-danger" style="margin-left: auto;">SQLi</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_sqli" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            SQL Injection: Tricking database searches using command symbols (like ') to dump user secrets without a password.
+                        </div>
                     </div>
-                    <div class="endpoint-item">
-                        <span class="method">GET</span>
-                        <a href="/ping?host=127.0.0.1" class="link">/ping?host=127.0.0.1</a>
-                        <span class="badge badge-danger" style="margin-left: auto;">RCE</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/ping?host=127.0.0.1" class="link">/ping?host=127.0.0.1</a>
+                            <span class="badge badge-danger" style="margin-left: auto;">RCE</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_rce" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            Remote Code Execution: Injecting terminal operations (like ;) to force the server into running arbitrary system commands.
+                        </div>
                     </div>
                 </div>
             </div>
@@ -909,15 +947,25 @@
                     EXECUTION_DESERIALIZER
                 </div>
                 <div class="endpoint-list">
-                    <div class="endpoint-item">
-                        <span class="method">GET</span>
-                        <a href="/calculate?expr=2+2" class="link">/calculate?expr=2+2</a>
-                        <span class="badge badge-danger" style="margin-left: auto;">EVAL</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/calculate?expr=2+2" class="link">/calculate?expr=2+2</a>
+                            <span class="badge badge-danger" style="margin-left: auto;">EVAL</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_eval" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            Unsafe Eval: Executing direct programming code passed by user input, allowing attackers to delete files or run Python scripts.
+                        </div>
                     </div>
-                    <div class="endpoint-item">
-                        <span class="method">POST</span>
-                        <span class="link">/load-profile</span>
-                        <span class="badge badge-danger" style="margin-left: auto;">PICKLE</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">POST</span>
+                            <span class="link">/load-profile</span>
+                            <span class="badge badge-danger" style="margin-left: auto;">PICKLE</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_pickle" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            Insecure Deserialization: Unpacking serialized Python objects. Attackers package malicious code inside saving files to run on server load.
+                        </div>
                     </div>
                 </div>
             </div>
@@ -928,21 +976,34 @@
                     FILE_AND_CRYPTOGRAPHIC
                 </div>
                 <div class="endpoint-list">
-                    <div class="endpoint-item">
-                        <span class="method">GET</span>
-                        <a href="/download?file=sample.txt" class="link">/download?file=sample.txt</a>
-                        <span class="badge badge-warning" style="margin-left: auto;">LFI</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/download?file=sample.txt" class="link">/download?file=sample.txt</a>
+                            <span class="badge badge-warning" style="margin-left: auto;">LFI</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_lfi" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            Path Traversal (LFI): Bypassing folders using relative path symbols (../../) to steal system configurations and source code.
+                        </div>
                     </div>
-                    <div class="endpoint-item">
-                        <span class="method">GET</span>
-                        <a href="/hash?value=password123" class="link">/hash?value=password123</a>
-                        <span class="badge badge-warning" style="margin-left: auto;">MD5</span>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/hash?value=password123" class="link">/hash?value=password123</a>
+                            <span class="badge badge-warning" style="margin-left: auto;">MD5</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_md5" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                            Weak Hashing (MD5): Using an ancient, insecure encryption algorithm that computers can decode instantly, exposing user passwords.
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
         <h2 class="section-title reveal mono" data-i18n="gate_decision">> GATE_DEPLOYMENT_DECISION</h2>
+        <div class="explainer-box mono" data-i18n="exp_gate" style="margin-bottom: 1.5rem;">
+            🎓 THE PIPELINE GATE: In automated deployment pipelines, scanner tools audit code. If severe issues (like SQLi or RCE) are found, the deployment is BLOCKED to protect users.
+        </div>
         <div class="terminal-panel status-banner reveal" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
             <div>
                 <div class="card-title" style="margin-bottom: 0.5rem; color: var(--danger); font-size: 1.8rem;" data-i18n="pipeline_blocked">
@@ -1104,7 +1165,31 @@
                 log_payload_blocked: ">> BLOCKED: Request blocked by DevSecOps Gateway (403 forbidden).",
                 log_node_response: ">> NODE_RESPONSE: Connection accepted. Printing stdout...",
                 log_attack_completed: ">> SIGNAL: Attack completed. Target compromised.",
-                log_fatal_sim: ">> FATAL: Simulation failed. Reason: {reason}"
+                log_fatal_sim: ">> FATAL: Simulation failed. Reason: {reason}",
+                
+                // Explainer Mode properties
+                explain_toggle_on: "[ EXPLAIN: ON ]",
+                explain_toggle_off: "[ EXPLAIN: OFF ]",
+                exp_radar: "🎓 CYBER SECURITY RADAR: Hackers scan systems looking for open entry points. This interactive radar visualizes mock scanners scanning this server.",
+                exp_threat_lab: "🎓 THREAT SIMULATION LAB: Launch mock attacks below. Switch the WAF Firewall (analog switch) at the top of WAF custom rules to see how security blocks them, or leaves them exposed.",
+                exp_waf_editor: "🎓 FIREWALL (WAF): A digital security guard. It checks requests for known bad patterns (like database commands or file path tricks) and blocks them before they reach the app.",
+                exp_stdout: "🎓 TECHNICAL STDOUT FEED: Real-time logs showing how the server processes payloads. Watch this to see details of success or blocked statuses.",
+                exp_syslog: "🎓 SYSTEM DAEMON FEED: Internal operating system logs showing services, cron jobs, database connections, and security interventions.",
+                exp_vulns: "🎓 KNOWN SECURITY WEAKNESSES: Insecure features in the code. Hackers target these. Switch Target (in the header) to SECURE target to see how we fix them.",
+                exp_gate: "🎓 THE PIPELINE GATE: In automated deployment pipelines, scanner tools audit code. If severe issues (like SQLi or RCE) are found, the deployment is BLOCKED to protect users.",
+                
+                exp_actor_none: "Select a threat actor profile to load dynamic simulation configs.",
+                exp_actor_sqli: "Dr. Scriptov targets databases. Tries to trick the SQL database into dumping password files and secret API keys.",
+                exp_actor_rce: "Sudo_Root targets system shells. Tries to execute terminal commands on the host machine to hijack control.",
+                exp_actor_traversal: "Path_Finder targets the file system. Tries to read private server files (like source code or secrets) using file traversal.",
+                
+                target_desc_vulnerable: "⚠️ Target main.py is VULNERABLE. Inputs are directly combined with queries and shell commands, exposing the app.",
+                target_desc_secure: "✅ Target secure_main.py is SECURE. Inputs are isolated from database query structures and shell executions.",
+                
+                sim_alert_title_blocked: "🛡️ FIREWALL INTERCEPTED DETECTED THREAT",
+                sim_alert_desc_blocked: "The Web Application Firewall (WAF) scanned the request, matched the pattern against rules, and blocked it with a 403 Forbidden status. The app remains safe.",
+                sim_alert_title_success: "💥 ATTACK SUCCESSFUL - VULNERABILITY EXPLOITED",
+                sim_alert_desc_success: "Because the WAF shield was OFF, the server executed the raw payload directly! The hacker successfully bypassed login checks / ran system commands / read private files."
             },
             ko: {
                 brand: "[ 이지스_보안_콘솔_v2.0 ]",
@@ -1149,12 +1234,36 @@
                 log_payload_blocked: ">> 차단됨: DevSecOps 게이트웨이에 의해 요청이 차단되었습니다 (403 금지됨).",
                 log_node_response: ">> 노드_응답: 연결 수락됨. 표준 출력 인쇄 중...",
                 log_attack_completed: ">> 신호: 공격 성공. 대상 노드 장악됨.",
-                log_fatal_sim: ">> 치명적_오류: 시뮬레이션 실패. 원인: {reason}"
+                log_fatal_sim: ">> 치명적_오류: 시뮬레이션 실패. 원인: {reason}",
+                
+                // Explainer Mode properties
+                explain_toggle_on: "[ 설명 모드: 켬 ]",
+                explain_toggle_off: "[ 설명 모드: 끔 ]",
+                exp_radar: "🎓 사이버 보안 레이더: 해커는 시스템의 취약한 진입점을 찾기 위해 지속적으로 스캔합니다. 이 레이더는 가상의 보안 스캐너가 현재 서버를 탐색하는 과정을 시각화합니다.",
+                exp_threat_lab: "🎓 위협 시뮬레이션 랩: 가상 공격을 실행해 보세요. 상단 WAF의 토글 스위치(방화벽)를 켜고 끌 때 공격이 차단되거나 통과되는 차이를 직접 확인할 수 있습니다.",
+                exp_waf_editor: "🎓 웹 방화벽 (WAF): 시스템을 지키는 가상의 경비원입니다. 요청 중에 데이터베이스 명령어 입력이나 파일 경로 우회 같은 위험한 패턴이 있는지 검사하고 차단합니다.",
+                exp_stdout: "🎓 기술 표준 출력 피드: 서버가 사용자의 페이로드를 처리하는 기술적 상세 로그를 보여줍니다. 차단 여부와 실행 결과를 상세히 관찰할 수 있습니다.",
+                exp_syslog: "🎓 시스템 데몬 피드: CPU 상태, 데이터베이스 연결, 방화벽 차단 이력 등 백그라운드에서 일어나는 운영체제의 시스템 로그입니다.",
+                exp_vulns: "🎓 알려진 보안 취약점: 코드 내의 허점들입니다. 해커의 공격 대상이 되며, 상단의 대상을 SECURE로 변경하면 이 취약점들이 어떻게 해결되는지 확인할 수 있습니다.",
+                exp_gate: "🎓 파이프라인 배포 게이트: 자동화된 프로그램이 배포 전 코드를 검사합니다. 치명적 결함(SQLi, RCE)이 발견되면 배포를 차단(BLOCKED)하여 사용자를 보호합니다.",
+                
+                exp_actor_none: "위협 행위자 프로필을 선택하여 가상 공격 설정을 불러오세요.",
+                exp_actor_sqli: "Dr. Scriptov는 데이터베이스를 노립니다. 로그인 쿼리를 속여 비밀번호 파일과 시크릿 API 키를 유출하려 합니다.",
+                exp_actor_rce: "Sudo_Root는 운영체제 셸을 노립니다. 서버 컴퓨터 자체에서 직접 명령어를 실행하여 제어권을 장악하려 합니다.",
+                exp_actor_traversal: "Path_Finder는 파일 시스템을 노립니다. 상대 경로 문자열을 사용하여 비공개 서버 코드 및 시크릿 파일을 읽으려 합니다.",
+                
+                target_desc_vulnerable: "⚠️ 대상 main.py는 취약합니다. 입력값이 쿼리 및 셸 명령에 직접 병합되어 외부 공격에 그대로 노출됩니다.",
+                target_desc_secure: "✅ 대상 secure_main.py는 안전합니다. 입력값이 데이터베이스 쿼리 구조 및 셸 명령과 완벽히 격리되어 처리됩니다.",
+                
+                sim_alert_title_blocked: "🛡️ 웹 방화벽(WAF) 위협 차단 완료",
+                sim_alert_desc_blocked: "웹 방화벽이 요청 데이터에서 유해 패턴을 발견하고 403 Forbidden 에러로 자동 차단했습니다. 시스템은 안전합니다.",
+                sim_alert_title_success: "💥 공격 성공 - 보안 취약점 노출됨",
+                sim_alert_desc_success: "웹 방화벽이 꺼져 있어 서버가 해커의 명령을 그대로 실행했습니다! 해커가 인증을 우회하거나, 서버 내 명령어를 실행하거나, 개인 파일을 탈취하는 데 성공했습니다."
             }
         };
 
         let currentLang = localStorage.getItem('lang') || 'en';
-        let currentTheme = localStorage.getItem('theme') || 'dark';
+        let explainEnabled = localStorage.getItem('explainMode') === 'true';
 
         // Apply Language
         function setLanguage(lang) {
@@ -1211,19 +1320,63 @@
                     badge.innerText = i18n[lang]['listening'];
                 }
             }
+
+            updateExplainBtnText();
+            updateTargetDesc();
+            updateActorDossier();
         }
 
-        // Apply Theme
-        function setTheme(theme) {
-            currentTheme = theme;
-            localStorage.setItem('theme', theme);
-            if (theme === 'light') {
-                document.body.classList.add('light-mode');
-                document.getElementById('themeToggleBtn').innerText = '[ CRT: REVERSE ]';
-            } else {
-                document.body.classList.remove('light-mode');
-                document.getElementById('themeToggleBtn').innerText = '[ CRT: DARK ]';
+
+        function updateExplainBtnText() {
+            const btn = document.getElementById('explainToggleBtn');
+            if (!btn) return;
+            const key = explainEnabled ? 'explain_toggle_on' : 'explain_toggle_off';
+            btn.innerText = i18n[currentLang][key] || (explainEnabled ? '[ EXPLAIN: ON ]' : '[ EXPLAIN: OFF ]');
+        }
+
+        function updateTargetDesc() {
+            const box = document.getElementById('targetDescBox');
+            const targetVal = document.getElementById('scanTarget')?.value || 'vulnerable';
+            if (box) {
+                const key = targetVal === 'secure' ? 'target_desc_secure' : 'target_desc_vulnerable';
+                box.innerText = i18n[currentLang][key] || '';
             }
+        }
+
+        const exp_actor_none_val_raw = "Select a threat actor profile to load dynamic simulation configs.";
+        function updateActorDossier() {
+            const dropdown = document.getElementById('threatActor');
+            const actorDossierPane = document.getElementById('actorDossier');
+            if (!dropdown || !actorDossierPane) return;
+            
+            const actorKey = dropdown.value;
+            if (actorKey === 'none') {
+                actorDossierPane.innerText = i18n[currentLang]['exp_actor_none'] || exp_actor_none_val_raw;
+                actorDossierPane.style.color = 'var(--text-muted)';
+                return;
+            }
+
+            if (explainEnabled) {
+                const key = 'exp_actor_' + actorDossiers[actorKey].vector;
+                actorDossierPane.innerText = i18n[currentLang][key] || actorDossiers[actorKey].description;
+                actorDossierPane.style.color = 'var(--secondary)';
+            } else {
+                actorDossierPane.innerText = actorDossiers[actorKey].description;
+                actorDossierPane.style.color = 'var(--secondary)';
+            }
+        }
+
+        function setExplainMode(enabled) {
+            explainEnabled = enabled;
+            localStorage.setItem('explainMode', enabled);
+            if (enabled) {
+                document.body.classList.add('explainer-active');
+            } else {
+                document.body.classList.remove('explainer-active');
+            }
+            updateExplainBtnText();
+            updateTargetDesc();
+            updateActorDossier();
         }
 
         // Setup switch event listeners
@@ -1231,197 +1384,21 @@
             setLanguage(currentLang === 'en' ? 'ko' : 'en');
         });
 
-        document.getElementById('themeToggleBtn').addEventListener('click', () => {
-            setTheme(currentTheme === 'dark' ? 'light' : 'dark');
+
+
+        document.getElementById('explainToggleBtn').addEventListener('click', () => {
+            setExplainMode(!explainEnabled);
         });
+
+        document.getElementById('scanTarget').addEventListener('change', updateTargetDesc);
 
         // Initialize state on page load
         setLanguage(currentLang);
-        setTheme(currentTheme);
+        setExplainMode(explainEnabled);
     </script>
 
     <!-- UI Interaction Script -->
     <script>
-        // --- 1. SoundSynth: Procedural Web Audio API Chiptune Synth ---
-        class SoundSynth {
-            constructor() {
-                this.ctx = null;
-                this.humOsc = null;
-                this.humGain = null;
-                this.enabled = false;
-            }
-            
-            init() {
-                if (this.ctx) return;
-                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            
-            enable() {
-                this.init();
-                if (this.ctx.state === 'suspended') {
-                    this.ctx.resume();
-                }
-                this.enabled = true;
-                this.startHum();
-            }
-            
-            disable() {
-                this.enabled = false;
-                this.stopHum();
-                if (this.ctx && this.ctx.state !== 'suspended') {
-                    this.ctx.suspend();
-                }
-            }
-            
-            startHum() {
-                if (!this.enabled || !this.ctx) return;
-                try {
-                    this.stopHum();
-                    this.humOsc = this.ctx.createOscillator();
-                    this.humOsc.type = 'triangle'; // triangle has softer low-frequency hum
-                    this.humOsc.frequency.value = 55; // 55Hz (Low A) CRT scan line hum
-                    
-                    this.humGain = this.ctx.createGain();
-                    this.humGain.gain.setValueAtTime(0.012, this.ctx.currentTime);
-                    
-                    const lowpass = this.ctx.createBiquadFilter();
-                    lowpass.type = 'lowpass';
-                    lowpass.frequency.value = 80;
-                    
-                    this.humOsc.connect(lowpass);
-                    lowpass.connect(this.humGain);
-                    this.humGain.connect(this.ctx.destination);
-                    this.humOsc.start();
-                } catch (e) {
-                    console.error("Error starting hum: ", e);
-                }
-            }
-            
-            stopHum() {
-                if (this.humOsc) {
-                    try {
-                        this.humOsc.stop();
-                    } catch (e) {}
-                    this.humOsc = null;
-                }
-                this.humGain = null;
-            }
-            
-            playClick() {
-                if (!this.enabled || !this.ctx) return;
-                try {
-                    // Generate noise buffer for click transient
-                    const bufferSize = this.ctx.sampleRate * 0.015; // 15ms duration
-                    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-                    const data = buffer.getChannelData(0);
-                    for (let i = 0; i < bufferSize; i++) {
-                        data[i] = Math.random() * 2 - 1;
-                    }
-                    const noise = this.ctx.createBufferSource();
-                    noise.buffer = buffer;
-                    
-                    const filter = this.ctx.createBiquadFilter();
-                    filter.type = 'highpass';
-                    filter.frequency.setValueAtTime(1600, this.ctx.currentTime);
-                    
-                    const gain = this.ctx.createGain();
-                    gain.gain.setValueAtTime(0.04, this.ctx.currentTime);
-                    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.015);
-                    
-                    noise.connect(filter);
-                    filter.connect(gain);
-                    gain.connect(this.ctx.destination);
-                    noise.start();
-                } catch (e) {
-                    console.error("Error playing click: ", e);
-                }
-            }
-            
-            playAlarm() {
-                if (!this.enabled || !this.ctx) return;
-                try {
-                    const now = this.ctx.currentTime;
-                    // Double alarm beep
-                    [0, 0.22].forEach(delay => {
-                        const osc = this.ctx.createOscillator();
-                        osc.type = 'square';
-                        osc.frequency.setValueAtTime(440, now + delay);
-                        osc.frequency.linearRampToValueAtTime(880, now + delay + 0.12);
-                        
-                        const gain = this.ctx.createGain();
-                        gain.gain.setValueAtTime(0.035, now + delay);
-                        gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.12);
-                        
-                        osc.connect(gain);
-                        gain.connect(this.ctx.destination);
-                        osc.start(now + delay);
-                        osc.stop(now + delay + 0.12);
-                    });
-                } catch (e) {
-                    console.error("Error playing alarm: ", e);
-                }
-            }
-            
-            playRadarPing() {
-                if (!this.enabled || !this.ctx) return;
-                try {
-                    const now = this.ctx.currentTime;
-                    const osc = this.ctx.createOscillator();
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(950, now);
-                    osc.frequency.exponentialRampToValueAtTime(550, now + 0.6);
-                    
-                    const gain = this.ctx.createGain();
-                    gain.gain.setValueAtTime(0.06, now);
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
-                    
-                    // Simple chiptune feedback delay
-                    const delay = this.ctx.createDelay();
-                    delay.delayTime.value = 0.18;
-                    const delayGain = this.ctx.createGain();
-                    delayGain.gain.value = 0.3;
-                    
-                    osc.connect(gain);
-                    gain.connect(this.ctx.destination);
-                    
-                    gain.connect(delay);
-                    delay.connect(delayGain);
-                    delayGain.connect(this.ctx.destination);
-                    delayGain.connect(delay);
-                    
-                    osc.start(now);
-                    osc.stop(now + 0.6);
-                } catch (e) {
-                    console.error("Error playing radar ping: ", e);
-                }
-            }
-        }
-        
-        const synth = new SoundSynth();
-
-        // Sound activation button listener
-        const soundToggleBtn = document.getElementById('soundToggleBtn');
-        soundToggleBtn.addEventListener('click', () => {
-            if (synth.enabled) {
-                synth.disable();
-                soundToggleBtn.innerText = '[ AUDIO: OFF ]';
-                addLogFast('>> [AUDIO_DAEMON] Sound synthesis disarmed.', 'var(--text-muted)');
-                addSyslogEntry('[INFO] audio: Output stream disabled.', 'var(--text-muted)');
-            } else {
-                synth.enable();
-                soundToggleBtn.innerText = '[ AUDIO: ON ]';
-                addLogFast('>> [AUDIO_DAEMON] Synthesis hardware initialized at 44100Hz.', 'var(--primary)');
-                addSyslogEntry('[OK] audio: Procedural synth output online.', 'var(--primary)');
-            }
-        });
-
-        // Global UI Click Sound handler
-        document.addEventListener('click', (e) => {
-            const target = e.target.closest('button, a, input, select, label');
-            if (target && target.id !== 'soundToggleBtn') {
-                synth.playClick();
-            }
-        });
 
         // --- 2. Live Vector Attack Map & Radar canvas engine ---
         const radarCanvas = document.getElementById('radar-canvas');
@@ -1562,7 +1539,6 @@
 
             // Play scan pings when sweeping across zero degrees
             if (lastSweepAngle > sweepAngle) {
-                synth.playRadarPing();
                 // Spawn a random scan target
                 if (radarTargets.length < 5 && Math.random() < 0.6) {
                     const angle = Math.random() * Math.PI * 2;
@@ -1644,7 +1620,6 @@
                     } else {
                         // Success graphics (Ransom/Exploit impact)
                         triggerScreenShake();
-                        synth.playAlarm();
 
                         radarCtx.fillStyle = dangerColor;
                         radarCtx.globalAlpha = 0.5;
@@ -1959,7 +1934,6 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                         content.innerHTML += text.charAt(i);
                         i++;
                         terminal.scrollTop = terminal.scrollHeight;
-                        synth.playClick(); // keyboard sound feedback
                         setTimeout(type, speed);
                     } else {
                         resolve();
@@ -2059,6 +2033,23 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                     setTimeout(() => threatLab.style.borderColor = '', 1000);
                     
                     addSyslogEntry(`[WAF_BLOCKED] Attempted exploit on vector [${vectorKey.toUpperCase()}] intercepted. HTTP_STATUS: 403 Forbidden.`, 'var(--secondary)');
+                    
+                    if (explainEnabled) {
+                        const explainAlert = document.createElement('div');
+                        explainAlert.style.padding = '0.75rem 1rem';
+                        explainAlert.style.marginTop = '0.75rem';
+                        explainAlert.style.borderRadius = '2px';
+                        explainAlert.style.lineHeight = '1.4';
+                        explainAlert.style.border = '1px dashed var(--primary)';
+                        explainAlert.style.background = 'rgba(61, 251, 87, 0.08)';
+                        explainAlert.style.color = 'var(--primary)';
+                        explainAlert.innerHTML = `
+                            <strong style="display:block; font-size: 0.95rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_blocked']}</strong>
+                            <span>${i18n[currentLang]['sim_alert_desc_blocked']}</span>
+                        `;
+                        terminal.insertBefore(explainAlert, cursorLine);
+                        terminal.scrollTop = terminal.scrollHeight;
+                    }
                 } else {
                     addLogFast(i18n[currentLang]['log_node_response'], 'var(--primary)');
                     const resultContainer = document.createElement('pre');
@@ -2076,8 +2067,24 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                     
                     terminal.insertBefore(resultContainer, cursorLine);
                     addLogFast(i18n[currentLang]['log_attack_completed'], 'var(--secondary)');
-                    terminal.scrollTop = terminal.scrollHeight;
                     
+                    if (explainEnabled) {
+                        const explainAlert = document.createElement('div');
+                        explainAlert.style.padding = '0.75rem 1rem';
+                        explainAlert.style.marginTop = '0.75rem';
+                        explainAlert.style.borderRadius = '2px';
+                        explainAlert.style.lineHeight = '1.4';
+                        explainAlert.style.border = '1px dashed var(--danger)';
+                        explainAlert.style.background = 'rgba(255, 51, 51, 0.08)';
+                        explainAlert.style.color = 'var(--danger)';
+                        explainAlert.innerHTML = `
+                            <strong style="display:block; font-size: 0.95rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_success']}</strong>
+                            <span>${i18n[currentLang]['sim_alert_desc_success']}</span>
+                        `;
+                        terminal.insertBefore(explainAlert, cursorLine);
+                    }
+                    
+                    terminal.scrollTop = terminal.scrollHeight;
                     addSyslogEntry(`[EXPLOIT_BYPASS] Payload executed on vector [${vectorKey.toUpperCase()}]. HTTP_STATUS: 200 OK.`, 'var(--danger)');
                 }
             } catch (e) {
@@ -2143,9 +2150,6 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
 
         if (uploadBtn && uploadFile) {
             uploadBtn.addEventListener('click', () => {
-                if (typeof synth !== 'undefined' && synth.playClick) {
-                    synth.playClick();
-                }
                 uploadFile.click();
             });
 
@@ -2189,18 +2193,12 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                         text.innerText = i18n[currentLang]['upload_btn_aborted'];
                         btn.disabled = false;
                         addSyslogEntry('[ERR] systemd: Custom scan aborted by security gate policy.', 'var(--danger)');
-                        if (typeof synth !== 'undefined' && synth.playAlarm) {
-                            synth.playAlarm();
-                        }
                     }
                 } catch (e) {
                     alert('FATAL: Scanner daemon offline. ' + e);
                     text.innerText = i18n[currentLang]['upload_btn_error'];
                     btn.disabled = false;
                     addSyslogEntry('[ERR] systemd: Custom scan sub-process critical failure.', 'var(--danger)');
-                    if (typeof synth !== 'undefined' && synth.playAlarm) {
-                        synth.playAlarm();
-                    }
                 } finally {
                     uploadFile.value = '';
                 }
