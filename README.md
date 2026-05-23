@@ -1,6 +1,6 @@
 # Aegis: Automated DevSecOps Pipeline & Retro CRT Security Console
 
-Aegis is an interactive DevSecOps dashboard and policy scanner that automates security verification for multi-language source code (Python, C, C++, Java, JS, TS), third-party dependencies, and container images. It provides a visual demonstration of common vulnerability injections, live Web Application Firewall (WAF) mitigation controls, and automated policy scanning.
+Aegis is an interactive DevSecOps dashboard and policy scanner that automates security verification for Python source code, third-party dependencies, and container images. It provides a visual demonstration of common vulnerability injections, live Web Application Firewall (WAF) mitigation controls, and automated policy scanning.
 
 ---
 
@@ -20,14 +20,14 @@ Aegis features a premium, immersive **90s Retro CRT Terminal** theme styled with
 ```mermaid
 graph TD
     Dev[Developer/Source Code] -->|Pushes Code| CI[CI/CD pipeline]
-    CI -->|Runs Semgrep/Safety| Scan[Scanners]
+    CI -->|Runs Bandit/Safety| Scan[Scanners]
     Scan -->|Generates JSON logs| Engine[Policy Engine]
     Engine -->|Parses Results| Decision{Deployment Blocked?}
     Decision -->|Yes| Report[HTML Report generated]
     Decision -->|No| Deploy[Ship to Production]
 ```
 
-* **HTML Report**: `scans/report.html` - Visual tactical mainframe report with diagnostic details of Semgrep and library scanner findings.
+* **HTML Report**: `scans/report.html` - Visual tactical mainframe report with diagnostic details of Bandit, Safety, and Trivy scanner findings.
 * **Markdown Report**: `scans/report.md` - Optimized for GitHub Job summaries.
 
 ---
@@ -54,7 +54,7 @@ aegis/
 ├── policy_engine.py           # Evaluates scanner outputs against severity policies
 ├── setup.sh                   # Automated environment build and startup script
 ├── requirements.txt           # Production dependencies
-├── requirements-dev.txt       # Dev & scanning dependencies (pytest, semgrep, safety, etc.)
+├── requirements-dev.txt       # Dev & scanning dependencies (pytest, bandit, safety, etc.)
 ├── Dockerfile                 # Containerized image file
 └── README.md                  # Project documentation
 ```
@@ -105,7 +105,7 @@ pytest
 
 You can use the patterns shown in Aegis to strengthen security in your production pipelines:
 
-1. **Adopt Automated Code Linters**: Run tools like `semgrep scan --config=auto --json -o semgrep-report.json` as a pre-commit hook or inside your PR tests.
+1. **Adopt Automated Code Linters**: Run tools like `bandit -r app -f json -o bandit-report.json` as a pre-commit hook or inside your PR tests.
 2. **Fail Fast with Policy Engines**: Use `policy_engine.py` to assert scan findings. Return `exit 1` to fail pipelines automatically when any `HIGH` or `CRITICAL` vulnerability is introduced.
 3. **Audit Third-Party Packages**: Run `safety check` to prevent outdated dependencies with known CVEs from reaching your production containers.
 
@@ -140,11 +140,10 @@ jobs:
           # Optional: Build and scan a container image (e.g., 'myapp:latest')
           image-name: ''
           # Thresholds
-          fail-on-semgrep: 'MEDIUM,HIGH'
           fail-on-bandit: 'MEDIUM,HIGH'
           fail-on-safety: 'true'
           fail-on-trivy: 'MEDIUM,HIGH,CRITICAL'
 ```
 
-This composite action installs dependencies, executes the scans (Semgrep, Bandit, Safety, and optional Trivy), executes the Aegis policy gate, generates static reports, and appends a security diagnostics summary to your GitHub Job Summary page.
+This composite action installs dependencies, executes the scans (Bandit, Safety, and optional Trivy), executes the Aegis policy gate, generates static reports, and appends a security diagnostics summary to your GitHub Job Summary page.
 
