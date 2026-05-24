@@ -2,10 +2,39 @@ import sqlite3
 import os
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+local_root = BASE_DIR.parent
+
 if os.environ.get("VERCEL"):
     DB_PATH = Path("/tmp/aegis_demo.db")
+    PROJECT_ROOT = Path("/tmp")
+    DOWNLOAD_DIR = Path("/tmp/downloads")
+    SCANS_DIR = Path("/tmp/scans")
 else:
-    DB_PATH = Path(__file__).resolve().parent / "aegis_demo.db"
+    data_dir = os.environ.get("AEGIS_DATA_DIR")
+    if data_dir:
+        PROJECT_ROOT = Path(data_dir)
+        DB_PATH = PROJECT_ROOT / "aegis_demo.db"
+        DOWNLOAD_DIR = PROJECT_ROOT / "downloads"
+        SCANS_DIR = PROJECT_ROOT / "scans"
+    else:
+        try:
+            test_file = local_root / ".test_write"
+            test_file.touch()
+            test_file.unlink()
+            
+            PROJECT_ROOT = local_root
+            DB_PATH = BASE_DIR / "aegis_demo.db"
+            DOWNLOAD_DIR = BASE_DIR / "downloads"
+            SCANS_DIR = PROJECT_ROOT / "scans"
+        except (IOError, OSError):
+            user_root = Path.home() / ".aegis"
+            user_root.mkdir(parents=True, exist_ok=True)
+            
+            PROJECT_ROOT = user_root
+            DB_PATH = user_root / "aegis_demo.db"
+            DOWNLOAD_DIR = user_root / "downloads"
+            SCANS_DIR = user_root / "scans"
 
 
 def get_connection():

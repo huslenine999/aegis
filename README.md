@@ -63,7 +63,34 @@ aegis/
 
 ## 🛠️ Getting Started
 
-### 1. Automated Setup & Run (Recommended)
+### 📦 Installation via Package Managers (Recommended)
+
+#### Option A: Homebrew (macOS / Linux)
+You can tap the repository and install Aegis globally via Homebrew:
+```bash
+# Tap the repository
+brew tap huslenine999/secdevops
+
+# Install the aegis package
+brew install aegis
+
+# Start the console globally from anywhere
+aegis
+```
+
+#### Option B: npm (NodeJS)
+You can install Aegis globally via npm:
+```bash
+# Install the package globally
+npm install -g aegis-secure-console
+
+# Run the console globally from anywhere
+aegis-secure-console
+```
+
+---
+
+### 💻 Local Source Setup & Run (Automated)
 You can set up dependencies, configure the SQLite databases, and start the application in one command:
 ```bash
 chmod +x setup.sh

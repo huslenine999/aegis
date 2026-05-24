@@ -1,0 +1,42 @@
+{
+  "name": "aegis-secure-console",
+  "version": "2.0.0",
+  "description": "Aegis retro CRT DevSecOps console for static code scanning and threat simulation",
+  "main": "bin/cli.js",
+  "bin": {
+    "aegis-secure-console": "./bin/cli.js"
+  },
+  "files": [
+    "app/",
+    "bin/",
+    "scripts/",
+    "policy_engine.py",
+    "requirements.txt",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "keywords": [
+    "security",
+    "devsecops",
+    "sast",
+    "sca",
+    "waf",
+    "retro",
+    "crt",
+    "console",
+    "terminal"
+  ],
+  "author": "Khuslen Gan-Ochir",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huslenine999/secdevops.git"
+  },
+  "bugs": {
+    "url": "https://github.com/huslenine999/secdevops/issues"
+  },
+  "homepage": "https://github.com/huslenine999/secdevops#readme"
+}

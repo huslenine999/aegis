@@ -19,7 +19,7 @@ if sys_exec_dir and sys_exec_dir not in os.environ.get("PATH", "").split(os.path
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from database import DB_PATH, initialize_database
+from database import DB_PATH, initialize_database, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR
 
 app = Flask(__name__)
 
@@ -175,15 +175,7 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "default-dev-secret-key"
 DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", "dev-password")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "DEV-AWS-ID")
 
-BASE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = BASE_DIR.parent
-
-if os.environ.get("VERCEL"):
-    DOWNLOAD_DIR = Path("/tmp/downloads")
-    SCANS_DIR = Path("/tmp/scans")
-else:
-    DOWNLOAD_DIR = BASE_DIR / "downloads"
-    SCANS_DIR = PROJECT_ROOT / "scans"
+# BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, and SCANS_DIR are imported from database.py
 
 # Initialize directories and sample file safely
 DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)

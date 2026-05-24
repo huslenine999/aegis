@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+
+AEGIS_HOME="$HOME/.aegis"
+VENV_DIR="$AEGIS_HOME/venv"
+
+# Resolve absolute path to the package directory, resolving symlinks.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+AEGIS_DIR="$( cd -P "$( dirname "$SOURCE" )/.." >/dev/null 2>&1 && pwd )"
+
+# Check Python 3
+if ! command -v python3 &> /dev/null; then
+  echo "Error: Python 3 is required to run Aegis. Please install it."
+  exit 1
+fi
+
+# Ensure venv exists in ~/.aegis/venv
+if [ ! -d "$VENV_DIR" ]; then
+  echo "🛡️ Creating Python virtual environment in $VENV_DIR..."
+  mkdir -p "$AEGIS_HOME"
+  python3 -m venv "$VENV_DIR"
+fi
+
+# Activate and install dependencies
+source "$VENV_DIR/bin/activate"
+echo "🛡️ Ensuring Python dependencies are installed..."
+pip install --upgrade pip
+pip install -r "$AEGIS_DIR/requirements.txt"
+
+# Run the app
+echo "🛡️ Starting Aegis Security Console..."
+echo "Access the dashboard at http://127.0.0.1:5001"
+export AEGIS_DATA_DIR="$AEGIS_HOME"
+python "$AEGIS_DIR/app/main.py"
