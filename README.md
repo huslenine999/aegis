@@ -69,7 +69,7 @@ aegis/
 You can tap the repository and install Aegis globally via Homebrew:
 ```bash
 # Tap the repository
-brew tap huslenine999/secdevops
+brew tap huslenine999/aegis
 
 # Install the aegis package
 brew install aegis

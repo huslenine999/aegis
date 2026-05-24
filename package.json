@@ -33,10 +33,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/huslenine999/secdevops.git"
+    "url": "git+https://github.com/huslenine999/aegis.git"
   },
   "bugs": {
-    "url": "https://github.com/huslenine999/secdevops/issues"
+    "url": "https://github.com/huslenine999/aegis/issues"
   },
-  "homepage": "https://github.com/huslenine999/secdevops#readme"
+  "homepage": "https://github.com/huslenine999/aegis#readme"
 }
