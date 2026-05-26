@@ -49,7 +49,12 @@ def load_waf_rules_from_db():
             {"pattern": "cat /etc/passwd", "description": "LFI/Command execution pattern 1", "enabled": True},
             {"pattern": "\\.\\./", "description": "Directory Traversal pattern (../)", "enabled": True},
             {"pattern": "pickle\\.loads", "description": "Python deserialization hijack detector", "enabled": True},
-            {"pattern": "eval\\(", "description": "Python dynamic expression injection detector", "enabled": True}
+            {"pattern": "eval\\(", "description": "Python dynamic expression injection detector", "enabled": True},
+            {"pattern": "<\\s*script", "description": "XSS (Dangerous script tags)", "enabled": True},
+            {"pattern": "on\\w+\\s*=", "description": "XSS (HTML event handler hijacking)", "enabled": True},
+            {"pattern": "javascript\\s*:", "description": "XSS (Javascript URI prefix)", "enabled": True},
+            {"pattern": "169\\.254\\.169\\.254", "description": "SSRF (Cloud metadata server IP)", "enabled": True},
+            {"pattern": "localhost|127\\.0\\.0\\.1", "description": "SSRF (Localhost lookup blocker)", "enabled": True}
         ]
     finally:
         conn.close()
@@ -463,6 +468,52 @@ def weak_hash():
         "value": value,
         "md5": digest
     })
+
+
+@app.route("/xss")
+def xss_demo():
+    """
+    Cross-Site Scripting (XSS) vulnerability.
+
+    Example:
+    /xss?msg=<script>alert('XSS')</script>
+    """
+    msg = request.args.get("msg", "Welcome to Aegis console.")
+    # Intentionally vulnerable HTML output reflection
+    return f"<html><body><div id='xss-output'>{msg}</div></body></html>"
+
+
+@app.route("/ssrf")
+def ssrf_demo():
+    """
+    Server-Side Request Forgery (SSRF) vulnerability.
+
+    Example:
+    /ssrf?url=http://169.254.169.254/latest/meta-data/
+    """
+    url = request.args.get("url", "http://127.0.0.1:5001/health")
+
+    import urllib.request
+    try:
+        # Intentionally vulnerable connection execution without checks
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            content = response.read().decode('utf-8', errors='ignore')
+            return jsonify({
+                "url": url,
+                "status": "success",
+                "response": content[:1000]
+            })
+    except Exception as e:
+        return jsonify({
+            "url": url,
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 
 
 @app.route("/debug-info")

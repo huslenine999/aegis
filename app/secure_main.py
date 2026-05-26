@@ -125,6 +125,79 @@ def secure_hash():
 
     return jsonify({"sha256": digest})
 
+
+@app.route("/xss")
+def xss_demo():
+    """
+    SECURE: HTML-escapes parameters before reflecting them.
+    """
+    import html
+    msg = request.args.get("msg", "Welcome to Aegis console.")
+    # SECURE: Escape msg to prevent HTML/Script injection
+    safe_msg = html.escape(msg)
+    return f"<html><body><div id='xss-output'>{safe_msg}</div></body></html>"
+
+
+@app.route("/ssrf")
+def ssrf_demo():
+    """
+    SECURE: Validates the URL scheme, hostname, and resolution to prevent SSRF.
+    """
+    url = request.args.get("url", "http://127.0.0.1:5001/health")
+
+    from urllib.parse import urlparse
+    import socket
+
+    try:
+        parsed = urlparse(url)
+        # 1. Enforce http or https scheme only
+        if parsed.scheme not in ("http", "https"):
+            return jsonify({"error": "Invalid scheme. Only HTTP and HTTPS are allowed."}), 400
+
+        # 2. Extract hostname and resolve to IP
+        hostname = parsed.hostname
+        if not hostname:
+            return jsonify({"error": "Invalid URL hostname."}), 400
+
+        # Resolve host to IP address
+        try:
+            ip_addr = socket.gethostbyname(hostname)
+        except Exception:
+            return jsonify({"error": "Failed to resolve host."}), 400
+
+        # 3. Block loopback, link-local metadata, and private IP spaces
+        parts = list(map(int, ip_addr.split('.')))
+        if len(parts) == 4:
+            if (parts[0] == 127 or 
+                parts[0] == 0 or
+                parts[0] == 10 or 
+                (parts[0] == 172 and 16 <= parts[1] <= 31) or 
+                (parts[0] == 192 and parts[1] == 168) or 
+                (parts[0] == 169 and parts[1] == 254)):
+                return jsonify({"error": "Forbidden target address: Private IP ranges are blocked."}), 403
+
+        # 4. Perform safe fetch of validated public address
+        import urllib.request
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:  # nosec B310
+            content = response.read().decode('utf-8', errors='ignore')
+            return jsonify({
+                "url": url,
+                "status": "success",
+                "response": content[:1000]
+            })
+    except Exception as e:
+        return jsonify({
+            "url": url,
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
 if __name__ == "__main__":
     # SECURE: Debug mode always False in production
     app.run(host="0.0.0.0", port=5002, debug=False)  # nosemgrep # nosec
+

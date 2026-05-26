@@ -85,7 +85,12 @@ def initialize_database():
         ("cat /etc/passwd", "LFI/Command execution pattern 1", 1),
         ("\\.\\./", "Directory Traversal pattern (../)", 1),
         ("pickle\\.loads", "Python deserialization hijack detector", 1),
-        ("eval\\(", "Python dynamic expression injection detector", 1)
+        ("eval\\(", "Python dynamic expression injection detector", 1),
+        ("<\\s*script", "XSS (Dangerous script tags)", 1),
+        ("on\\w+\\s*=", "XSS (HTML event handler hijacking)", 1),
+        ("javascript\\s*:", "XSS (Javascript URI prefix)", 1),
+        ("169\\.254\\.169\\.254", "SSRF (Cloud metadata server IP)", 1),
+        ("localhost|127\\.0\\.0\\.1", "SSRF (Localhost lookup blocker)", 1)
     ]
 
     cursor.executemany(

@@ -1,12 +1,12 @@
 # Aegis Security Scan Summary
-**Generated on:** 2026-05-24 18:24:04
-**Final Decision:** DEPLOYMENT ALLOWED
-**Reason:** No blocking security issues found.
+**Generated on:** 2026-05-26 14:25:33
+**Final Decision:** DEPLOYMENT BLOCKED
+**Reason:** Blocking security issues found by: Bandit
 
 ## Tool Results
 | Tool | Status | Total Issues | Blocking Issues |
 | --- | --- | --- | --- |
-| Bandit | PASS | 0 | 0 |
+| Bandit | FAIL | 12 | 7 |
 | Safety | PASS | 0 | 0 |
 | Trivy | PASS | 0 | 0 |
 

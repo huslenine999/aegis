@@ -162,3 +162,49 @@ def test_waf_rules_persistence(client):
     finally:
         # Restore original rules
         client.post('/save-waf-rules', json={"rules": original_rules})
+
+
+def test_xss_waf_blocking(client):
+    """Verify that WAF blocks XSS payloads when enabled, and permits them when disabled."""
+    # 1. Enable WAF
+    client.post('/toggle-waf')
+    
+    # Test script injection blocking
+    response = client.get('/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
+    assert response.status_code == 403
+    assert b"Blocked by Aegis WAF" in response.data
+
+    # Test event handler hijacking blocking
+    response = client.get('/xss?msg=test%20onload=alert(1)')
+    assert response.status_code == 403
+
+    # 2. Disable WAF
+    client.post('/toggle-waf')
+    
+    # Test that payload is permitted
+    response = client.get('/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
+    assert response.status_code == 200
+    assert b"<script>alert(1)</script>" in response.data
+
+
+def test_ssrf_waf_blocking(client):
+    """Verify that WAF blocks SSRF target payloads when enabled."""
+    # 1. Enable WAF
+    client.post('/toggle-waf')
+
+    # Test cloud metadata target blocking
+    response = client.get('/ssrf?url=http://169.254.169.254/latest/meta-data/')
+    assert response.status_code == 403
+    assert b"Blocked by Aegis WAF" in response.data
+
+    # Test localhost target blocking
+    response = client.get('/ssrf?url=http://localhost:5001/health')
+    assert response.status_code == 403
+
+    # 2. Disable WAF
+    client.post('/toggle-waf')
+
+    # Test that loopback is permitted (will return success or connection error, but not 403 WAF block)
+    response = client.get('/ssrf?url=http://127.0.0.1:5001/health')
+    assert response.status_code != 403
+

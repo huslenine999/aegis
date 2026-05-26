@@ -19,14 +19,14 @@
             --primary: #3dfb57;       /* Bright Phosphor Green */
             --primary-glow: rgba(61, 251, 87, 0.4);
             
-            --secondary: #ffb000;     /* Amber Warning */
-            --secondary-glow: rgba(255, 176, 0, 0.4);
+            --secondary: #ffb81a;     /* Brighter Amber Warning */
+            --secondary-glow: rgba(255, 184, 26, 0.4);
             
             --danger: #ff3333;        /* Alarm Red */
             --danger-glow: rgba(255, 51, 51, 0.4);
             
             --text-main: #b8fbb8;     /* Faded Phosphor Green */
-            --text-muted: #5da068;    /* Dark Greenish Slate */
+            --text-muted: #82c38d;    /* Brighter Greenish Slate for legibility */
             
             --border-primary: 1px solid var(--primary);
             --border-secondary: 1px solid var(--secondary);
@@ -35,6 +35,67 @@
             --canvas-opacity: 0.08;
             --scanline-opacity: 0.3;
         }
+
+        body.theme-amber {
+            --bg-base: #0a0805;
+            --bg-surface: rgba(15, 12, 6, 0.6);
+            --bg-console: #070503;
+            --primary: #ffb000;
+            --primary-glow: rgba(255, 176, 0, 0.4);
+            --secondary: #4afc62;    /* Slightly brighter secondary green */
+            --secondary-glow: rgba(74, 252, 98, 0.4);
+            --danger: #ff3333;
+            --danger-glow: rgba(255, 51, 51, 0.4);
+            --text-main: #ffd27f;
+            --text-muted: #cca37a;    /* Brighter amber slate for legibility */
+        }
+
+        body.theme-grey {
+            --bg-base: #0f1011;
+            --bg-surface: rgba(20, 22, 24, 0.6);
+            --bg-console: #0a0b0c;
+            --primary: #d1d5db;
+            --primary-glow: rgba(209, 213, 219, 0.3);
+            --secondary: #ffb81a;
+            --secondary-glow: rgba(255, 184, 26, 0.4);
+            --danger: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.4);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;    /* Brighter grey for legibility */
+        }
+
+        body.theme-matrix {
+            --bg-base: #000000;
+            --bg-surface: rgba(0, 10, 2, 0.75);
+            --bg-console: #000300;
+            --primary: #00ff41;
+            --primary-glow: rgba(0, 255, 65, 0.45);
+            --secondary: #00cc33;    /* Brighter secondary green for legibility */
+            --secondary-glow: rgba(0, 204, 51, 0.4);
+            --danger: #ff3333;
+            --danger-glow: rgba(255, 51, 51, 0.4);
+            --text-main: #80ff80;
+            --text-muted: #3cd058;    /* Brighter green for legibility (previously unreadable #005f00) */
+        }
+
+        /* Simple View mode hiding overrides */
+        body.view-simple #radar-card,
+        body.view-simple #waf-editor-card,
+        body.view-simple #console-card,
+        body.view-simple #diagnostics-card,
+        body.view-simple #scanTarget,
+        body.view-simple a[href="/report"],
+        body.view-simple a[href="/export-dossier"] {
+            display: none !important;
+        }
+
+        body.view-simple .threat-grid {
+            grid-template-columns: 1fr;
+            max-width: 800px;
+            margin: 0 auto 2rem auto;
+        }
+
+
 
 
 
@@ -692,16 +753,31 @@
         /* Explainer boxes styling */
         .explainer-box {
             display: none;
-            background: rgba(61, 251, 87, 0.04);
+            background: rgba(61, 251, 87, 0.05);
             border: 1px dashed var(--primary);
             border-radius: 4px;
-            padding: 0.75rem 1rem;
+            padding: 0.95rem 1.25rem;
             margin-bottom: 1rem;
-            font-size: 0.85rem;
+            font-size: 1.12rem;
             color: var(--text-main);
-            line-height: 1.4;
+            line-height: 1.6;
             box-shadow: inset 0 0 10px rgba(61, 251, 87, 0.05);
             animation: pulse-glow 3s infinite ease-in-out;
+        }
+
+        .explainer-subtext {
+            font-size: 1.05rem !important;
+            line-height: 1.6 !important;
+            color: var(--secondary) !important;
+            margin-top: 0.35rem;
+            border-left: 2px solid var(--secondary);
+            padding-left: 0.5rem;
+            font-weight: bold;
+        }
+
+        #terminal, #syslog-stream {
+            font-size: 1.02rem !important;
+            line-height: 1.6 !important;
         }
 
         @keyframes pulse-glow {
@@ -727,12 +803,23 @@
         <div class="navbar-controls">
             <button id="explainToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ EXPLAIN: OFF ]</button>
             <button id="langToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ LANG: EN ]</button>
-            <a href="/health" class="link mono" style="color: var(--primary); font-size: 0.9rem;">> TTY_HEALTH_DAEMON</a>
+            <select id="themeSelect" class="cyber-input mono" style="width: auto; padding: 0.35rem 0.5rem; font-size: 0.85rem; height: 32px; border-color: var(--primary); background: rgba(6, 15, 8, 0.85); color: var(--primary);">
+                <option value="green">THEME: PHOSPHOR GREEN</option>
+                <option value="amber">THEME: AMBER MONO</option>
+                <option value="grey">THEME: CLASSIC GREY</option>
+                <option value="matrix">THEME: MATRIX DIGITAL RAIN</option>
+            </select>
+            <select id="viewSelect" class="cyber-input mono" style="width: auto; padding: 0.35rem 0.5rem; font-size: 0.85rem; height: 32px; border-color: var(--primary); background: rgba(6, 15, 8, 0.85); color: var(--primary);">
+                <option value="simple">VIEW: SIMPLE</option>
+                <option value="tactical">VIEW: TACTICAL</option>
+            </select>
+            <a href="/health" class="link mono" style="color: var(--primary); font-size: 0.9rem; margin-left: 0.5rem;">> TTY_HEALTH_DAEMON</a>
         </div>
     </nav>
 
     <div class="container">
         <!-- Hero Console -->
+        <h2 class="section-title reveal mono" data-i18n="static_audit">> STEP 1: STATIC CODE AUDIT &amp; SCAN</h2>
         <div class="terminal-panel hero reveal">
             <h1 data-i18n="title">SECURITY CONTROL CENTER</h1>
             <p data-i18n="subtitle">TACTICAL SYSTEM MONITORING AND THREAT INTELLIGENCE GATEWAY. DETECTING STATIC CODE DEFECTS AND SIMULATING NETWORK ANOMALIES IN THE TARGET DEVSECOPS PIPELINE.</p>
@@ -769,7 +856,7 @@
             </div>
         </div>
 
-        <h2 class="section-title reveal mono" data-i18n="threat_lab">> THREAT_LAB_MAINFRAME</h2>
+        <h2 class="section-title reveal mono" data-i18n="threat_lab">> STEP 2: INTERACTIVE THREAT SIMULATION LAB</h2>
         <div class="threat-grid">
             <!-- Card 1: Vector Attack Radar & Canvas Map -->
             <div class="terminal-panel reveal" id="radar-card" style="display: flex; flex-direction: column; min-height: 380px;">
@@ -808,11 +895,13 @@
                             <option value="scriptov">Dr. Scriptov [SQLi Specialist]</option>
                             <option value="sudoroot">Sudo_Root [RCE Specialist]</option>
                             <option value="pathfinder">Path_Finder [LFI Specialist]</option>
+                            <option value="shadowcoder">Shadow_Coder [XSS Specialist]</option>
+                            <option value="cloudbreaker">Cloud_Breaker [SSRF Specialist]</option>
                         </select>
                     </div>
 
                     <!-- Threat Actor Dossier Output -->
-                    <div id="actorDossier" class="mono" style="font-size: 0.8rem; border: 1px solid rgba(61,251,87,0.25); background: rgba(0,0,0,0.4); padding: 0.5rem; color: var(--text-muted); min-height: 75px; white-space: pre-wrap; line-height: 1.35; margin-bottom: 0.5rem;">Select a threat actor profile to load dynamic simulation configs.</div>
+                    <div id="actorDossier" class="mono" style="font-size: 0.98rem; border: 1px solid rgba(61,251,87,0.25); background: rgba(0,0,0,0.4); padding: 0.75rem; color: var(--text-muted); min-height: 75px; white-space: pre-wrap; line-height: 1.5; margin-bottom: 0.5rem;">Select a threat actor profile to load dynamic simulation configs.</div>
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
                         <div class="input-group">
@@ -821,6 +910,8 @@
                                 <option value="sqli">SQL Injection (Bypass Auth)</option>
                                 <option value="rce">Remote Code Execution (Ping Injection)</option>
                                 <option value="traversal">Directory Traversal (LFI)</option>
+                                <option value="xss">Cross-Site Scripting (XSS)</option>
+                                <option value="ssrf">Server-Side Request Forgery (SSRF)</option>
                             </select>
                         </div>
                         <div class="input-group">
@@ -885,7 +976,7 @@
                     <div class="explainer-box mono" data-i18n="exp_stdout" style="margin: 0.75rem; margin-bottom: 0;">
                         🎓 TECHNICAL STDOUT FEED: Real-time logs showing how the server processes payloads. Watch this to see details of success or blocked statuses.
                     </div>
-                    <div id="terminal" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 0.85rem; max-height: 140px; background: var(--bg-console);">
+                    <div id="terminal" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 1.02rem; line-height: 1.6; max-height: 140px; background: var(--bg-console);">
                         <div style="color: var(--text-muted);" data-i18n="sys_daemon_init">[SYSTEM_DAEMON] Initializing simulation stream...</div>
                         <div style="color: var(--text-muted);" data-i18n="sys_daemon_link">[SYSTEM_DAEMON] Tactical network node link established.</div>
                         <div id="cursor-line" class="typing-cursor" style="color: var(--primary); margin-top: 0.5rem;">root@aegis-host:~# </div>
@@ -900,14 +991,64 @@
                     <div class="explainer-box mono" data-i18n="exp_syslog" style="margin: 0.75rem; margin-bottom: 0;">
                         🎓 SYSTEM DAEMON FEED: Internal operating system logs showing services, cron jobs, database connections, and security interventions.
                     </div>
-                    <div id="syslog-stream" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 0.85rem; max-height: 140px; background: var(--bg-console); color: var(--text-muted); line-height: 1.4;">
+                    <div id="syslog-stream" class="mono" style="flex-grow: 1; overflow-y: auto; padding: 0.75rem; font-size: 1.02rem; line-height: 1.6; max-height: 140px; background: var(--bg-console); color: var(--text-muted);">
                         <!-- Auto-generated logs -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card 5: System Diagnostics Monitor -->
+            <div class="terminal-panel reveal" id="diagnostics-card" style="display: flex; flex-direction: column; min-height: 420px;">
+                <div class="terminal-header">
+                    <div class="mono" style="font-weight: 700; color: var(--primary); display: flex; align-items: center; gap: 0.5rem;">
+                        > SYSTEM_DAEMON_DIAGNOSTICS
+                    </div>
+                    <div class="badge badge-success mono" id="diagStatus" style="font-size: 0.75rem;">NOMINAL</div>
+                </div>
+                <div class="terminal-body" style="flex-grow: 1; display: flex; flex-direction: column; padding: 1.25rem; gap: 1.25rem;">
+                    <div class="explainer-box mono" data-i18n="exp_diagnostics">
+                        🎓 SYSTEM DIAGNOSTICS: Monitored system health parameters. Attacks on vulnerable endpoints cause transient spikes in CPU load and network latency.
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 1rem; flex-grow: 1; justify-content: center;">
+                        <!-- CPU Usage -->
+                        <div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem;" class="mono">
+                                <span>CPU_CORE_UTILIZATION</span>
+                                <span id="cpuVal">12%</span>
+                            </div>
+                            <svg width="100%" height="20" style="border: 1px solid var(--primary); background: var(--bg-console);">
+                                <g id="cpuBarGroup"></g>
+                            </svg>
+                        </div>
+                        
+                        <!-- Memory Load -->
+                        <div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem;" class="mono">
+                                <span>SYSTEM_MEMORY_LOAD</span>
+                                <span id="memVal">42%</span>
+                            </div>
+                            <svg width="100%" height="20" style="border: 1px solid var(--primary); background: var(--bg-console);">
+                                <g id="memBarGroup"></g>
+                            </svg>
+                        </div>
+                        
+                        <!-- Latency -->
+                        <div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem;" class="mono">
+                                <span>NETWORK_RTT_LATENCY</span>
+                                <span id="latencyVal">45ms</span>
+                            </div>
+                            <svg width="100%" height="20" style="border: 1px solid var(--primary); background: var(--bg-console);">
+                                <g id="latencyBarGroup"></g>
+                            </svg>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <h2 class="section-title reveal mono" data-i18n="detected_vulnerabilities">> DETECTED_VULNERABILITIES</h2>
+        <h2 class="section-title reveal mono" data-i18n="detected_vulnerabilities">> STEP 3: LOCAL DATABASE &amp; SHELL VULNERABILITY LIST</h2>
         <div class="explainer-box mono" data-i18n="exp_vulns" style="margin-bottom: 1.5rem;">
             🎓 KNOWN SECURITY WEAKNESSES: Insecure features in the code. Hackers target these. Switch Target (in the header) to SECURE target to see how we fix them.
         </div>
@@ -924,7 +1065,7 @@
                             <a href="/user?name=admin" class="link">/user?name=admin</a>
                             <span class="badge badge-danger" style="margin-left: auto;">SQLi</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_sqli" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_sqli" style="display: none;">
                             SQL Injection: Tricking database searches using command symbols (like ') to dump user secrets without a password.
                         </div>
                     </div>
@@ -934,7 +1075,7 @@
                             <a href="/ping?host=127.0.0.1" class="link">/ping?host=127.0.0.1</a>
                             <span class="badge badge-danger" style="margin-left: auto;">RCE</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_rce" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_rce" style="display: none;">
                             Remote Code Execution: Injecting terminal operations (like ;) to force the server into running arbitrary system commands.
                         </div>
                     </div>
@@ -953,7 +1094,7 @@
                             <a href="/calculate?expr=2+2" class="link">/calculate?expr=2+2</a>
                             <span class="badge badge-danger" style="margin-left: auto;">EVAL</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_eval" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_eval" style="display: none;">
                             Unsafe Eval: Executing direct programming code passed by user input, allowing attackers to delete files or run Python scripts.
                         </div>
                     </div>
@@ -963,7 +1104,7 @@
                             <span class="link">/load-profile</span>
                             <span class="badge badge-danger" style="margin-left: auto;">PICKLE</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_pickle" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_pickle" style="display: none;">
                             Insecure Deserialization: Unpacking serialized Python objects. Attackers package malicious code inside saving files to run on server load.
                         </div>
                     </div>
@@ -982,7 +1123,7 @@
                             <a href="/download?file=sample.txt" class="link">/download?file=sample.txt</a>
                             <span class="badge badge-warning" style="margin-left: auto;">LFI</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_lfi" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_lfi" style="display: none;">
                             Path Traversal (LFI): Bypassing folders using relative path symbols (../../) to steal system configurations and source code.
                         </div>
                     </div>
@@ -992,15 +1133,44 @@
                             <a href="/hash?value=password123" class="link">/hash?value=password123</a>
                             <span class="badge badge-warning" style="margin-left: auto;">MD5</span>
                         </div>
-                        <div class="explainer-subtext mono" data-i18n="desc_md5" style="font-size: 0.75rem; color: var(--secondary); margin-top: 0.25rem; display: none; border-left: 2px solid var(--secondary); padding-left: 0.5rem; line-height: 1.3;">
+                        <div class="explainer-subtext mono" data-i18n="desc_md5" style="display: none;">
                             Weak Hashing (MD5): Using an ancient, insecure encryption algorithm that computers can decode instantly, exposing user passwords.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card reveal" style="transition-delay: 150ms;">
+                <div class="card-title" data-i18n="injection_forgery">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                    INJECTION_AND_FORGERY
+                </div>
+                <div class="endpoint-list">
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/xss?msg=Welcome" class="link">/xss?msg=Welcome</a>
+                            <span class="badge badge-danger" style="margin-left: auto;">XSS</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_xss" style="display: none;">
+                            Cross-Site Scripting (XSS): Injecting malicious scripts (like &lt;script&gt;) into website inputs, stealing session tokens and cookies from users.
+                        </div>
+                    </div>
+                    <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+                            <span class="method">GET</span>
+                            <a href="/ssrf?url=http://127.0.0.1:5001/health" class="link">/ssrf?url=http://127.0.0.1:5001/health</a>
+                            <span class="badge badge-danger" style="margin-left: auto;">SSRF</span>
+                        </div>
+                        <div class="explainer-subtext mono" data-i18n="desc_ssrf" style="display: none;">
+                            Server-Side Request Forgery (SSRF): Tricking the server into sending requests to internal endpoints (like localhost or metadata services) to leak cloud credentials.
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <h2 class="section-title reveal mono" data-i18n="gate_decision">> GATE_DEPLOYMENT_DECISION</h2>
+        <h2 class="section-title reveal mono" data-i18n="gate_decision">> STEP 4: AUTOMATED CI/CD DEPLOYMENT GATE</h2>
         <div class="explainer-box mono" data-i18n="exp_gate" style="margin-bottom: 1.5rem;">
             🎓 THE PIPELINE GATE: In automated deployment pipelines, scanner tools audit code. If severe issues (like SQLi or RCE) are found, the deployment is BLOCKED to protect users.
         </div>
@@ -1039,11 +1209,21 @@
             mouseY = event.clientY;
         });
 
+        // Matrix Rain Setup
+        const matrixFontSize = 14;
+        let matrixColumns = Math.floor(window.innerWidth / matrixFontSize) + 1;
+        let drops = Array(matrixColumns).fill(1).map(() => Math.floor(Math.random() * -50));
+        const matrixChars = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
         function resize() {
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
             mouseX = width / 2;
             mouseY = height / 2;
+            
+            // Re-setup Matrix columns
+            matrixColumns = Math.floor(width / matrixFontSize) + 1;
+            drops = Array(matrixColumns).fill(1).map(() => Math.floor(Math.random() * -50));
         }
 
         window.addEventListener('resize', resize);
@@ -1052,68 +1232,92 @@
         let offset = 0;
         function animate() {
             requestAnimationFrame(animate);
-            ctx.clearRect(0, 0, width, height);
-
-            // Fetch dynamic primary color from computed CSS (so it shifts with light/dark modes)
+            
+            const isMatrix = document.body.classList.contains('theme-matrix');
             const primaryColor = getComputedStyle(document.body).getPropertyValue('--primary').trim();
-            ctx.strokeStyle = primaryColor === '#060a07' ? 'rgba(6, 10, 7, 0.15)' : 'rgba(61, 251, 87, 0.08)';
-            ctx.lineWidth = 1;
 
-            const cols = 26;
-            const spacing = width / cols;
-            const horizon = height * 0.15;
+            if (isMatrix) {
+                // Matrix Digital Rain
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
+                ctx.fillRect(0, 0, width, height);
 
-            // Animate horizontal lines scrolling forward
-            offset = (offset + 0.8) % 60;
+                ctx.fillStyle = primaryColor;
+                ctx.font = matrixFontSize + 'px monospace';
 
-            // Horizontal scrolling grid lines
-            for (let y = horizon; y < height; y += 30) {
-                let currentY = y + offset;
-                if (currentY > height) continue;
+                for (let i = 0; i < drops.length; i++) {
+                    const text = matrixChars.charAt(Math.floor(Math.random() * matrixChars.length));
+                    const x = i * matrixFontSize;
+                    const y = drops[i] * matrixFontSize;
 
-                // Perspective scaling factor
-                let k = (currentY - horizon) / (height - horizon);
-                let warpedY = horizon + Math.pow(k, 1.8) * (height - horizon);
+                    ctx.fillText(text, x, y);
 
-                // Add interactive mouse warp
-                let distToMouseY = Math.abs(warpedY - mouseY);
-                if (distToMouseY < 150) {
-                    let factor = (150 - distToMouseY) / 150;
-                    warpedY += (mouseY > warpedY ? 15 : -15) * factor;
+                    if (y > height && Math.random() > 0.975) {
+                        drops[i] = 0;
+                    }
+                    drops[i]++;
+                }
+            } else {
+                // Clear Grid
+                ctx.clearRect(0, 0, width, height);
+                ctx.strokeStyle = primaryColor === '#060a07' ? 'rgba(6, 10, 7, 0.15)' : 'rgba(61, 251, 87, 0.08)';
+                ctx.lineWidth = 1;
+
+                const cols = 26;
+                const spacing = width / cols;
+                const horizon = height * 0.15;
+
+                // Animate horizontal lines scrolling forward
+                offset = (offset + 0.8) % 60;
+
+                // Horizontal scrolling grid lines
+                for (let y = horizon; y < height; y += 30) {
+                    let currentY = y + offset;
+                    if (currentY > height) continue;
+
+                    // Perspective scaling factor
+                    let k = (currentY - horizon) / (height - horizon);
+                    let warpedY = horizon + Math.pow(k, 1.8) * (height - horizon);
+
+                    // Add interactive mouse warp
+                    let distToMouseY = Math.abs(warpedY - mouseY);
+                    if (distToMouseY < 150) {
+                        let factor = (150 - distToMouseY) / 150;
+                        warpedY += (mouseY > warpedY ? 15 : -15) * factor;
+                    }
+
+                    ctx.beginPath();
+                    ctx.moveTo(0, warpedY);
+                    ctx.lineTo(width, warpedY);
+                    ctx.stroke();
                 }
 
-                ctx.beginPath();
-                ctx.moveTo(0, warpedY);
-                ctx.lineTo(width, warpedY);
-                ctx.stroke();
-            }
+                // Vertical perspective grid lines vanishing to the horizon
+                const centerX = width / 2;
+                for (let i = -cols; i <= cols; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(centerX + i * 10, horizon);
 
-            // Vertical perspective grid lines vanishing to the horizon
-            const centerX = width / 2;
-            for (let i = -cols; i <= cols; i++) {
-                ctx.beginPath();
-                ctx.moveTo(centerX + i * 10, horizon);
+                    // Expand lines as they reach the viewport bottom
+                    let endX = centerX + i * spacing * 2.2;
+                    
+                    // Mouse interactive distortion
+                    let distToMouseX = Math.abs(endX - mouseX);
+                    if (distToMouseX < 150) {
+                        let factor = (150 - distToMouseX) / 150;
+                        endX += (mouseX > endX ? 25 : -25) * factor;
+                    }
 
-                // Expand lines as they reach the viewport bottom
-                let endX = centerX + i * spacing * 2.2;
-                
-                // Mouse interactive distortion
-                let distToMouseX = Math.abs(endX - mouseX);
-                if (distToMouseX < 150) {
-                    let factor = (150 - distToMouseX) / 150;
-                    endX += (mouseX > endX ? 25 : -25) * factor;
+                    ctx.lineTo(endX, height);
+                    ctx.stroke();
                 }
 
-                ctx.lineTo(endX, height);
+                // Draw a faint green grid horizon sweep line
+                ctx.strokeStyle = primaryColor === '#060a07' ? 'rgba(6, 10, 7, 0.3)' : 'rgba(61, 251, 87, 0.15)';
+                ctx.beginPath();
+                ctx.moveTo(0, horizon);
+                ctx.lineTo(width, horizon);
                 ctx.stroke();
             }
-
-            // Draw a faint green grid horizon sweep line
-            ctx.strokeStyle = primaryColor === '#060a07' ? 'rgba(6, 10, 7, 0.3)' : 'rgba(61, 251, 87, 0.15)';
-            ctx.beginPath();
-            ctx.moveTo(0, horizon);
-            ctx.lineTo(width, horizon);
-            ctx.stroke();
         }
 
         animate();
@@ -1125,10 +1329,16 @@
             en: {
                 brand: "[ AEGIS_SECURE_CONSOLE_v2.0 ]",
                 title: "SECURITY CONTROL CENTER",
+                title_simple: "CODE SECURITY AUDITOR",
                 subtitle: "TACTICAL SYSTEM MONITORING AND THREAT INTELLIGENCE GATEWAY. DETECTING STATIC CODE DEFECTS AND SIMULATING NETWORK ANOMALIES IN THE TARGET DEVSECOPS PIPELINE.",
+                subtitle_simple: "Scan your application source code to find security weaknesses and prevent potential attacks before deploying.",
                 compile_report: "COMPILE_SECURITY_REPORT",
                 exec_scan: "EXEC_POLICY_SCAN",
-                threat_lab: "> THREAT_LAB_MAINFRAME",
+                static_audit: "> STEP 1: STATIC CODE AUDIT & SCAN",
+                threat_lab: "> STEP 2: INTERACTIVE THREAT SIMULATION LAB",
+                threat_lab_simple: "> STEP 2: RUNTIME THREAT TESTING",
+                view_simple: "VIEW: SIMPLE",
+                view_tactical: "VIEW: TACTICAL",
                 waf_label: "WAF_SHIELDS_UP:",
                 listening: "LISTENING",
                 armed: "ARMED_SHIELD",
@@ -1139,25 +1349,38 @@
                 stdout_stream: "STDOUT_STREAM",
                 sys_daemon_init: "[SYSTEM_DAEMON] Initializing simulation stream...",
                 sys_daemon_link: "[SYSTEM_DAEMON] Tactical network node link established.",
-                detected_vulnerabilities: "> DETECTED_VULNERABILITIES",
+                detected_vulnerabilities: "> STEP 3: LOCAL DATABASE & SHELL VULNERABILITY LIST",
+                detected_vulnerabilities_simple: "> STEP 3: DETECTED VULNERABILITY LIST",
                 persistence_layer: "PERSISTENCE_LAYER",
                 execution_deserializer: "EXECUTION_DESERIALIZER",
                 file_cryptographic: "FILE_AND_CRYPTOGRAPHIC",
-                gate_decision: "> GATE_DEPLOYMENT_DECISION",
+                injection_forgery: "INJECTION_AND_FORGERY",
+                gate_decision: "> STEP 4: AUTOMATED CI/CD DEPLOYMENT GATE",
+                gate_decision_simple: "> STEP 4: DEPLOYMENT STATUS",
                 pipeline_blocked: "[ ALERT: DEPLOYMENT PIPELINE BLOCKED ]",
                 pipeline_reason: "CRITICAL DEFECT GATE: Static analysis and software composition analyzers have aborted deployment pipeline. Immediate manual security patch required.",
                 failed: "FAILED",
                 daemon_info: "AEGIS SECURITY GATEWAY DAEMON",
                 scan_btn_ready: "EXEC_POLICY_SCAN",
+                scan_btn_ready_simple: "RUN SECURITY AUDIT",
                 scan_btn_scanning: "COMPILING_SYSTEM_TREES...",
+                scan_btn_scanning_simple: "AUDITING CODE FILES...",
                 scan_btn_scanned: "✅ CODEBASE_SCANNED!",
+                scan_btn_scanned_simple: "✅ AUDIT COMPLETED!",
                 scan_btn_aborted: "❌ SCAN_ABORTED",
+                scan_btn_aborted_simple: "❌ AUDIT ABORTED",
                 scan_btn_error: "❌ GATE_ERROR",
+                scan_btn_error_simple: "❌ AUDIT ERROR",
                 upload_btn: "UPLOAD_AND_SCAN",
+                upload_btn_simple: "UPLOAD PYTHON FILE",
                 upload_btn_scanning: "UPLOADING_AND_SCANNING...",
+                upload_btn_scanning_simple: "AUDITING UPLOADED CODE...",
                 upload_btn_scanned: "✅ UPLOAD_COMPLETED!",
+                upload_btn_scanned_simple: "✅ AUDIT COMPLETED!",
                 upload_btn_aborted: "❌ SCAN_ABORTED",
+                upload_btn_aborted_simple: "❌ AUDIT ABORTED",
                 upload_btn_error: "❌ UPLOAD_ERROR",
+                upload_btn_error_simple: "❌ UPLOAD ERROR",
                 log_waf_on: ">> SIG_DEFENSE: WAF core shields initialized and active.",
                 log_waf_off: ">> SIG_DEFENSE: WAF disarmed. System exposed.",
                 log_conn_fail: "ERR: Failed to connect to gateway controller.",
@@ -1177,11 +1400,14 @@
                 exp_syslog: "🎓 SYSTEM DAEMON FEED: Internal operating system logs showing services, cron jobs, database connections, and security interventions.",
                 exp_vulns: "🎓 KNOWN SECURITY WEAKNESSES: Insecure features in the code. Hackers target these. Switch Target (in the header) to SECURE target to see how we fix them.",
                 exp_gate: "🎓 THE PIPELINE GATE: In automated deployment pipelines, scanner tools audit code. If severe issues (like SQLi or RCE) are found, the deployment is BLOCKED to protect users.",
+                exp_diagnostics: "🎓 SYSTEM DIAGNOSTICS: Monitored system health parameters. Attacks on vulnerable endpoints cause transient spikes in CPU load and network latency.",
                 
                 exp_actor_none: "Select a threat actor profile to load dynamic simulation configs.",
                 exp_actor_sqli: "Dr. Scriptov targets databases. Tries to trick the SQL database into dumping password files and secret API keys.",
                 exp_actor_rce: "Sudo_Root targets system shells. Tries to execute terminal commands on the host machine to hijack control.",
                 exp_actor_traversal: "Path_Finder targets the file system. Tries to read private server files (like source code or secrets) using file traversal.",
+                exp_actor_xss: "Shadow_Coder targets users. Tries to inject malicious client-side JavaScript code into input fields to steal credentials or cookies.",
+                exp_actor_ssrf: "Cloud_Breaker targets local servers. Tries to trick the server into fetching internal resources or cloud environment credentials.",
                 
                 target_desc_vulnerable: "⚠️ Target main.py is VULNERABLE. Inputs are directly combined with queries and shell commands, exposing the app.",
                 target_desc_secure: "✅ Target secure_main.py is SECURE. Inputs are isolated from database query structures and shell executions.",
@@ -1194,10 +1420,16 @@
             ko: {
                 brand: "[ 이지스_보안_콘솔_v2.0 ]",
                 title: "보안 제어 센터",
+                title_simple: "코드 보안 감사기",
                 subtitle: "전술 시스템 모니터링 및 위협 인텔리전스 게이트웨이. 대상 DevSecOps 파이프라인에서 정적 코드 결함을 감지하고 네트워크 비정상 시뮬레이션을 수행합니다.",
+                subtitle_simple: "애플리케이션 소스 코드를 검사하여 배포하기 전에 보안 취약점을 탐지하고 잠재적 공격을 예방하세요.",
                 compile_report: "보안_보고서_작성",
                 exec_scan: "정책_검사_실행",
-                threat_lab: "> 위협_시뮬레이션_메인프레임",
+                static_audit: "> 1단계: 정적 코드 감사 및 검사",
+                threat_lab: "> 2단계: 대화형 위협 시뮬레이션 랩",
+                threat_lab_simple: "> 2단계: 런타임 위협 테스트",
+                view_simple: "보기: 기본",
+                view_tactical: "보기: 전체",
                 waf_label: "WAF_방화벽_가동:",
                 listening: "대기_중",
                 armed: "보안_활성화",
@@ -1208,25 +1440,38 @@
                 stdout_stream: "표준_출력_스트림",
                 sys_daemon_init: "[시스템_데몬] 시뮬레이션 스트림을 초기화하는 중...",
                 sys_daemon_link: "[시스템_데몬] 전술 네트워크 노드 링크 연결 완료.",
-                detected_vulnerabilities: "> 감지된_취약점",
+                detected_vulnerabilities: "> 3단계: 로컬 데이터베이스 및 셸 취약점 목록",
+                detected_vulnerabilities_simple: "> 3단계: 감지된 취약점 목록",
                 persistence_layer: "데이터 영속성 레이어",
                 execution_deserializer: "실행 및 역직렬화 레이어",
                 file_cryptographic: "파일 및 암호화 레이어",
-                gate_decision: "> 게이트_배포_결정",
+                injection_forgery: "인젝션 및 위협 요청 레이어",
+                gate_decision: "> 4단계: 자동화된 CI/CD 배포 게이트",
+                gate_decision_simple: "> 4단계: 배포 승인 상태",
                 pipeline_blocked: "[ 경고: 배포 파이프라인 차단됨 ]",
                 pipeline_reason: "심각한 결함 게이트: 정적 분석 및 소프트웨어 구성 요소 분석기에서 배포 파이프라인을 중단했습니다. 즉각적인 수동 보안 패치가 필요합니다.",
                 failed: "실패",
                 daemon_info: "이지스 보안 게이트웨이 데몬",
                 scan_btn_ready: "정책_검사_실행",
+                scan_btn_ready_simple: "보안 감사 실행",
                 scan_btn_scanning: "시스템_트리_컴파일_중...",
+                scan_btn_scanning_simple: "코드 보안 검사 중...",
                 scan_btn_scanned: "✅ 코드베이스_검사_완료!",
+                scan_btn_scanned_simple: "✅ 검사 완료!",
                 scan_btn_aborted: "❌ 검사_중단됨",
+                scan_btn_aborted_simple: "❌ 검사 중단됨",
                 scan_btn_error: "❌ 게이트_오류",
+                scan_btn_error_simple: "❌ 검사 오류",
                 upload_btn: "코드_업로드_검사",
+                upload_btn_simple: "파이썬 파일 업로드",
                 upload_btn_scanning: "업로드_및_검사_중...",
+                upload_btn_scanning_simple: "업로드된 코드 검사 중...",
                 upload_btn_scanned: "✅ 업로드_검사_완료!",
+                upload_btn_scanned_simple: "✅ 검사 완료!",
                 upload_btn_aborted: "❌ 검사_중단됨",
+                upload_btn_aborted_simple: "❌ 검사 중단됨",
                 upload_btn_error: "❌ 업로드_오류",
+                upload_btn_error_simple: "❌ 업로드 오류",
                 log_waf_on: ">> 보안_방어: WAF 코어 쉴드가 초기화되었으며 활성 상태입니다.",
                 log_waf_off: ">> 보안_방어: WAF 장비 비활성화. 시스템이 공격에 노출되었습니다.",
                 log_conn_fail: "오류: 게이트웨이 컨트롤러에 연결하지 못했습니다.",
@@ -1246,11 +1491,14 @@
                 exp_syslog: "🎓 시스템 데몬 피드: CPU 상태, 데이터베이스 연결, 방화벽 차단 이력 등 백그라운드에서 일어나는 운영체제의 시스템 로그입니다.",
                 exp_vulns: "🎓 알려진 보안 취약점: 코드 내의 허점들입니다. 해커의 공격 대상이 되며, 상단의 대상을 SECURE로 변경하면 이 취약점들이 어떻게 해결되는지 확인할 수 있습니다.",
                 exp_gate: "🎓 파이프라인 배포 게이트: 자동화된 프로그램이 배포 전 코드를 검사합니다. 치명적 결함(SQLi, RCE)이 발견되면 배포를 차단(BLOCKED)하여 사용자를 보호합니다.",
+                exp_diagnostics: "🎓 시스템 진단 피드: 감시 중인 시스템의 자원 상태입니다. 취약한 대상을 향한 공격은 CPU 부하 및 네트워크 지연시간의 일시적인 상승을 유발합니다.",
                 
                 exp_actor_none: "위협 행위자 프로필을 선택하여 가상 공격 설정을 불러오세요.",
                 exp_actor_sqli: "Dr. Scriptov는 데이터베이스를 노립니다. 로그인 쿼리를 속여 비밀번호 파일과 시크릿 API 키를 유출하려 합니다.",
                 exp_actor_rce: "Sudo_Root는 운영체제 셸을 노립니다. 서버 컴퓨터 자체에서 직접 명령어를 실행하여 제어권을 장악하려 합니다.",
                 exp_actor_traversal: "Path_Finder는 파일 시스템을 노립니다. 상대 경로 문자열을 사용하여 비공개 서버 코드 및 시크릿 파일을 읽으려 합니다.",
+                exp_actor_xss: "Shadow_Coder는 일반 사용자를 노립니다. 클라이언트 브라우저에서 실행될 악성 자바스크립트를 주입하여 쿠키 및 세션 토큰을 탈취합니다.",
+                exp_actor_ssrf: "Cloud_Breaker는 내부 서버 및 클라우드 네트워크를 노립니다. 서버에 위협 요청을 보내 내부 자원이나 클라우드 메타데이터 자격 증명을 유출시킵니다.",
                 
                 target_desc_vulnerable: "⚠️ 대상 main.py는 취약합니다. 입력값이 쿼리 및 셸 명령에 직접 병합되어 외부 공격에 그대로 노출됩니다.",
                 target_desc_secure: "✅ 대상 secure_main.py는 안전합니다. 입력값이 데이터베이스 쿼리 구조 및 셸 명령과 완벽히 격리되어 처리됩니다.",
@@ -1264,6 +1512,65 @@
 
         let currentLang = localStorage.getItem('lang') || 'en';
         let explainEnabled = localStorage.getItem('explainMode') === 'true';
+        let currentTheme = localStorage.getItem('theme') || 'green';
+        let currentView = localStorage.getItem('view') || 'simple';
+
+        // Apply Theme
+        function setTheme(theme) {
+            currentTheme = theme;
+            localStorage.setItem('theme', theme);
+            
+            document.body.classList.remove('theme-green', 'theme-amber', 'theme-grey', 'theme-matrix');
+            if (theme !== 'green') {
+                document.body.classList.add('theme-' + theme);
+            }
+            
+            const themeSelect = document.getElementById('themeSelect');
+            const viewSelect = document.getElementById('viewSelect');
+            const primaryColor = getComputedStyle(document.body).getPropertyValue('--primary').trim();
+            if (themeSelect) {
+                themeSelect.value = theme;
+                themeSelect.style.borderColor = primaryColor;
+                themeSelect.style.color = primaryColor;
+            }
+            if (viewSelect) {
+                viewSelect.style.borderColor = primaryColor;
+                viewSelect.style.color = primaryColor;
+            }
+            
+            if (typeof currentCpu !== 'undefined') {
+                drawRetroBar('cpuBarGroup', currentCpu);
+                drawRetroBar('memBarGroup', currentMem);
+                drawRetroBar('latencyBarGroup', (currentLatency / 1000) * 100);
+            }
+        }
+
+        // Apply View Mode
+        function setView(view) {
+            currentView = view;
+            localStorage.setItem('view', view);
+            
+            if (view === 'simple') {
+                document.body.classList.add('view-simple');
+            } else {
+                document.body.classList.remove('view-simple');
+                if (typeof resizeRadar === 'function') {
+                    resizeRadar();
+                }
+            }
+            
+            const viewSelect = document.getElementById('viewSelect');
+            if (viewSelect) {
+                viewSelect.value = view;
+                const primaryColor = getComputedStyle(document.body).getPropertyValue('--primary').trim();
+                viewSelect.style.borderColor = primaryColor;
+                viewSelect.style.color = primaryColor;
+            }
+
+            if (typeof currentLang !== 'undefined') {
+                setLanguage(currentLang);
+            }
+        }
 
         // Apply Language
         function setLanguage(lang) {
@@ -1272,21 +1579,34 @@
             
             document.querySelectorAll('[data-i18n]').forEach(el => {
                 const key = el.getAttribute('data-i18n');
-                if (i18n[lang][key]) {
+                const suffix = currentView === 'simple' ? '_simple' : '';
+                const textVal = i18n[lang][key + suffix] || i18n[lang][key];
+                if (textVal) {
                     // If it is raw inner text inside a button with an svg icon, we should replace only the text node
                     const svg = el.querySelector('svg');
                     if (svg) {
                         el.innerHTML = '';
                         el.appendChild(svg);
-                        el.appendChild(document.createTextNode(' ' + i18n[lang][key]));
+                        el.appendChild(document.createTextNode(' ' + textVal));
                     } else {
-                        el.innerText = i18n[lang][key];
+                        el.innerText = textVal;
                     }
                 }
             });
 
             // Update Lang Switcher Text
             document.getElementById('langToggleBtn').innerText = `[ LANG: ${lang.toUpperCase()} ]`;
+
+            // Update viewSelect options if present
+            const viewSelect = document.getElementById('viewSelect');
+            if (viewSelect) {
+                const simpleOpt = viewSelect.querySelector('option[value="simple"]');
+                const tacticalOpt = viewSelect.querySelector('option[value="tactical"]');
+                if (simpleOpt && tacticalOpt) {
+                    simpleOpt.text = i18n[lang]['view_simple'] || "VIEW: SIMPLE";
+                    tacticalOpt.text = i18n[lang]['view_tactical'] || "VIEW: TACTICAL";
+                }
+            }
 
             // Update scan button text if not disabled
             const scanBtn = document.getElementById('scanBtn');
@@ -1295,7 +1615,8 @@
                 const svg = btnText.querySelector('svg');
                 btnText.innerHTML = '';
                 btnText.appendChild(svg);
-                btnText.appendChild(document.createTextNode(' ' + i18n[lang]['scan_btn_ready']));
+                const suffix = currentView === 'simple' ? '_simple' : '';
+                btnText.appendChild(document.createTextNode(' ' + i18n[lang]['scan_btn_ready' + suffix]));
             }
 
             // Update upload button text if not disabled
@@ -1305,7 +1626,8 @@
                 const svg = uploadBtnText.querySelector('svg');
                 uploadBtnText.innerHTML = '';
                 uploadBtnText.appendChild(svg);
-                uploadBtnText.appendChild(document.createTextNode(' ' + i18n[lang]['upload_btn']));
+                const suffix = currentView === 'simple' ? '_simple' : '';
+                uploadBtnText.appendChild(document.createTextNode(' ' + i18n[lang]['upload_btn' + suffix]));
             }
 
             // Update WAF status text dynamically
@@ -1384,17 +1706,26 @@
             setLanguage(currentLang === 'en' ? 'ko' : 'en');
         });
 
-
-
         document.getElementById('explainToggleBtn').addEventListener('click', () => {
             setExplainMode(!explainEnabled);
         });
 
         document.getElementById('scanTarget').addEventListener('change', updateTargetDesc);
+        document.getElementById('themeSelect').addEventListener('change', (e) => {
+            setTheme(e.target.value);
+        });
+        document.getElementById('viewSelect').addEventListener('change', (e) => {
+            setView(e.target.value);
+        });
 
         // Initialize state on page load
         setLanguage(currentLang);
         setExplainMode(explainEnabled);
+        setView(currentView);
+        setTheme(currentTheme);
+        
+        // Re-sync select color slightly after load
+        setTimeout(() => setTheme(currentTheme), 100);
     </script>
 
     <!-- UI Interaction Script -->
@@ -1674,6 +2005,26 @@ METRICS: 79% Target Mapping rate, quiet enumerator.
 BIOGRAPHY: Specialized in information leakage. Recursively traverses web directories to search for hidden keys, environmental secrets, and configuration backups.`,
                 vector: 'traversal',
                 payload: "../../app/main.py"
+            },
+            shadowcoder: {
+                description: `NAME: Shadow Coder
+CODENAME: XSS_INFILTRATOR
+CLASSIFICATION: Active Threat Actor
+FAVORITE TACTIC: Cross-Site Scripting (XSS)
+METRICS: 85% Cookie Leak Rate, high evasion.
+BIOGRAPHY: Cyber mercenary specializing in client-side compromise. Develops obfuscated scripts to hijack administrator session contexts and bypass WAF regex.`,
+                vector: 'xss',
+                payload: "<script>alert('XSS')<\/script>"
+            },
+            cloudbreaker: {
+                description: `NAME: Cloud Breaker
+CODENAME: SSRF_EXTRACTOR
+CLASSIFICATION: Threat Group Operator
+FAVORITE TACTIC: Server-Side Request Forgery (SSRF)
+METRICS: 94% Metadata Compromise Rate, loopback expert.
+BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Leverages lack of URL filtering to probe internal cluster loops and retrieve AWS/GCP metadata.`,
+                vector: 'ssrf',
+                payload: "http://169.254.169.254/latest/meta-data/"
             }
         };
 
@@ -1744,14 +2095,14 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                 row.style.justifyContent = 'space-between';
                 row.style.padding = '0.35rem 0.5rem';
                 row.style.borderBottom = '1px dashed rgba(61,251,87,0.15)';
-                row.style.fontSize = '0.8rem';
+                row.style.fontSize = '0.98rem';
                 row.style.gap = '0.5rem';
 
                 row.innerHTML = `
                     <input type="checkbox" class="rule-enable-chk" data-index="${idx}" ${rule.enabled ? 'checked' : ''} style="cursor: pointer; accent-color: var(--primary);">
-                    <div style="flex-grow: 1; min-width: 0; line-height: 1.3;">
+                    <div style="flex-grow: 1; min-width: 0; line-height: 1.4;">
                         <span class="mono" style="color: var(--secondary); font-weight: bold; word-break: break-all;">${escapeHtml(rule.pattern)}</span>
-                        <span class="mono" style="color: var(--text-muted); display: block; font-size: 0.75rem;">${escapeHtml(rule.description)}</span>
+                        <span class="mono" style="color: var(--text-muted); display: block; font-size: 0.88rem; margin-top: 0.2rem;">${escapeHtml(rule.description)}</span>
                     </div>
                     <button class="rule-delete-btn" data-index="${idx}" style="background: transparent; border: none; color: var(--danger); cursor: pointer; font-family: monospace; font-size: 0.9rem; padding: 0 0.25rem; font-weight: bold;">[X]</button>
                 `;
@@ -1902,11 +2253,12 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
         window.addEventListener("scroll", reveal);
         setTimeout(reveal, 100);
 
-        // Vector targets configuration
         const vectors = {
             sqli: { payload: "' OR '1'='1", endpoint: '/user?name=' },
             rce: { payload: "; cat /etc/passwd", endpoint: '/ping?host=127.0.0.1' },
-            traversal: { payload: "../../app/main.py", endpoint: '/download?file=' }
+            traversal: { payload: "../../app/main.py", endpoint: '/download?file=' },
+            xss: { payload: "<script>alert('XSS')<\/script>", endpoint: '/xss?msg=' },
+            ssrf: { payload: "http://169.254.169.254/latest/meta-data/", endpoint: '/ssrf?url=' }
         };
 
         const terminal = document.getElementById('terminal');
@@ -2028,6 +2380,13 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                 fireRadarBeam(isBlocked, vectorKey);
                 
                 if (isBlocked) {
+                    targetCpu = 24;
+                    targetLatency = 65;
+                    setTimeout(() => {
+                        targetCpu = 12;
+                        targetLatency = 45;
+                    }, 1500);
+
                     await typeWriter(i18n[currentLang]['log_payload_blocked'], null, 'var(--danger)', 10);
                     threatLab.style.borderColor = 'var(--danger)';
                     setTimeout(() => threatLab.style.borderColor = '', 1000);
@@ -2039,25 +2398,52 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                         explainAlert.style.padding = '0.75rem 1rem';
                         explainAlert.style.marginTop = '0.75rem';
                         explainAlert.style.borderRadius = '2px';
-                        explainAlert.style.lineHeight = '1.4';
+                        explainAlert.style.lineHeight = '1.6';
                         explainAlert.style.border = '1px dashed var(--primary)';
                         explainAlert.style.background = 'rgba(61, 251, 87, 0.08)';
                         explainAlert.style.color = 'var(--primary)';
                         explainAlert.innerHTML = `
-                            <strong style="display:block; font-size: 0.95rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_blocked']}</strong>
-                            <span>${i18n[currentLang]['sim_alert_desc_blocked']}</span>
+                            <strong style="display:block; font-size: 1.05rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_blocked']}</strong>
+                            <span style="font-size: 0.98rem; display: block; line-height: 1.55;">${i18n[currentLang]['sim_alert_desc_blocked']}</span>
                         `;
                         terminal.insertBefore(explainAlert, cursorLine);
                         terminal.scrollTop = terminal.scrollHeight;
                     }
                 } else {
+                    if (vectorKey === 'sqli') {
+                        targetCpu = 88;
+                        targetLatency = 180;
+                        targetMem = 55;
+                    } else if (vectorKey === 'rce') {
+                        targetCpu = 95;
+                        targetLatency = 450;
+                        targetMem = 68;
+                    } else if (vectorKey === 'traversal') {
+                        targetCpu = 45;
+                        targetLatency = 120;
+                        targetMem = 48;
+                    } else if (vectorKey === 'xss') {
+                        targetCpu = 30;
+                        targetLatency = 80;
+                        targetMem = 44;
+                    } else if (vectorKey === 'ssrf') {
+                        targetCpu = 78;
+                        targetLatency = 950;
+                        targetMem = 60;
+                    }
+                    setTimeout(() => {
+                        targetCpu = 12;
+                        targetLatency = 45;
+                        targetMem = 42;
+                    }, 4000);
+
                     addLogFast(i18n[currentLang]['log_node_response'], 'var(--primary)');
                     const resultContainer = document.createElement('pre');
                     resultContainer.style.background = 'rgba(0,0,0,0.6)';
                     resultContainer.style.padding = '0.75rem';
                     resultContainer.style.marginTop = '0.5rem';
                     resultContainer.style.color = 'var(--primary)';
-                    resultContainer.style.fontSize = '0.8rem';
+                    resultContainer.style.fontSize = '0.98rem';
                     resultContainer.style.borderLeft = '2px solid var(--secondary)';
                     resultContainer.style.whiteSpace = 'pre-wrap';
                     resultContainer.style.wordBreak = 'break-all';
@@ -2073,13 +2459,13 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                         explainAlert.style.padding = '0.75rem 1rem';
                         explainAlert.style.marginTop = '0.75rem';
                         explainAlert.style.borderRadius = '2px';
-                        explainAlert.style.lineHeight = '1.4';
+                        explainAlert.style.lineHeight = '1.6';
                         explainAlert.style.border = '1px dashed var(--danger)';
                         explainAlert.style.background = 'rgba(255, 51, 51, 0.08)';
                         explainAlert.style.color = 'var(--danger)';
                         explainAlert.innerHTML = `
-                            <strong style="display:block; font-size: 0.95rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_success']}</strong>
-                            <span>${i18n[currentLang]['sim_alert_desc_success']}</span>
+                            <strong style="display:block; font-size: 1.05rem; margin-bottom: 0.25rem;">${i18n[currentLang]['sim_alert_title_success']}</strong>
+                            <span style="font-size: 0.98rem; display: block; line-height: 1.55;">${i18n[currentLang]['sim_alert_desc_success']}</span>
                         `;
                         terminal.insertBefore(explainAlert, cursorLine);
                     }
@@ -2102,10 +2488,11 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
         document.getElementById('scanBtn').addEventListener('click', async () => {
             const btn = document.getElementById('scanBtn');
             const text = document.getElementById('btnText');
+            const suffix = currentView === 'simple' ? '_simple' : '';
             
             btn.disabled = true;
             btn.style.opacity = '0.6';
-            text.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> ${i18n[currentLang]['scan_btn_scanning']}`;
+            text.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> ${i18n[currentLang]['scan_btn_scanning' + suffix]}`;
             
             addSyslogEntry('[INFO] systemd: Initiated security scanner sub-processes.', 'var(--text-main)');
 
@@ -2125,14 +2512,14 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                 });
                 const result = await response.json();
                 if (result.status === 'success') {
-                    text.innerText = i18n[currentLang]['scan_btn_scanned'];
+                    text.innerText = i18n[currentLang]['scan_btn_scanned' + suffix];
                     addSyslogEntry('[OK] systemd: Scan completed. Report compiled successfully.', 'var(--primary)');
                     setTimeout(() => {
                         window.location.href = '/report';
                     }, 1000);
                 } else {
                     alert('SCAN ABORTED: ' + result.message);
-                    text.innerText = i18n[currentLang]['scan_btn_aborted'];
+                    text.innerText = i18n[currentLang]['scan_btn_aborted' + suffix];
                     btn.disabled = false;
                     addSyslogEntry('[ERR] systemd: Scan aborted by security gate policy.', 'var(--danger)');
                 }
@@ -2157,12 +2544,19 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                 const file = event.target.files[0];
                 if (!file) return;
 
+                if (!file.name.toLowerCase().endsWith('.py')) {
+                    alert(currentLang === 'en' ? 'Only Python (.py) files are allowed!' : '파이썬 (.py) 파일만 업로드할 수 있습니다!');
+                    uploadFile.value = '';
+                    return;
+                }
+
                 const btn = document.getElementById('uploadBtn');
                 const text = document.getElementById('uploadBtnText');
+                const suffix = currentView === 'simple' ? '_simple' : '';
                 
                 btn.disabled = true;
                 btn.style.opacity = '0.6';
-                text.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> ${i18n[currentLang]['upload_btn_scanning']}`;
+                text.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> ${i18n[currentLang]['upload_btn_scanning' + suffix]}`;
                 
                 addSyslogEntry(`[INFO] upload: User uploaded file ${file.name} for scanning.`, 'var(--text-main)');
 
@@ -2183,20 +2577,20 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                     });
                     const result = await response.json();
                     if (result.status === 'success') {
-                        text.innerText = i18n[currentLang]['upload_btn_scanned'];
+                        text.innerText = i18n[currentLang]['upload_btn_scanned' + suffix];
                         addSyslogEntry('[OK] systemd: Custom scan complete. Loading report...', 'var(--primary)');
                         setTimeout(() => {
                             window.location.href = '/report';
                         }, 1000);
                     } else {
                         alert('SCAN ABORTED: ' + result.message);
-                        text.innerText = i18n[currentLang]['upload_btn_aborted'];
+                        text.innerText = i18n[currentLang]['upload_btn_aborted' + suffix];
                         btn.disabled = false;
                         addSyslogEntry('[ERR] systemd: Custom scan aborted by security gate policy.', 'var(--danger)');
                     }
                 } catch (e) {
                     alert('FATAL: Scanner daemon offline. ' + e);
-                    text.innerText = i18n[currentLang]['upload_btn_error'];
+                    text.innerText = i18n[currentLang]['upload_btn_error' + suffix];
                     btn.disabled = false;
                     addSyslogEntry('[ERR] systemd: Custom scan sub-process critical failure.', 'var(--danger)');
                 } finally {
@@ -2204,6 +2598,228 @@ BIOGRAPHY: Specialized in information leakage. Recursively traverses web directo
                 }
             });
         }
+
+        // --- 6. Diagnostics Gauge Panel ---
+        let currentCpu = 12;
+        let targetCpu = 12;
+        let currentMem = 42;
+        let targetMem = 42;
+        let currentLatency = 45;
+        let targetLatency = 45;
+
+        function drawRetroBar(groupId, percentage, isDanger=false) {
+            const group = document.getElementById(groupId);
+            if (!group) return;
+            group.innerHTML = '';
+            
+            const totalSegments = 20;
+            const activeSegments = Math.round((percentage / 100) * totalSegments);
+            const parentWidth = group.parentElement.getBoundingClientRect().width || 300;
+            const spacing = 3;
+            const segmentWidth = (parentWidth - (totalSegments - 1) * spacing) / totalSegments;
+            
+            const primaryColor = getComputedStyle(document.body).getPropertyValue('--primary').trim() || '#3dfb57';
+            const secondaryColor = getComputedStyle(document.body).getPropertyValue('--secondary').trim() || '#ffb000';
+            const dangerColor = getComputedStyle(document.body).getPropertyValue('--danger').trim() || '#ff3333';
+            
+            for (let i = 0; i < totalSegments; i++) {
+                const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                rect.setAttribute('x', i * (segmentWidth + spacing));
+                rect.setAttribute('y', 2);
+                rect.setAttribute('width', segmentWidth);
+                rect.setAttribute('height', 16);
+                rect.setAttribute('rx', 1);
+                rect.setAttribute('ry', 1);
+                
+                if (i < activeSegments) {
+                    if (isDanger || i > 16) {
+                        rect.setAttribute('fill', dangerColor);
+                        rect.setAttribute('style', `filter: drop-shadow(0 0 2px ${dangerColor});`);
+                    } else if (i > 12) {
+                        rect.setAttribute('fill', secondaryColor);
+                        rect.setAttribute('style', `filter: drop-shadow(0 0 2px ${secondaryColor});`);
+                    } else {
+                        rect.setAttribute('fill', primaryColor);
+                        rect.setAttribute('style', `filter: drop-shadow(0 0 2px ${primaryColor});`);
+                    }
+                } else {
+                    rect.setAttribute('fill', 'rgba(61, 251, 87, 0.05)');
+                }
+                group.appendChild(rect);
+            }
+        }
+
+        // Fluctuate nominal system values in background
+        setInterval(() => {
+            if (targetCpu < 25) {
+                targetCpu = 8 + Math.floor(Math.random() * 8);
+            }
+            if (targetMem < 45) {
+                targetMem = 41 + Math.floor(Math.random() * 3);
+            }
+            if (targetLatency < 60) {
+                targetLatency = 38 + Math.floor(Math.random() * 15);
+            }
+        }, 3000);
+
+        // Smooth transition and rendering tick loop
+        setInterval(() => {
+            currentCpu += (targetCpu - currentCpu) * 0.15;
+            currentMem += (targetMem - currentMem) * 0.15;
+            currentLatency += (targetLatency - currentLatency) * 0.15;
+
+            const cpuText = document.getElementById('cpuVal');
+            const memText = document.getElementById('memVal');
+            const latencyText = document.getElementById('latencyVal');
+            const diagStatus = document.getElementById('diagStatus');
+
+            if (cpuText) cpuText.innerText = Math.round(currentCpu) + '%';
+            if (memText) memText.innerText = Math.round(currentMem) + '%';
+            if (latencyText) latencyText.innerText = Math.round(currentLatency) + 'ms';
+
+            drawRetroBar('cpuBarGroup', currentCpu);
+            drawRetroBar('memBarGroup', currentMem);
+            
+            const latencyPercentage = Math.min((currentLatency / 1000) * 100, 100);
+            drawRetroBar('latencyBarGroup', latencyPercentage, currentLatency > 300);
+
+            if (diagStatus) {
+                if (currentCpu > 80 || currentLatency > 300) {
+                    diagStatus.innerText = 'OVERLOAD';
+                    diagStatus.className = 'badge badge-danger mono';
+                } else if (currentCpu > 40 || currentLatency > 120) {
+                    diagStatus.innerText = 'WARNING';
+                    diagStatus.className = 'badge badge-warning mono';
+                } else {
+                    diagStatus.innerText = 'NOMINAL';
+                    diagStatus.className = 'badge badge-success mono';
+                }
+            }
+        }, 100);
+
+        window.addEventListener('resize', () => {
+            drawRetroBar('cpuBarGroup', currentCpu);
+            drawRetroBar('memBarGroup', currentMem);
+            drawRetroBar('latencyBarGroup', Math.min((currentLatency / 1000) * 100, 100));
+        });
+
+        // --- 7. Interactive Terminal Input ---
+        const terminalHiddenInput = document.createElement('input');
+        terminalHiddenInput.type = 'text';
+        terminalHiddenInput.id = 'terminalHiddenInput';
+        terminalHiddenInput.style.position = 'absolute';
+        terminalHiddenInput.style.opacity = '0';
+        terminalHiddenInput.style.pointerEvents = 'none';
+        terminalHiddenInput.style.zIndex = '-1';
+        document.body.appendChild(terminalHiddenInput);
+
+        const terminalCardElement = document.getElementById('terminal');
+        
+        // Re-write terminal cursor line to support dynamic text representation
+        if (cursorLine) {
+            cursorLine.innerHTML = `<span>root@aegis-host:~# </span><span id="typedText"></span><span class="typing-cursor"></span>`;
+            cursorLine.className = '';
+        }
+        
+        const typedText = document.getElementById('typedText');
+
+        if (terminalCardElement) {
+            terminalCardElement.addEventListener('click', () => {
+                terminalHiddenInput.focus();
+                addLogFast('>> [SHELL_ACTIVE] Direct terminal entry engaged. Type "help" for commands.', 'var(--secondary)');
+            });
+        }
+
+        terminalHiddenInput.addEventListener('input', (e) => {
+            if (typedText) {
+                typedText.innerText = e.target.value;
+            }
+        });
+
+        terminalHiddenInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                const cmd = terminalHiddenInput.value.trim();
+                terminalHiddenInput.value = '';
+                if (typedText) typedText.innerText = '';
+                
+                if (!cmd) return;
+                
+                // Log command to stdout history
+                addLogFast(`root@aegis-host:~# ${cmd}`, 'var(--primary)');
+                
+                const parts = cmd.split(' ');
+                const primaryCmd = parts[0].toLowerCase();
+                const args = parts.slice(1);
+                
+                switch (primaryCmd) {
+                    case 'help':
+                        await typeWriter('Aegis CLI Terminal v2.0 - Shell commands:', null, 'var(--primary)', 4);
+                        await typeWriter('  help                        - Show this command reference menu.', null, 'var(--text-main)', 4);
+                        await typeWriter('  clear                       - Clear console outputs.', null, 'var(--text-main)', 4);
+                        await typeWriter('  scan                        - Launch static policy scanner.', null, 'var(--text-main)', 4);
+                        await typeWriter('  waf [on/off]                - Raise or lower WAF shields.', null, 'var(--text-main)', 4);
+                        await typeWriter('  theme [green/amber/grey/matrix] - Select console interface theme.', null, 'var(--text-main)', 4);
+                        await typeWriter('  exploit [sqli/rce/traversal/xss/ssrf] - Run simulated attack payloads.', null, 'var(--text-main)', 4);
+                        break;
+                    case 'clear':
+                        if (terminal) {
+                            const lines = terminal.querySelectorAll('div');
+                            lines.forEach(l => {
+                                if (l.id !== 'cursor-line') l.remove();
+                            });
+                            const pres = terminal.querySelectorAll('pre');
+                            pres.forEach(p => p.remove());
+                        }
+                        break;
+                    case 'scan':
+                        const scanBtnElement = document.getElementById('scanBtn');
+                        if (scanBtnElement) scanBtnElement.click();
+                        break;
+                    case 'waf':
+                        const sub = args[0] ? args[0].toLowerCase() : '';
+                        const wafCh = document.getElementById('wafToggle');
+                        if (sub === 'on') {
+                            if (wafCh && !wafCh.checked) wafCh.click();
+                            else await typeWriter('>> SYSTEM: WAF shields are already active.', null, 'var(--primary)', 4);
+                        } else if (sub === 'off') {
+                            if (wafCh && wafCh.checked) wafCh.click();
+                            else await typeWriter('>> SYSTEM: WAF shields are already disarmed.', null, 'var(--secondary)', 4);
+                        } else {
+                            await typeWriter('Usage: waf [on/off]', null, 'var(--danger)', 4);
+                        }
+                        break;
+                    case 'theme':
+                        const th = args[0] ? args[0].toLowerCase() : '';
+                        const thSelect = document.getElementById('themeSelect');
+                        if (['green', 'amber', 'grey', 'matrix'].includes(th)) {
+                            if (thSelect) {
+                                thSelect.value = th;
+                                thSelect.dispatchEvent(new Event('change'));
+                            }
+                            await typeWriter(`>> SYSTEM: Changed UI theme to ${th.toUpperCase()}.`, null, 'var(--primary)', 4);
+                        } else {
+                            await typeWriter('Usage: theme [green/amber/grey/matrix]', null, 'var(--danger)', 4);
+                        }
+                        break;
+                    case 'exploit':
+                        const ex = args[0] ? args[0].toLowerCase() : '';
+                        if (['sqli', 'rce', 'traversal', 'xss', 'ssrf'].includes(ex)) {
+                            const attackVectorSelect = document.getElementById('attackVector');
+                            if (attackVectorSelect) {
+                                attackVectorSelect.value = ex;
+                                attackVectorSelect.dispatchEvent(new Event('change'));
+                            }
+                            const launchBtnElement = document.getElementById('launchBtn');
+                            if (launchBtnElement) launchBtnElement.click();
+                        } else {
+                            await typeWriter('Usage: exploit [sqli/rce/traversal/xss/ssrf]', null, 'var(--danger)', 4);
+                        }
+                        break;
+                    default:
+                        await typeWriter(`sh: command not found: ${primaryCmd}`, null, 'var(--danger)', 4);
+                }
+            }
+        });
 
         // Load rules on startup
         loadWafRules();
