@@ -7,3 +7,7 @@ Jinja2==3.1.6
 MarkupSafe==2.1.5
 bandit==1.7.8
 safety==3.2.9
+detect-secrets==1.5.0
+yara-python==4.5.0
+pipdeptree==2.35.3
+semgrep==1.163.0

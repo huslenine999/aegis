@@ -6,6 +6,10 @@ from app.main import app, SCANS_DIR
 
 @pytest.fixture
 def client():
+    from app.database import initialize_database
+    initialize_database()
+    import app.main as app_main
+    app_main.WAF_ENABLED = False
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client

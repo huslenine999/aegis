@@ -30,6 +30,10 @@ inputs:
     description: 'Comma-separated list of Trivy severities to block on (e.g., MEDIUM,HIGH,CRITICAL)'
     required: false
     default: 'MEDIUM,HIGH,CRITICAL'
+  fail-on-semgrep:
+    description: 'Comma-separated list of Semgrep severities to block on (e.g., MEDIUM,HIGH)'
+    required: false
+    default: 'MEDIUM,HIGH'
 
 runs:
   using: 'composite'
@@ -44,6 +48,9 @@ runs:
       run: |
         python -m pip install --upgrade pip
         pip install bandit safety jinja2
+        pip install detect-secrets==1.5.0 || true
+        pip install yara-python==4.5.0 || true
+        pip install pipdeptree==2.35.3 semgrep==1.163.0 || true
 
     - name: Create scans directory
       shell: bash
@@ -63,6 +70,20 @@ runs:
         else
           echo "[Aegis] Target '$TARGET' not found. Skipping Bandit scan."
           echo '{"results": []}' > scans/bandit-report.json
+        fi
+
+    - name: Run Semgrep SAST scan
+      shell: bash
+      run: |
+        TARGET="${{ inputs.scan-target }}"
+        mkdir -p rules
+        python -c "from pathlib import Path; from app.main import write_semgrep_rules; write_semgrep_rules(Path('rules/semgrep_rules.yaml'))" || true
+        if [ -d "$TARGET" ] || [ -f "$TARGET" ]; then
+          echo "[Aegis] Running Semgrep SAST scan on: $TARGET"
+          semgrep scan --config rules/semgrep_rules.yaml --json -o scans/semgrep-report.json "$TARGET" || true
+        else
+          echo "[Aegis] Target '$TARGET' not found. Skipping Semgrep scan."
+          echo '{"results": []}' > scans/semgrep-report.json
         fi
 
     - name: Run Safety dependency scan
@@ -90,12 +111,70 @@ runs:
           echo '{"Results": []}' > scans/trivy-report.json
         fi
 
+    - name: Run Secret Scanning
+      shell: bash
+      run: |
+        echo "[Aegis] Running Secret Scanning on: ${{ inputs.scan-target }}"
+        detect-secrets scan --all-files --exclude-files "venv/|scanner-venv/|tests/|scans/|\\.pytest_cache/|\\.git/|\\.antigravitycli/" "${{ inputs.scan-target }}" > scans/secrets-report.json || echo '{"results": {}}' > scans/secrets-report.json
+
+    - name: Run YARA Scanner
+      shell: bash
+      run: |
+        echo "[Aegis] Running YARA Malware Signatures Scan on: ${{ inputs.scan-target }}"
+        python -c "
+        import sys, os, json
+        sys.path.append(os.getcwd())
+        try:
+            from app.main import run_yara_scan
+            findings = run_yara_scan('${{ inputs.scan-target }}')
+        except Exception as e:
+            print(f'Failed to run YARA scan: {e}')
+            findings = []
+        with open('scans/yara-report.json', 'w') as f:
+            json.dump(findings, f, indent=2)
+        " || echo '[]' > scans/yara-report.json
+
+    - name: Run ClamAV Scanner
+      shell: bash
+      run: |
+        echo "[Aegis] Running ClamAV Malware Scan on: ${{ inputs.scan-target }}"
+        python -c "
+        import sys, os, json
+        sys.path.append(os.getcwd())
+        try:
+            from app.main import run_clamav_scan
+            findings = run_clamav_scan('${{ inputs.scan-target }}')
+        except Exception as e:
+            print(f'Failed to run ClamAV scan: {e}')
+            findings = []
+        with open('scans/clamav-report.json', 'w') as f:
+            json.dump(findings, f, indent=2)
+        " || echo '[]' > scans/clamav-report.json
+
+    - name: Run OWASP ZAP DAST Scanner
+      shell: bash
+      run: |
+        echo "[Aegis] Running OWASP ZAP DAST active crawl..."
+        python -c "
+        import sys, os, json
+        sys.path.append(os.getcwd())
+        try:
+            from app.main import run_dast_scan
+            findings = run_dast_scan()
+        except Exception as e:
+            print(f'Failed to run ZAP DAST scan: {e}')
+            findings = []
+        with open('scans/zap-report.json', 'w') as f:
+            json.dump(findings, f, indent=2)
+        " || echo '[]' > scans/zap-report.json
+
     - name: Execute Aegis policy engine
       shell: bash
       env:
         FAIL_ON_BANDIT: ${{ inputs.fail-on-bandit }}
         FAIL_ON_SAFETY: ${{ inputs.fail-on-safety }}
         FAIL_ON_TRIVY: ${{ inputs.fail-on-trivy }}
+        FAIL_ON_SEMGREP: ${{ inputs.fail-on-semgrep }}
       run: |
         python ${{ github.action_path }}/policy_engine.py
 

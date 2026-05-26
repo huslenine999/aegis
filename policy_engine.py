@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -20,6 +20,11 @@ if not TEMPLATE_PATH.exists():
 BANDIT_REPORT = SCAN_DIR / "bandit-report.json"
 SAFETY_REPORT = SCAN_DIR / "safety-report.json"
 TRIVY_REPORT = SCAN_DIR / "trivy-report.json"
+SECRETS_REPORT = SCAN_DIR / "secrets-report.json"
+YARA_REPORT = SCAN_DIR / "yara-report.json"
+SEMGREP_REPORT = SCAN_DIR / "semgrep-report.json"
+CLAMAV_REPORT = SCAN_DIR / "clamav-report.json"
+ZAP_REPORT = SCAN_DIR / "zap-report.json"
 
 HTML_REPORT = SCAN_DIR / "report.html"
 MD_REPORT = SCAN_DIR / "report.md"
@@ -35,6 +40,7 @@ def get_env_set(var_name: str, default: set) -> set:
 FAIL_ON_BANDIT_SEVERITIES = get_env_set("FAIL_ON_BANDIT", {"MEDIUM", "HIGH"})
 FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
 FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", {"MEDIUM", "HIGH", "CRITICAL"})
+FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", {"MEDIUM", "HIGH"})
 
 
 def load_json(path: Path) -> Any:
@@ -78,6 +84,52 @@ def analyze_bandit(report: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "tool": "Bandit",
+        "total_issues": len(issues),
+        "blocking_issues": len(blocking_issues),
+        "status": "FAIL" if blocking_issues else "PASS",
+        "examples": (blocking_issues if blocking_issues else issues)[:5],
+    }
+
+
+def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
+    if not report:
+        return {
+            "tool": "Semgrep",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    results = report.get("results", []) if report else []
+    issues = []
+    
+    for r in results:
+        extra = r.get("extra", {})
+        severity = extra.get("severity", "ERROR").upper()
+        if severity == "ERROR":
+            mapped_severity = "HIGH"
+        elif severity == "WARNING":
+            mapped_severity = "MEDIUM"
+        else:
+            mapped_severity = "LOW"
+            
+        issues.append({
+            "severity": mapped_severity,
+            "test_id": r.get("check_id"),
+            "filename": r.get("path"),
+            "line_number": r.get("start", {}).get("line"),
+            "issue_text": extra.get("message"),
+            "code": extra.get("lines"),
+        })
+
+    blocking_issues = [
+        issue for issue in issues
+        if issue["severity"] in FAIL_ON_SEMGREP_SEVERITIES
+    ]
+
+    return {
+        "tool": "Semgrep",
         "total_issues": len(issues),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
@@ -167,6 +219,183 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
+    if not report:
+        return {
+            "tool": "Secrets Scanner",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    results = report.get("results", {}) or {}
+    findings = []
+    
+    for filename, file_secrets in results.items():
+        for secret in file_secrets:
+            findings.append({
+                "severity": "HIGH",
+                "type": secret.get("type"),
+                "filename": filename,
+                "line_number": secret.get("line_number"),
+            })
+
+    return {
+        "tool": "Secrets Scanner",
+        "total_issues": len(findings),
+        "blocking_issues": len(findings),
+        "status": "FAIL" if findings else "PASS",
+        "examples": findings[:5],
+    }
+
+
+def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if report is None:
+        return {
+            "tool": "YARA Scanner",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    findings = []
+    for f in report:
+        findings.append({
+            "severity": "HIGH",
+            "rule": f.get("rule"),
+            "filename": f.get("filename"),
+            "description": f.get("description"),
+            "author": f.get("author")
+        })
+
+    return {
+        "tool": "YARA Scanner",
+        "total_issues": len(findings),
+        "blocking_issues": len(findings),
+        "status": "FAIL" if findings else "PASS",
+        "examples": findings[:5],
+    }
+
+
+def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if report is None:
+        return {
+            "tool": "ClamAV",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    findings = []
+    for f in report:
+        findings.append({
+            "severity": "HIGH",
+            "virus": f.get("virus"),
+            "filename": f.get("filename"),
+            "description": f.get("description")
+        })
+
+    return {
+        "tool": "ClamAV",
+        "total_issues": len(findings),
+        "blocking_issues": len(findings),
+        "status": "FAIL" if findings else "PASS",
+        "examples": findings[:5],
+    }
+
+
+def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if report is None:
+        return {
+            "tool": "OWASP ZAP DAST",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    findings = []
+    blocking_count = 0
+    for f in report:
+        is_exposed = f.get("status") == "EXPOSED"
+        findings.append({
+            "severity": "HIGH" if is_exposed else "LOW",
+            "vuln_type": f.get("vuln_type"),
+            "route": f.get("route"),
+            "payload": f.get("payload"),
+            "description": f.get("description"),
+            "status": f.get("status")
+        })
+        if is_exposed:
+            blocking_count += 1
+
+    return {
+        "tool": "OWASP ZAP DAST",
+        "total_issues": len(findings),
+        "blocking_issues": blocking_count,
+        "status": "FAIL" if blocking_count > 0 else "PASS",
+        "examples": findings[:6],
+    }
+
+
+def generate_cyclonedx_sbom(requirements_path: Path, output_path: Path):
+    import re
+    import uuid
+    from datetime import datetime
+    
+    components = []
+    if requirements_path.exists():
+        content = requirements_path.read_text()
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Match package==version or package>=version
+            match = re.match(r'^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)', line)
+            if match:
+                pkg_name = match.group(1)
+                pkg_ver = match.group(3)
+                purl = f"pkg:pypi/{pkg_name.lower()}@{pkg_ver}"
+                components.append({
+                    "type": "library",
+                    "name": pkg_name,
+                    "version": pkg_ver,
+                    "purl": purl,
+                    "bom-ref": purl
+                })
+                
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version": 1,
+        "metadata": {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "tools": {
+                "components": [
+                    {
+                        "type": "application",
+                        "name": "Aegis SBOM Generator",
+                        "version": "1.0.0"
+                    }
+                ]
+            },
+            "component": {
+                "type": "application",
+                "name": "Aegis",
+                "version": "1.0.0"
+            }
+        },
+        "components": components
+    }
+    
+    output_path.write_text(json.dumps(sbom, indent=2))
+    print(f"[INFO] CycloneDX SBOM generated: {output_path}")
+
+
 def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: str):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -218,14 +447,34 @@ def print_result(result: Dict[str, Any]) -> None:
 def main() -> int:
     print("=== Aegis Policy Engine ===")
 
+    # Run CycloneDX SBOM Generation
+    try:
+        req_path = Path("requirements.txt")
+        if not req_path.exists():
+            script_dir = Path(__file__).resolve().parent
+            req_path = script_dir / "requirements.txt"
+        generate_cyclonedx_sbom(req_path, SCAN_DIR / "sbom.json")
+    except Exception as e:
+        print(f"[WARN] Failed to generate SBOM manifest: {e}")
+
     bandit_report = load_json(BANDIT_REPORT)
     safety_report = load_json(SAFETY_REPORT)
     trivy_report = load_json(TRIVY_REPORT)
+    secrets_report = load_json(SECRETS_REPORT)
+    yara_report = load_json(YARA_REPORT)
+    semgrep_report = load_json(SEMGREP_REPORT)
+    clamav_report = load_json(CLAMAV_REPORT)
+    zap_report = load_json(ZAP_REPORT)
 
     results = [
         analyze_bandit(bandit_report),
+        analyze_semgrep(semgrep_report),
         analyze_safety(safety_report),
         analyze_trivy(trivy_report),
+        analyze_secrets(secrets_report),
+        analyze_yara(yara_report),
+        analyze_clamav(clamav_report),
+        analyze_zap(zap_report),
     ]
 
     for result in results:

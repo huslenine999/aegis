@@ -1,0 +1,41 @@
+rules:
+  - id: python-sqli
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(..., $VAR)
+          - pattern: $CURSOR.execute(f"...")
+          - pattern: $CURSOR.execute("..." % ...)
+      - pattern-not:
+          - pattern: $CURSOR.execute("...", ...)
+    message: "Detected potential SQL injection via string formatting or interpolation in database execution."
+    languages: [python]
+    severity: ERROR
+
+  - id: python-rce
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.check_output(..., shell=True)
+          - pattern: subprocess.run(..., shell=True)
+          - pattern: subprocess.Popen(..., shell=True)
+          - pattern: os.system(...)
+    message: "Detected command injection risk via subprocess/os.system with shell=True."
+    languages: [python]
+    severity: ERROR
+
+  - id: python-eval
+    pattern: eval(...)
+    message: "Detected unsafe use of eval()."
+    languages: [python]
+    severity: ERROR
+
+  - id: python-pickle
+    pattern: pickle.loads(...)
+    message: "Detected unsafe deserialization with pickle."
+    languages: [python]
+    severity: ERROR
+
+  - id: python-weak-hash
+    pattern: hashlib.md5(...)
+    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
+    languages: [python]
+    severity: WARNING

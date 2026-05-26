@@ -86,6 +86,7 @@ def initialize_database():
         ("\\.\\./", "Directory Traversal pattern (../)", 1),
         ("pickle\\.loads", "Python deserialization hijack detector", 1),
         ("eval\\(", "Python dynamic expression injection detector", 1),
+        ("__import__|system\\(|subprocess", "Python code execution attempt", 1),
         ("<\\s*script", "XSS (Dangerous script tags)", 1),
         ("on\\w+\\s*=", "XSS (HTML event handler hijacking)", 1),
         ("javascript\\s*:", "XSS (Javascript URI prefix)", 1),

@@ -1,11 +1,11 @@
 # Aegis DevSecOps Console - Project Handoff
 
-This document outlines the current state of **Aegis** (a retro CRT-style DevSecOps simulation console), detailing implemented features, recent layout/legibility fixes, key files, and instructions for running and testing the codebase.
+This document outlines the final state of **Aegis** (a retro CRT-style DevSecOps simulation console), detailing implemented features, recent layout/legibility fixes, key files, and instructions for running and testing the codebase.
 
 ---
 
 ## 1. Project Overview
-Aegis is an interactive DevSecOps dashboard and static analysis gate designed to simulate vulnerability audits, runtime attack vectors, Web Application Firewall (WAF) mitigations, and automated deployment gate checks. It features a premium 90s CRT monitor design with customizable retro themes, screen-glare scanlines, and animated background canvases.
+Aegis is an interactive DevSecOps dashboard and static/dynamic analysis gate designed to simulate vulnerability audits, runtime attack vectors, Web Application Firewall (WAF) mitigations, and automated deployment gate checks. It features a premium 90s CRT monitor design with customizable retro themes, screen-glare scanlines, and animated background canvases.
 
 ---
 
@@ -17,12 +17,16 @@ Aegis is an interactive DevSecOps dashboard and static analysis gate designed to
   - **Simple View (Default)**: A clean, step-by-step layout hiding advanced logs and charts, designed for non-technical users to inspect codebase scans and run runtime threat testing.
   - **Tactical View**: Restores full high-density logs, the vector attack radar canvas, diagnostics telemetry, and the live custom WAF rules editor.
   - View states are persistently stored in `localStorage`.
-- **Segmented Numbered Steps**: The layout is organized into 4 logical steps (Static Audit, Threat Lab, Vulnerability Registry, and Deployment Gate) to present a clean, sequential audit pipeline.
+- **Segmented Numbered Steps**: The layout is organized into sequential steps (Static Audit, Dependency Graph, Threat Lab, Vulnerability Registry, and Deployment Gate) to present a clean audit pipeline.
 
-### B. Security Scans & Custom Uploader
-- **Python Script Auditing**: A file input control allows users to upload local `.py` scripts directly from either the main dashboard or the report views.
-- **Client-Side Validation**: Ensures only files ending in `.py` can be processed, alerting the user of incorrect formats immediately.
-- **Automatic Scan Triggering**: Uploads automatically invoke backend audits (using Bandit, Safety, and Trivy) and hot-reload results dynamically.
+### B. Multi-Layer Scanner Suites
+- **Python SAST Engine (Bandit & Semgrep)**: Audits code for SQL Injection, Command Injection (RCE), Unsafe Eval, Weak Hashes, and Pickle deserialization using custom rules.
+- **Software Composition Analysis (Safety)**: Checks python dependencies for known security vulnerabilities.
+- **Secret Scanner (detect-secrets)**: Analyzes the codebase for hardcoded passwords, keys, and tokens.
+- **YARA Pattern Scanner**: Scans for webshell, obfuscated payload, and suspicious shell spawning signatures.
+- **ClamAV Antivirus Scanner**: Checks the filesystem for malware (e.g. EICAR test string) and base64 backdoors.
+- **OWASP ZAP DAST Scanner**: Performs in-memory dynamic crawling and scans against local endpoints, checking WAF mitigation block rates.
+- **Tactical Dependency Network Graph**: Generates a physical network graph highlighting vulnerable dependencies and paths of exposure.
 
 ### C. CRT Custom Themes & Animation
 - **Supported Themes**: 
@@ -40,8 +44,11 @@ Aegis is an interactive DevSecOps dashboard and static analysis gate designed to
 
 ## 3. Recent Bug Fixes & Accessibility Polish
 
-### A. Layout Bug Fixes
-- **Decision Banner Div Correction**: Resolved a missing closing `</div>` tag for the `.decision-banner` element inside [report_template.html](file:///Users/huslenine/Aegis/app/templates/report_template.html). This error had nested downstream blocks (such as the tool glossary, metrics grid, uploader card, and logs tables) inside the flex banner wrapper, resulting in massive unwanted empty spaces and layout misalignment.
+### A. State Pollution & Variable Shadowing Fixes
+- **WAF Test State Isolation**: Resolved a testing issue where tests setting `WAF_ENABLED = True` polluted the environment for subsequent tests. The client fixtures in `test_phase3.py`, `test_waf.py`, and `test_upload_scan.py` now run `initialize_database()` and force `app.main.WAF_ENABLED = False` before every test case runs.
+- **Import Shadowing Resolution**: Fixed a Python namespace conflict where `import app.main` in fixtures shadowed the imported Flask `app` object name. Replaced it with `import app.main as app_main`.
+- **Target DAST Conflicts**: Programmed the dynamic ZAP scanner to bypass running tests when scanning static target files (such as `secure_main.py` or uploaded scripts). It writes a clean empty list `[]` to `zap-report.json` instead, ensuring file scans are not blocked by the global running server status.
+- **Python WAF Rule Mitigation**: Added a default WAF regex pattern rule `__import__|system\(|subprocess` to block dynamic Python code execution injection attempts against `/calculate`.
 
 ### B. Sizing & Legibility Improvements
 - **Theme Accent Contrast**: Brightened `--text-muted` and `--secondary` color variables across all themes in both template files to resolve poor contrast against dark phosphor screen scanlines.
@@ -63,6 +70,10 @@ Aegis is an interactive DevSecOps dashboard and static analysis gate designed to
 - [app/templates/index.html](file:///Users/huslenine/Aegis/app/templates/index.html): Main retro CRT dashboard template containing CSS theme definitions, CLI shell bindings, SVG diagnostics monitors, and JavaScript WAF/dossier states.
 - [app/templates/report_template.html](file:///Users/huslenine/Aegis/app/templates/report_template.html): Standalone Security Report compiler view equipped with custom uploader widgets and synced styling.
 - [policy_engine.py](file:///Users/huslenine/Aegis/policy_engine.py): Core static scan processor running sub-audits and deciding pipeline pass/block verdicts.
+- [rules/semgrep_rules.yaml](file:///Users/huslenine/Aegis/rules/semgrep_rules.yaml): Custom security rules for Python source scanning.
+- [tests/test_phase1.py](file:///Users/huslenine/Aegis/tests/test_phase1.py): Unit tests verifying Secrets, YARA, and SBOM generation logic.
+- [tests/test_phase2.py](file:///Users/huslenine/Aegis/tests/test_phase2.py): Unit tests verifying Semgrep SAST and dependency graphing logic.
+- [tests/test_phase3.py](file:///Users/huslenine/Aegis/tests/test_phase3.py): Unit tests verifying ClamAV malware signatures and OWASP ZAP DAST scan rules.
 
 ---
 
@@ -80,4 +91,4 @@ Run `pytest` to verify the WAF engine rules and scan routes:
 ```bash
 ./venv/bin/pytest
 ```
-Currently, **19/19 tests pass successfully** with no regressions.
+Currently, **43/43 tests pass successfully** with no regressions.
