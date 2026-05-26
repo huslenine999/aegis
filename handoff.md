@@ -49,6 +49,7 @@ Aegis is an interactive DevSecOps dashboard and static/dynamic analysis gate des
 - **Import Shadowing Resolution**: Fixed a Python namespace conflict where `import app.main` in fixtures shadowed the imported Flask `app` object name. Replaced it with `import app.main as app_main`.
 - **Target DAST Conflicts**: Programmed the dynamic ZAP scanner to bypass running tests when scanning static target files (such as `secure_main.py` or uploaded scripts). It writes a clean empty list `[]` to `zap-report.json` instead, ensuring file scans are not blocked by the global running server status.
 - **Python WAF Rule Mitigation**: Added a default WAF regex pattern rule `__import__|system\(|subprocess` to block dynamic Python code execution injection attempts against `/calculate`.
+- **Landing Page JavaScript Crash**: Fixed a parser-blocking `SyntaxError: Unexpected end of input` in `index.html` by restoring a missing closing brace `}` at the end of the `setExplainMode()` function, which had completely broken client-side dashboard interactives (themes, view modes, uploader scans, and explain actions).
 
 ### B. Sizing & Legibility Improvements
 - **Theme Accent Contrast**: Brightened `--text-muted` and `--secondary` color variables across all themes in both template files to resolve poor contrast against dark phosphor screen scanlines.
