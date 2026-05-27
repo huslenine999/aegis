@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from werkzeug.utils import secure_filename
 import redis
 
-from database import DB_PATH, initialize_database, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR
+from database import DB_PATH, initialize_database, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client, REDIS_AVAILABLE
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
@@ -52,8 +52,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Global state for the WAF toggle (demo only)
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
-
-redis_client = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
 
 def load_waf_rules_from_db():
     conn = sqlite3.connect(DB_PATH)
@@ -666,12 +664,23 @@ async def run_scan(request: Request):
 
     # Import worker task logic
     from worker import async_scan_task
-    from rq import Queue
-    from redis import Redis
 
-    r_conn = Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
-    q = Queue(connection=r_conn)
-    q.enqueue(async_scan_task, job_id, target_name, custom_file_path, WAF_ENABLED)
+    if REDIS_AVAILABLE:
+        from rq import Queue
+        from redis import Redis
+
+        r_conn = Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
+        q = Queue(connection=r_conn)
+        q.enqueue(async_scan_task, job_id, target_name, custom_file_path, WAF_ENABLED)
+    else:
+        import threading
+        # Run scan task in a background thread in-process
+        thread = threading.Thread(
+            target=async_scan_task,
+            args=(job_id, target_name, custom_file_path, WAF_ENABLED)
+        )
+        thread.daemon = True
+        thread.start()
 
     return {
         "status": "success",
@@ -775,16 +784,7 @@ async def stream_telemetry_metrics_ws(websocket: WebSocket):
                                 "color": "var(--text-muted)"
                             })
                 
-                # Spikes
-                for line in logs:
-                    if "cat /etc/passwd" in line or "cat+/etc/passwd" in line or "cat%20/etc/passwd" in line or "system(" in line or "subprocess" in line:
-                        cpu = max(cpu, random.uniform(85.0, 98.0))
-                        latency = max(latency, random.uniform(250.0, 480.0))
-                    elif "169.254.169.254" in line:
-                        latency = max(latency, random.uniform(3000.0, 4200.0))
-                    elif "OR '1'='1" in line or "UNION SELECT" in line:
-                        cpu = max(cpu, random.uniform(40.0, 65.0))
-                        
+
                 await websocket.send_json({
                     "type": "telemetry",
                     "cpu": round(cpu, 1),
@@ -874,14 +874,7 @@ async def stream_telemetry():
                                 "text": f"[INFO] container: {line}",
                                 "color": "var(--text-muted)"
                             })
-                for line in logs:
-                    if "cat /etc/passwd" in line or "cat+/etc/passwd" in line or "cat%20/etc/passwd" in line or "system(" in line or "subprocess" in line:
-                        cpu = max(cpu, random.uniform(85.0, 98.0))
-                        latency = max(latency, random.uniform(250.0, 480.0))
-                    elif "169.254.169.254" in line:
-                        latency = max(latency, random.uniform(3000.0, 4200.0))
-                    elif "OR '1'='1" in line or "UNION SELECT" in line:
-                        cpu = max(cpu, random.uniform(40.0, 65.0))
+
             else:
                 cpu = max(5.0, min(95.0, 12.5 + random.uniform(-2.0, 2.0)))
                 memory = max(5.0, min(95.0, 34.2 + random.uniform(-0.5, 0.5)))

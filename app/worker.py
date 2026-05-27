@@ -17,14 +17,12 @@ import redis
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR
+from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
     get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
 )
-
-redis_client = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
 
 def publish_job_event(job_id: str, event_type: str, data: dict):
     channel = f"job_channel:{job_id}"

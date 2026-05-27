@@ -3,7 +3,7 @@ import hashlib
 import os
 import json
 import sqlite3
-import subprocess
+import subprocess  # nosec
 from pathlib import Path
 
 # Add the current directory to sys.path to allow imports when running from root

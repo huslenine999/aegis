@@ -102,3 +102,100 @@ def initialize_database():
     conn.commit()
     conn.close()
 
+import redis
+import threading
+
+class InMemoryRedis:
+    def __init__(self):
+        self.storage = {}
+        self.lists = {}
+        self.channels = {}
+        self.lock = threading.Lock()
+
+    def ping(self):
+        return True
+
+    def hset(self, name, key=None, value=None, mapping=None):
+        with self.lock:
+            if name not in self.storage:
+                self.storage[name] = {}
+            if mapping:
+                for k, v in mapping.items():
+                    self.storage[name][k] = str(v).encode() if not isinstance(v, bytes) else v
+            else:
+                self.storage[name][key] = str(value).encode() if not isinstance(value, bytes) else value
+        return 1
+
+    def hget(self, name, key):
+        if isinstance(key, bytes):
+            key = key.decode('utf-8')
+        with self.lock:
+            val = self.storage.get(name, {}).get(key)
+        if isinstance(val, str):
+            return val.encode()
+        return val
+
+    def rpush(self, name, *values):
+        with self.lock:
+            if name not in self.lists:
+                self.lists[name] = []
+            for v in values:
+                self.lists[name].append(v.encode() if isinstance(v, str) else v)
+            return len(self.lists[name])
+
+    def lrange(self, name, start, end):
+        with self.lock:
+            lst = self.lists.get(name, [])
+            if end == -1:
+                return lst[start:]
+            return lst[start:end+1]
+
+    def publish(self, channel, message):
+        with self.lock:
+            if channel in self.channels:
+                for q in self.channels[channel]:
+                    q.append(message)
+        return 1
+
+    def pubsub(self):
+        parent = self
+        class PubSubMock:
+            def __init__(self):
+                self.channel = None
+                self.queue = []
+
+            def subscribe(self, channel):
+                self.channel = channel
+                with parent.lock:
+                    if channel not in parent.channels:
+                        parent.channels[channel] = []
+                    parent.channels[channel].append(self.queue)
+
+            def get_message(self, ignore_subscribe_messages=True, timeout=0.1):
+                with parent.lock:
+                    if self.queue:
+                        msg = self.queue.pop(0)
+                        return {"data": msg.encode('utf-8') if isinstance(msg, str) else msg}
+                return None
+
+            def unsubscribe(self, channel):
+                with parent.lock:
+                    if channel in parent.channels and self.queue in parent.channels[channel]:
+                        parent.channels[channel].remove(self.queue)
+
+            def close(self):
+                if self.channel:
+                    self.unsubscribe(self.channel)
+
+        return PubSubMock()
+
+REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+try:
+    _temp_client = redis.Redis(host=REDIS_HOST, port=6379, socket_connect_timeout=0.5)
+    _temp_client.ping()
+    redis_client = _temp_client
+    REDIS_AVAILABLE = True
+except Exception:
+    redis_client = InMemoryRedis()
+    REDIS_AVAILABLE = False
+

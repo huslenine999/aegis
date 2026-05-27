@@ -9,8 +9,15 @@ from app.main import SCANS_DIR
 @pytest.fixture
 def client():
     from app.database import initialize_database
+    import shutil
     initialize_database()
     app_main.WAF_ENABLED = False
+    
+    # Clean up scans/uploads directory to avoid pollution from prior runs
+    uploads_dir = SCANS_DIR / "uploads"
+    if uploads_dir.exists():
+        shutil.rmtree(uploads_dir)
+        
     yield TestClient(app_main.app)
 
 def test_run_scan_default(client):

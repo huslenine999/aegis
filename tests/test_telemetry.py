@@ -72,7 +72,7 @@ def test_stream_telemetry_active_sandbox(client):
             assert "[PACKET] INBOUND TCP" in payload["logs"][0]["text"]
             assert "GET /user" in payload["logs"][0]["text"]
 
-    # 2. Test exploit logs (triggers CPU/latency spikes)
+    # 2. Test exploit logs (telemetry should NOT spike)
     mock_logs_exploit = [
         '172.17.0.1 - - [27/May/2026 12:45:58] "GET /ping?host=127.0.0.1;+cat+/etc/passwd HTTP/1.1" 403 -'
     ]
@@ -80,20 +80,20 @@ def test_stream_telemetry_active_sandbox(client):
          patch("app.main.get_sandbox_stats", return_value=mock_stats), \
          patch("app.main.get_sandbox_logs", return_value=mock_logs_exploit):
          
-        with client.stream("GET", "/stream-telemetry") as response:
-            first_event = None
-            for line in response.iter_lines():
-                if line:
-                    decoded = line.decode('utf-8') if isinstance(line, bytes) else line
-                    if decoded.startswith("data: "):
-                        first_event = decoded
-                        break
-                        
-            assert first_event is not None
-            payload = json.loads(first_event[len("data: "):].strip())
-            
-            # Telemetry should spike
-            assert payload["cpu"] >= 80.0
-            assert payload["latency"] >= 240.0
-            assert len(payload["logs"]) == 1
-            assert "GET /ping" in payload["logs"][0]["text"]
+         with client.stream("GET", "/stream-telemetry") as response:
+             first_event = None
+             for line in response.iter_lines():
+                 if line:
+                     decoded = line.decode('utf-8') if isinstance(line, bytes) else line
+                     if decoded.startswith("data: "):
+                         first_event = decoded
+                         break
+                         
+             assert first_event is not None
+             payload = json.loads(first_event[len("data: "):].strip())
+             
+             # Telemetry should NOT spike
+             assert abs(payload["cpu"] - 45.5) <= 1.0
+             assert payload["latency"] <= 10.0
+             assert len(payload["logs"]) == 1
+             assert "GET /ping" in payload["logs"][0]["text"]

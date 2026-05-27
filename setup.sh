@@ -43,10 +43,9 @@ if [ $REDIS_RUNNING -eq 0 ]; then
         docker run -d -p 6379:6379 --name aegis-redis redis:alpine
         echo "Waiting for Redis to start..."
         sleep 2
+        REDIS_RUNNING=1
     else
-        echo "❌  Redis server and Docker are missing. Redis is required for background workers."
-        echo "Please start Redis locally on port 6379 and retry."
-        exit 1
+        echo "⚠️  Redis server and Docker are missing. Running in-process simulated mode."
     fi
 else
     echo "✅  Redis is running on port 6379."
@@ -56,10 +55,14 @@ fi
 echo "Stopping old RQ worker processes..."
 pkill -f "rq worker" || true
 
-# Start RQ worker in the background
-echo "Starting RQ background worker..."
-mkdir -p scans
-nohup venv/bin/rq worker --url redis://localhost:6379 > scans/worker.log 2>&1 &
+if [ $REDIS_RUNNING -eq 1 ]; then
+    # Start RQ worker in the background
+    echo "Starting RQ background worker..."
+    mkdir -p scans
+    nohup venv/bin/rq worker --url redis://localhost:6379 > scans/worker.log 2>&1 &
+else
+    echo "Skipping RQ background worker (running in-process simulated mode)."
+fi
 
 # 4. Run the application
 echo "[4/4] Setup complete! Starting Aegis secure console..."
