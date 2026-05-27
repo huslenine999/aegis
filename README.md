@@ -37,7 +37,7 @@ graph TD
     Decision -->|Yes| Report[HTML & Monospace compliance reports generated]
     Decision -->|No| Deploy[Ship to Production]
     Worker -->|Stream State & Logs| Redis[Redis Publish]
-    Redis -->|WebSocket Stream /ws/scan/{job_id}| UI[Dashboard UI]
+    Redis -->|"WebSocket Stream /ws/scan/{job_id}"| UI[Dashboard UI]
 ```
 
 * **HTML Report**: `scans/report.html` - Visual tactical mainframe report with diagnostic details of Bandit, Semgrep, OSV Dependency Audit, Trivy, Secrets, YARA, ClamAV, and ZAP DAST scanner findings.
