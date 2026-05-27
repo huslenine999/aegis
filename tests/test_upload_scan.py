@@ -2,23 +2,22 @@ import io
 import json
 import pytest
 from pathlib import Path
-from app.main import app, SCANS_DIR
+from fastapi.testclient import TestClient
+import app.main as app_main
+from app.main import SCANS_DIR
 
 @pytest.fixture
 def client():
     from app.database import initialize_database
     initialize_database()
-    import app.main as app_main
     app_main.WAF_ENABLED = False
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        yield client
+    yield TestClient(app_main.app)
 
 def test_run_scan_default(client):
     """Ensure the default run-scan (no file uploaded) scans the codebase and runs successfully."""
     response = client.post('/run-scan')
     assert response.status_code == 200
-    assert response.json['status'] == 'success'
+    assert response.json()['status'] == 'success'
     
     # Check that reports were generated
     assert (SCANS_DIR / "bandit-report.json").exists()
@@ -28,15 +27,14 @@ def test_run_scan_default(client):
 
 def test_run_scan_custom_clean(client):
     """Ensure a custom clean Python file upload runs successfully and passes the policy gate."""
-    # Create a mock clean python file in memory
     clean_code = "print('Hello, secure world!')\n"
-    data = {
-        'file': (io.BytesIO(clean_code.encode('utf-8')), 'clean_test.py')
+    files = {
+        'file': ('clean_test.py', clean_code.encode('utf-8'))
     }
     
-    response = client.post('/run-scan', data=data, content_type='multipart/form-data')
+    response = client.post('/run-scan', files=files)
     assert response.status_code == 200
-    assert response.json['status'] == 'success'
+    assert response.json()['status'] == 'success'
     
     # The uploads folder should be completely clean (no UUID subdirectories remaining)
     uploads_dir = SCANS_DIR / "uploads"
@@ -52,15 +50,14 @@ def test_run_scan_custom_clean(client):
 
 def test_run_scan_custom_vulnerable(client):
     """Ensure a custom vulnerable Python file upload runs successfully but fails the policy gate due to Bandit flagging it."""
-    # Create a mock vulnerable python file using eval()
     vuln_code = "eval(input())\n"
-    data = {
-        'file': (io.BytesIO(vuln_code.encode('utf-8')), 'vuln_test.py')
+    files = {
+        'file': ('vuln_test.py', vuln_code.encode('utf-8'))
     }
     
-    response = client.post('/run-scan', data=data, content_type='multipart/form-data')
+    response = client.post('/run-scan', files=files)
     assert response.status_code == 200
-    assert response.json['status'] == 'success'
+    assert response.json()['status'] == 'success'
     
     # Ensure it contains the vulnerability
     assert (SCANS_DIR / "bandit-report.json").exists()
@@ -77,7 +74,7 @@ def test_run_scan_vulnerable_target(client):
     """Test that scanning the vulnerable target (main.py) triggers Bandit and blocks the gate."""
     response = client.post('/run-scan', json={"target": "vulnerable"})
     assert response.status_code == 200
-    assert response.json['status'] == 'success'
+    assert response.json()['status'] == 'success'
 
     # Ensure reports are generated
     assert (SCANS_DIR / "bandit-report.json").exists()
@@ -96,7 +93,7 @@ def test_run_scan_secure_target(client):
     """Test that scanning the secure target (secure_main.py) has no issues and allows deployment."""
     response = client.post('/run-scan', json={"target": "secure"})
     assert response.status_code == 200
-    assert response.json['status'] == 'success'
+    assert response.json()['status'] == 'success'
 
     # Ensure reports are generated
     assert (SCANS_DIR / "bandit-report.json").exists()
@@ -113,10 +110,9 @@ def test_run_scan_secure_target(client):
 def test_run_scan_non_python_rejected(client):
     """Ensure a custom scan with a non-Python file (e.g. .c) is rejected with 400 Bad Request."""
     c_code = "#include <stdio.h>\n"
-    data = {
-        'file': (io.BytesIO(c_code.encode('utf-8')), 'test.c')
+    files = {
+        'file': ('test.c', c_code.encode('utf-8'))
     }
-    response = client.post('/run-scan', data=data, content_type='multipart/form-data')
+    response = client.post('/run-scan', files=files)
     assert response.status_code == 400
-    assert response.json['status'] == 'error'
-    assert "Invalid file type" in response.json['message']
+    assert "Invalid file type" in response.json()['detail']

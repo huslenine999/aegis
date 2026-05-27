@@ -1,17 +1,17 @@
 import json
 import pytest
-from app.main import app, run_clamav_scan, run_dast_scan
+from fastapi.testclient import TestClient
+import app.main as app_main
+from app.main import app
+from app.worker import run_clamav_scan, run_dast_scan
 from policy_engine import analyze_clamav, analyze_zap
 
 @pytest.fixture
 def client():
     from app.database import initialize_database
     initialize_database()
-    import app.main as app_main
     app_main.WAF_ENABLED = False
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        yield client
+    yield TestClient(app)
 
 def test_run_clamav_scan_eicar(tmp_path):
     # Create a temp file containing the EICAR signature
@@ -19,7 +19,7 @@ def test_run_clamav_scan_eicar(tmp_path):
     temp_file = tmp_path / "eicar_test.txt"
     temp_file.write_text(eicar_content)
     
-    findings = run_clamav_scan(str(temp_file))
+    findings = run_clamav_scan(str(temp_file), job_id="test_job")
     assert len(findings) == 1
     assert findings[0]["virus"] == "EICAR-Test-Signature"
     assert "EICAR" in findings[0]["description"]
@@ -34,7 +34,7 @@ eval(base64.b64decode("c3lzdGVtKCdpZCcp"))
     temp_file = tmp_path / "backdoor_test.py"
     temp_file.write_text(backdoor_content)
     
-    findings = run_clamav_scan(str(temp_file))
+    findings = run_clamav_scan(str(temp_file), job_id="test_job")
     assert len(findings) == 1
     assert findings[0]["virus"] == "Python.Backdoor.Base64Decoder"
     assert "backdoor" in findings[0]["description"].lower()
@@ -42,10 +42,10 @@ eval(base64.b64decode("c3lzdGVtKCdpZCcp"))
 def test_run_dast_scan_waf_disabled(client):
     # Ensure WAF is disabled
     rules_resp = client.get('/get-waf-rules')
-    if rules_resp.json.get('waf_enabled'):
+    if rules_resp.json().get('waf_enabled'):
         client.post('/toggle-waf')
 
-    findings = run_dast_scan()
+    findings = run_dast_scan(job_id="test_job")
     # When WAF is disabled, all ZAP checks should find the vulnerability EXPOSED.
     exposed = [f for f in findings if f["status"] == "EXPOSED"]
     assert len(exposed) == 6  # SQLi, RCE, Eval, LFI, XSS, SSRF
@@ -53,12 +53,17 @@ def test_run_dast_scan_waf_disabled(client):
 def test_run_dast_scan_waf_enabled(client):
     # Ensure WAF is enabled
     rules_resp = client.get('/get-waf-rules')
-    if not rules_resp.json.get('waf_enabled'):
+    if not rules_resp.json().get('waf_enabled'):
         client.post('/toggle-waf')
 
-    findings = run_dast_scan()
+    findings = run_dast_scan(job_id="test_job")
     # When WAF is enabled, all ZAP checks should be MITIGATED.
     mitigated = [f for f in findings if f["status"] == "MITIGATED"]
+    if len(mitigated) != 6:
+        print("\n\n--- DAST FINDINGS IN TEST ---")
+        for f in findings:
+            print(f"{f['vuln_type']}: status={f['status']}, code={f['response_code']}, route={f['route']}, payload={f['payload']}")
+        print("-----------------------------\n")
     assert len(mitigated) == 6
 
     # Restore WAF to disabled (clean state)
@@ -98,5 +103,5 @@ def test_get_scan_results_endpoint(client):
     # Trigger scan results endpoint
     response = client.get('/get-scan-results')
     assert response.status_code == 200
-    assert 'clamav' in response.json
-    assert 'zap' in response.json
+    assert 'clamav' in response.json()
+    assert 'zap' in response.json()

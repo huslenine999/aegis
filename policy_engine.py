@@ -1,6 +1,11 @@
 import json
 import os
+import re
 import sys
+import math
+import time
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -180,6 +185,40 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
         "blocking_issues": len(vulnerabilities) if FAIL_ON_SAFETY else 0,
         "status": "FAIL" if vulnerabilities and FAIL_ON_SAFETY else "PASS",
         "examples": normalized_examples[:5],
+    }
+
+
+def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if report is None:
+        return {
+            "tool": "OSV Dependency Audit",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "MISSING",
+            "examples": [],
+        }
+
+    findings = []
+    for f in report:
+        cvss_score = f.get("cvss") or 0.0
+        findings.append({
+            "severity": "HIGH" if cvss_score >= 7.0 else ("MEDIUM" if cvss_score >= 4.0 else "LOW"),
+            "id": f.get("id"),
+            "package_name": f.get("package"),
+            "version": f.get("version"),
+            "cvss": f.get("cvss"),
+            "summary": f.get("summary"),
+            "details": f.get("details"),
+        })
+
+    blocking_issues = [f for f in findings if f["severity"] in {"MEDIUM", "HIGH"}]
+
+    return {
+        "tool": "OSV Dependency Audit",
+        "total_issues": len(findings),
+        "blocking_issues": len(blocking_issues),
+        "status": "FAIL" if blocking_issues else "PASS",
+        "examples": findings[:5],
     }
 
 
@@ -396,7 +435,255 @@ def generate_cyclonedx_sbom(requirements_path: Path, output_path: Path):
     print(f"[INFO] CycloneDX SBOM generated: {output_path}")
 
 
-def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: str):
+def parse_cvss_vector(vector_str: str) -> float:
+    try:
+        if not vector_str:
+            return 0.0
+        
+        vector_upper = vector_str.upper()
+        if "CVSS:3" not in vector_upper and "AV:" not in vector_upper:
+            return 0.0
+
+        if vector_upper.startswith("CVSS:"):
+            parts = vector_upper.split("/", 1)[1].split("/")
+        else:
+            parts = vector_upper.split("/")
+            
+        metrics = {}
+        for p in parts:
+            if ":" in p:
+                k, v = p.split(":", 1)
+                metrics[k.strip()] = v.strip()
+                
+        av_map = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+        ac_map = {"L": 0.77, "H": 0.44}
+        ui_map = {"N": 0.85, "R": 0.62}
+        c_map = {"H": 0.56, "L": 0.22, "N": 0.0}
+        i_map = {"H": 0.56, "L": 0.22, "N": 0.0}
+        a_map = {"H": 0.56, "L": 0.22, "N": 0.0}
+        
+        av = av_map.get(metrics.get("AV"), 0.85)
+        ac = ac_map.get(metrics.get("AC"), 0.77)
+        ui = ui_map.get(metrics.get("UI"), 0.85)
+        scope = metrics.get("S", "U")
+        
+        c = c_map.get(metrics.get("C"), 0.0)
+        i = i_map.get(metrics.get("I"), 0.0)
+        a = a_map.get(metrics.get("A"), 0.0)
+        
+        pr_val = metrics.get("PR", "N")
+        if scope == "C":
+            pr_map = {"N": 0.85, "L": 0.68, "H": 0.5}
+        else:
+            pr_map = {"N": 0.85, "L": 0.62, "H": 0.27}
+        pr = pr_map.get(pr_val, 0.85)
+        
+        exploitability = 8.22 * av * ac * pr * ui
+        iss = 1.0 - (1.0 - c) * (1.0 - i) * (1.0 - a)
+        
+        if scope == "C":
+            impact = 7.52 * (iss - 0.029) - 3.25 * ((iss - 0.02) ** 15)
+        else:
+            impact = 6.42 * iss
+            
+        if impact <= 0:
+            return 0.0
+            
+        if scope == "U":
+            score = min(impact + exploitability, 10.0)
+        else:
+            score = min(1.08 * (impact + exploitability), 10.0)
+            
+        return math.ceil(score * 10.0) / 10.0
+    except Exception:
+        return 0.0
+
+
+OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
+
+def query_osv_vulnerabilities(requirements_path: Path) -> List[Dict[str, Any]]:
+    findings = []
+    if not requirements_path.exists():
+        print(f"[WARN] requirements.txt not found at {requirements_path}")
+        return findings
+
+    packages = []
+    content = requirements_path.read_text()
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = re.match(r'^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)', line)
+        if match:
+            packages.append({
+                "name": match.group(1),
+                "version": match.group(3)
+            })
+
+    cache = {}
+    if OSV_CACHE_FILE.exists():
+        try:
+            cache = json.loads(OSV_CACHE_FILE.read_text())
+        except Exception:
+            pass
+
+    current_time = time.time()
+    cache_dirty = False
+    CACHE_TTL = 86400  # 24 hours
+
+    for pkg in packages:
+        pkg_name = pkg["name"]
+        pkg_ver = pkg["version"]
+        cache_key = f"{pkg_name.lower()}@{pkg_ver}"
+        
+        if cache_key in cache:
+            entry = cache[cache_key]
+            if current_time - entry.get("timestamp", 0) < CACHE_TTL:
+                findings.extend(entry.get("vulns", []))
+                continue
+
+        url = "https://api.osv.dev/v1/query"
+        payload = {
+            "version": pkg_ver,
+            "package": {
+                "name": pkg_name,
+                "ecosystem": "PyPI"
+            }
+        }
+        
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, 
+            data=req_data,
+            headers={"Content-Type": "application/json", "User-Agent": "Aegis-Scanner/2.0"},
+            method="POST"
+        )
+        
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                vuln_list = []
+                for vuln in resp_data.get("vulns", []):
+                    cvss_score = None
+                    vector = None
+                    
+                    db_spec = vuln.get("database_specific", {})
+                    if isinstance(db_spec, dict):
+                        cvss_data = db_spec.get("cvss")
+                        if isinstance(cvss_data, dict):
+                            cvss_score = cvss_data.get("score")
+                            vector = cvss_data.get("vector")
+                            
+                    if cvss_score is None:
+                        for sev in vuln.get("severity", []):
+                            if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
+                                vector = sev.get("score")
+                                cvss_score = parse_cvss_vector(vector)
+                                break
+                    
+                    vuln_list.append({
+                        "id": vuln.get("id"),
+                        "package": pkg_name,
+                        "version": pkg_ver,
+                        "cvss": cvss_score,
+                        "vector": vector,
+                        "summary": vuln.get("summary", "No summary provided."),
+                        "details": vuln.get("details", "No details provided.")
+                    })
+                
+                cache[cache_key] = {
+                    "timestamp": current_time,
+                    "vulns": vuln_list
+                }
+                cache_dirty = True
+                findings.extend(vuln_list)
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"[WARN] Failed to query OSV API for {cache_key}: {e}")
+            if cache_key in cache:
+                findings.extend(cache[cache_key].get("vulns", []))
+
+    if cache_dirty:
+        try:
+            OSV_CACHE_FILE.write_text(json.dumps(cache, indent=2))
+        except Exception as e:
+            print(f"[WARN] Failed to write OSV Cache: {e}")
+
+    return findings
+
+
+def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: bool) -> float:
+    findings = []
+    dast_exposed_multiplier = 1.0
+    
+    for r in results:
+        tool = r.get("tool")
+        if tool == "Bandit":
+            for ex in r.get("examples", []):
+                sev = ex.get("severity", "LOW").upper()
+                cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
+                findings.append({"type": "sast", "cvss": cvss})
+        elif tool == "Semgrep":
+            for ex in r.get("examples", []):
+                sev = ex.get("severity", "LOW").upper()
+                cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
+                findings.append({"type": "sast", "cvss": cvss})
+        elif tool == "Safety" and not any(other.get("tool") == "OSV Dependency Audit" and other.get("total_issues", 0) > 0 for other in results):
+            for _ in range(r.get("total_issues", 0)):
+                findings.append({"type": "sca", "cvss": 6.5})
+        elif tool == "OSV Dependency Audit":
+            for ex in r.get("examples", []):
+                cvss = ex.get("cvss") or 6.5
+                findings.append({"type": "sca", "cvss": cvss})
+        elif tool == "Trivy":
+            for ex in r.get("examples", []):
+                sev = ex.get("severity", "LOW").upper()
+                cvss = 9.8 if sev == "CRITICAL" else (8.0 if sev == "HIGH" else (5.0 if sev == "MEDIUM" else 2.0))
+                findings.append({"type": "container", "cvss": cvss})
+        elif tool == "Secrets Scanner":
+            for _ in range(r.get("total_issues", 0)):
+                findings.append({"type": "secrets", "cvss": 8.5})
+        elif tool == "YARA Scanner":
+            for _ in range(r.get("total_issues", 0)):
+                findings.append({"type": "malware", "cvss": 9.0})
+        elif tool == "ClamAV":
+            for _ in range(r.get("total_issues", 0)):
+                findings.append({"type": "malware", "cvss": 9.0})
+        elif tool == "OWASP ZAP DAST":
+            exposed_count = len([ex for ex in r.get("examples", []) if ex.get("status") == "EXPOSED"])
+            if exposed_count > 0:
+                dast_exposed_multiplier = 1.5
+            for ex in r.get("examples", []):
+                if ex.get("status") == "EXPOSED":
+                    findings.append({"type": "dast", "cvss": 8.5})
+
+    if not findings:
+        return 0.0
+
+    weighted_sum = 0.0
+    weights = {
+        "sast": 1.0,
+        "sca": 0.8,
+        "container": 0.9,
+        "secrets": 1.2,
+        "malware": 1.1,
+        "dast": 1.0
+    }
+    
+    for f in findings:
+        w = weights.get(f["type"], 1.0)
+        weighted_sum += f["cvss"] * w
+
+    base_score = min(100.0, weighted_sum * 5.0)
+    score = base_score * dast_exposed_multiplier
+    
+    if waf_enabled:
+        score *= 0.5
+        
+    return round(min(100.0, score), 1)
+
+
+def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: str, exploitability_score: float = 0.0):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Generate HTML Report
@@ -406,7 +693,8 @@ def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: s
             results=results,
             final_status=final_status,
             reason=reason,
-            timestamp=timestamp
+            timestamp=timestamp,
+            exploitability_score=exploitability_score
         )
         HTML_REPORT.write_text(html_content)
         print(f"[INFO] HTML report generated: {HTML_REPORT}")
@@ -419,6 +707,7 @@ def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: s
         f"**Generated on:** {timestamp}",
         f"**Final Decision:** DEPLOYMENT {final_status}",
         f"**Reason:** {reason}",
+        f"**Exploitability Score:** {exploitability_score}%",
         "",
         "## Tool Results",
         "| Tool | Status | Total Issues | Blocking Issues |",
@@ -466,10 +755,21 @@ def main() -> int:
     clamav_report = load_json(CLAMAV_REPORT)
     zap_report = load_json(ZAP_REPORT)
 
+    # Execute OSV scan
+    osv_report_path = SCAN_DIR / "osv-report.json"
+    try:
+        osv_findings = query_osv_vulnerabilities(req_path)
+        osv_report_path.write_text(json.dumps(osv_findings, indent=2))
+        print(f"[INFO] OSV scan completed. Report written to {osv_report_path}")
+    except Exception as e:
+        print(f"[WARN] OSV scan execution failed: {e}")
+        osv_findings = []
+
     results = [
         analyze_bandit(bandit_report),
         analyze_semgrep(semgrep_report),
         analyze_safety(safety_report),
+        analyze_osv(osv_findings),
         analyze_trivy(trivy_report),
         analyze_secrets(secrets_report),
         analyze_yara(yara_report),
@@ -500,7 +800,12 @@ def main() -> int:
     print(f"DEPLOYMENT {final_status}")
     print(f"Reason: {reason}")
 
-    generate_reports(results, final_status, reason)
+    # Determine WAF status from environment (injected by main.py)
+    waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
+    exploitability_score = calculate_exploitability_score(results, waf_enabled)
+    print(f"Exploitability Score: {exploitability_score}%")
+
+    generate_reports(results, final_status, reason, exploitability_score)
 
     return 1 if final_status == "BLOCKED" else 0
 

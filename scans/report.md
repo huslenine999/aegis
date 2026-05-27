@@ -1,7 +1,8 @@
 # Aegis Security Scan Summary
-**Generated on:** 2026-05-26 20:02:24
+**Generated on:** 2026-05-27 19:54:53
 **Final Decision:** DEPLOYMENT ALLOWED
 **Reason:** No blocking security issues found.
+**Exploitability Score:** 0.0%
 
 ## Tool Results
 | Tool | Status | Total Issues | Blocking Issues |
@@ -9,6 +10,7 @@
 | Bandit | PASS | 0 | 0 |
 | Semgrep | PASS | 0 | 0 |
 | Safety | PASS | 0 | 0 |
+| OSV Dependency Audit | PASS | 0 | 0 |
 | Trivy | PASS | 0 | 0 |
 | Secrets Scanner | PASS | 0 | 0 |
 | YARA Scanner | PASS | 0 | 0 |

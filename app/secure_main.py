@@ -198,6 +198,20 @@ def ssrf_demo():
 
 
 if __name__ == "__main__":
+    # SECURE: Allow dynamic port configuration from environment variables or command-line arguments.
+    import sys
+    port = 5002
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            pass
+    else:
+        try:
+            port = int(os.environ.get("PORT", 5002))
+        except ValueError:
+            pass
+
     # SECURE: Debug mode always False in production
-    app.run(host="0.0.0.0", port=5002, debug=False)  # nosemgrep # nosec
+    app.run(host="0.0.0.0", port=port, debug=False)  # nosemgrep # nosec
 

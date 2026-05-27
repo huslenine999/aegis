@@ -6,10 +6,16 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
+import random
+import json
+import asyncio
+import uuid
 from pathlib import Path
 
-# Add the current directory to sys.path to allow imports when running from root
+# Add the current directory and project root to sys.path to allow imports
 sys.path.append(str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 # Ensure the virtual environment's bin/Scripts directory is in PATH so that packages
 # invoking subprocesses (like semgrep) can find their corresponding executables.
@@ -17,15 +23,37 @@ sys_exec_dir = os.path.dirname(sys.executable)
 if sys_exec_dir and sys_exec_dir not in os.environ.get("PATH", "").split(os.pathsep):
     os.environ["PATH"] = sys_exec_dir + os.pathsep + os.environ.get("PATH", "")
 
-from flask import Flask, Response, jsonify, render_template, request
+from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from werkzeug.utils import secure_filename
+import redis
 
 from database import DB_PATH, initialize_database, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR
+from sandbox import (
+    is_docker_available, scaffold_sandbox_context, build_sandbox_image,
+    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
+    get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
+)
 
-app = Flask(__name__)
+app = FastAPI(title="Aegis DevSecOps Console")
+
+# Enable CORS for convenience
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # Global state for the WAF toggle (demo only)
-WAF_ENABLED = False
+WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
 
+redis_client = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
 
 def load_waf_rules_from_db():
     conn = sqlite3.connect(DB_PATH)
@@ -60,7 +88,6 @@ def load_waf_rules_from_db():
     finally:
         conn.close()
 
-
 def save_waf_rules_to_db(rules):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -75,7 +102,6 @@ def save_waf_rules_to_db(rules):
     finally:
         conn.close()
 
-
 def extract_json_values(data):
     if isinstance(data, dict):
         parts = []
@@ -88,530 +114,106 @@ def extract_json_values(data):
     else:
         return str(data)
 
+def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
+    def read_json_safe(p):
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                pass
+        return None
 
-def write_semgrep_rules(path):
-    rules_content = """rules:
-  - id: python-sqli
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(..., $VAR)
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-      - pattern-not:
-          - pattern: $CURSOR.execute("...", ...)
-    message: "Detected potential SQL injection via string formatting or interpolation in database execution."
-    languages: [python]
-    severity: ERROR
+    bandit = read_json_safe(scans_dir / "bandit-report.json")
+    semgrep = read_json_safe(scans_dir / "semgrep-report.json")
+    safety = read_json_safe(scans_dir / "safety-report.json")
+    trivy = read_json_safe(scans_dir / "trivy-report.json")
+    secrets = read_json_safe(scans_dir / "secrets-report.json")
+    yara = read_json_safe(scans_dir / "yara-report.json")
+    clamav = read_json_safe(scans_dir / "clamav-report.json")
+    zap = read_json_safe(scans_dir / "zap-report.json")
+    osv = read_json_safe(scans_dir / "osv-report.json")
 
-  - id: python-rce
-    patterns:
-      - pattern-either:
-          - pattern: subprocess.check_output(..., shell=True)
-          - pattern: subprocess.run(..., shell=True)
-          - pattern: subprocess.Popen(..., shell=True)
-          - pattern: os.system(...)
-    message: "Detected command injection risk via subprocess/os.system with shell=True."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-eval
-    pattern: eval(...)
-    message: "Detected unsafe use of eval()."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-pickle
-    pattern: pickle.loads(...)
-    message: "Detected unsafe deserialization with pickle."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-weak-hash
-    pattern: hashlib.md5(...)
-    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
-    languages: [python]
-    severity: WARNING
-"""
-    path.write_text(rules_content)
-
-
-def run_yara_scan(target_path: str):
     findings = []
-    import re
-    # 1. Try to scan using the compiled yara-python library
-    try:
-        import yara
-        yara_rules_path = PROJECT_ROOT / "rules" / "aegis_rules.yar"
-        if not yara_rules_path.exists():
-            yara_rules_path = Path("rules/aegis_rules.yar")
-        
-        if yara_rules_path.exists():
-            rules = yara.compile(filepath=str(yara_rules_path))
-            
-            def scan_file(file_path):
-                try:
-                    matches = rules.match(filepath=str(file_path))
-                    for m in matches:
-                        findings.append({
-                            "rule": m.rule,
-                            "filename": str(file_path),
-                            "description": m.meta.get("description", "YARA rule match"),
-                            "author": m.meta.get("author", "Aegis")
-                        })
-                except Exception as e:
-                    app.logger.error(f"[YARA Scan Error] {file_path}: {e}")
+    dast_exposed_multiplier = 1.0
 
-            p = Path(target_path)
-            if p.is_dir():
-                for root, dirs, files in os.walk(p):
-                    for file in files:
-                        if file.endswith(".py"):
-                            scan_file(Path(root) / file)
-            else:
-                scan_file(p)
-            return findings
-    except ImportError:
-        # Fall back gracefully to custom regex-based signature scanner
-        pass
+    if bandit and isinstance(bandit, dict):
+        for r in bandit.get("results", []):
+            sev = r.get("issue_severity", "LOW").upper()
+            cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
+            findings.append({"type": "sast", "cvss": cvss})
 
-    # 2. Fallback regex-based signature scanner
-    def scan_file_fallback(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            
-            # Rule 1: Backdoor_Webshell
-            p1 = re.search(r'eval\(\s*request\.(args|form|values)', content)
-            p2 = re.search(r'exec\(\s*request\.(args|form|values)', content)
-            p3 = re.search(r'subprocess\.Popen\(\s*request\.args', content)
-            p4 = re.search(r'subprocess\.check_output\(\s*request\.args', content)
-            if p1 or p2 or p3 or p4:
-                findings.append({
-                    "rule": "Backdoor_Webshell",
-                    "filename": str(file_path),
-                    "description": "Detects Python webshell or remote command execution patterns",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                
-            # Rule 2: Obfuscated_Payload
-            has_b64 = "base64.b64decode" in content
-            has_exec = "exec(" in content
-            has_eval = "eval(" in content
-            if has_b64 and (has_exec or has_eval):
-                findings.append({
-                    "rule": "Obfuscated_Payload",
-                    "filename": str(file_path),
-                    "description": "Detects base64 obfuscation combined with execution",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                
-            # Rule 3: Suspicious_Shell_Spawn
-            has_sh = ("/bin/sh" in content) or ("/bin/bash" in content)
-            has_pty = "pty.spawn" in content
-            has_socket = "socket.socket" in content
-            has_sub = ("subprocess.Popen" in content) or ("subprocess.call" in content)
-            if (has_sh and has_pty) or (has_socket and has_sub and has_sh):
-                findings.append({
-                    "rule": "Suspicious_Shell_Spawn",
-                    "filename": str(file_path),
-                    "description": "Detects shell spawning commands, likely for reverse shells",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-        except Exception as e:
-            app.logger.error(f"[Fallback Scan Error] {file_path}: {e}")
+    if semgrep and isinstance(semgrep, dict):
+        for r in semgrep.get("results", []):
+            sev = r.get("extra", {}).get("severity", "ERROR").upper()
+            cvss = 8.5 if sev == "ERROR" else (5.5 if sev == "WARNING" else 2.0)
+            findings.append({"type": "sast", "cvss": cvss})
 
-    p = Path(target_path)
-    if p.is_dir():
-        for root, dirs, files in os.walk(p):
-            for file in files:
-                if file.endswith(".py"):
-                    scan_file_fallback(Path(root) / file)
-    else:
-        scan_file_fallback(p)
-        
-    return findings
+    if not osv and safety:
+        vulns = []
+        if isinstance(safety, dict):
+            vulns = safety.get("vulnerabilities", []) or safety.get("results", [])
+        elif isinstance(safety, list):
+            vulns = safety
+        for v in vulns:
+            findings.append({"type": "sca", "cvss": 6.5})
 
+    if osv and isinstance(osv, list):
+        for vuln in osv:
+            cvss = vuln.get("cvss") or 6.5
+            findings.append({"type": "sca", "cvss": cvss})
 
-def run_clamav_scan(target_path: str):
-    findings = []
-    import shutil
-    clamscan_bin = shutil.which("clamscan")
-    if clamscan_bin:
-        try:
-            result = subprocess.run([clamscan_bin, "-r", "--infected", target_path], capture_output=True, text=True, check=False)
-            for line in result.stdout.splitlines():
-                if "FOUND" in line:
-                    parts = line.split(":")
-                    if len(parts) >= 2:
-                        filename = parts[0].strip()
-                        virus_part = parts[1].replace("FOUND", "").strip()
-                        findings.append({
-                            "filename": filename,
-                            "virus": virus_part,
-                            "description": f"ClamAV detected malware signature: {virus_part}"
-                        })
-            return findings
-        except Exception:
-            pass
+    if trivy and isinstance(trivy, dict):
+        for res in trivy.get("Results", []):
+            for v in res.get("Vulnerabilities", []) or []:
+                sev = v.get("Severity", "LOW").upper()
+                cvss = 9.8 if sev == "CRITICAL" else (8.0 if sev == "HIGH" else (5.0 if sev == "MEDIUM" else 2.0))
+                findings.append({"type": "container", "cvss": cvss})
 
-    # Fallback pure-Python scan
-    eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-    
-    def scan_file_clamav(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            if eicar_sig in content:
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "EICAR-Test-Signature",
-                    "description": "Matched EICAR standard antivirus test signature"
-                })
-            # Check for base64 backdoors
-            if re.search(r'(eval|exec)\(\s*base64\.b64decode', content):
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "Python.Backdoor.Base64Decoder",
-                    "description": "Detected base64-encoded Python execution pattern, indicating potential backdoor/webshell"
-                })
-        except Exception:
-            pass
+    if secrets and isinstance(secrets, dict):
+        for filename, file_secrets in secrets.get("results", {}).items():
+            for secret in file_secrets:
+                findings.append({"type": "secrets", "cvss": 8.5})
 
-    p = Path(target_path)
-    if p.is_dir():
-        for root, dirs, files in os.walk(p):
-            if any(k in root for k in ["venv", "scanner-venv", ".git", ".pytest_cache", ".antigravitycli"]):
-                continue
-            for file in files:
-                if file.endswith(".py") or file.endswith(".txt"):
-                    scan_file_clamav(Path(root) / file)
-    else:
-        scan_file_clamav(p)
+    if yara and isinstance(yara, list):
+        for _ in yara:
+            findings.append({"type": "malware", "cvss": 9.0})
 
-    return findings
+    if clamav and isinstance(clamav, list):
+        for _ in clamav:
+            findings.append({"type": "malware", "cvss": 9.0})
 
+    if zap and isinstance(zap, list):
+        exposed_count = len([z for z in zap if z.get("status") == "EXPOSED"])
+        if exposed_count > 0:
+            dast_exposed_multiplier = 1.5
+        for z in zap:
+            if z.get("status") == "EXPOSED":
+                findings.append({"type": "dast", "cvss": 8.5})
 
-def run_dast_scan():
-    findings = []
-    with app.test_client() as client:
-        test_cases = [
-            {
-                "vuln_type": "SQL Injection",
-                "route": "/user",
-                "method": "GET",
-                "params": {"name": "admin' OR '1'='1"},
-                "payload": "admin' OR '1'='1",
-                "description": "Active SQL injection vulnerability in user lookup endpoint."
-            },
-            {
-                "vuln_type": "Remote Code Execution",
-                "route": "/ping",
-                "method": "GET",
-                "params": {"host": "127.0.0.1; cat /etc/passwd"},
-                "payload": "127.0.0.1; cat /etc/passwd",
-                "description": "Command injection vulnerability in ping routing."
-            },
-            {
-                "vuln_type": "Unsafe Eval Injection",
-                "route": "/calculate",
-                "method": "GET",
-                "params": {"expr": "__import__('os').system('id')"},
-                "payload": "__import__('os').system('id')",
-                "description": "Arbitrary Python execution via unsafe eval expression injection."
-            },
-            {
-                "vuln_type": "Path Traversal (LFI)",
-                "route": "/download",
-                "method": "GET",
-                "params": {"file": "../requirements.txt"},
-                "payload": "../requirements.txt",
-                "description": "Local File Inclusion / Path Traversal vulnerability."
-            },
-            {
-                "vuln_type": "Cross-Site Scripting (XSS)",
-                "route": "/xss",
-                "method": "GET",
-                "params": {"msg": "<script>alert('XSS')</script>"},
-                "payload": "<script>alert('XSS')</script>",
-                "description": "Reflected Cross-Site Scripting vulnerability."
-            },
-            {
-                "vuln_type": "Server-Side Request Forgery (SSRF)",
-                "route": "/ssrf",
-                "method": "GET",
-                "params": {"url": "http://169.254.169.254/latest/meta-data/"},
-                "payload": "http://169.254.169.254/latest/meta-data/",
-                "description": "Server-Side Request Forgery vulnerability exposing cloud metadata."
-            }
-        ]
+    if not findings:
+        return 0.0
 
-        for tc in test_cases:
-            res = client.get(tc["route"], query_string=tc["params"])
-            if res.status_code == 403:
-                findings.append({
-                    "vuln_type": tc["vuln_type"],
-                    "route": tc["route"],
-                    "payload": tc["payload"],
-                    "description": tc["description"],
-                    "status": "MITIGATED",
-                    "response_code": res.status_code
-                })
-            else:
-                findings.append({
-                    "vuln_type": tc["vuln_type"],
-                    "route": tc["route"],
-                    "payload": tc["payload"],
-                    "description": tc["description"],
-                    "status": "EXPOSED",
-                    "response_code": res.status_code
-                })
-    return findings
-
-
-@app.before_request
-def waf_middleware():
-    """
-    Simulated Web Application Firewall (WAF).
-    Blocks suspicious patterns if enabled.
-    """
-    global WAF_ENABLED
-    # Bypass WAF checks for WAF management, scanning, and dossier export routes
-    if request.path in ["/toggle-waf", "/get-waf-rules", "/save-waf-rules", "/run-scan", "/export-dossier"]:
-        return
-
-    if not WAF_ENABLED:
-        return
-
-    # Check query params, form body, JSON, and raw data
-    payload_parts = [str(request.args), str(request.form)]
-    
-    json_data = request.get_json(silent=True)
-    if json_data:
-        payload_parts.append(extract_json_values(json_data))
-        
-    if request.data:
-        try:
-            payload_parts.append(request.data.decode('utf-8', errors='ignore'))
-        except Exception:
-            payload_parts.append(str(request.data))
-
-    payload = " ".join(payload_parts)
-    
-    rules = load_waf_rules_from_db()
-    for rule in rules:
-        if not rule.get("enabled", True):
-            continue
-        pattern = rule.get("pattern", "")
-        if not pattern:
-            continue
-        try:
-            # Check with compiled regex pattern
-            if re.search(pattern, payload, re.IGNORECASE):
-                return jsonify({
-                    "error": "Blocked by Aegis WAF",
-                    "reason": f"Detected malicious pattern: {rule.get('description', pattern)}",
-                    "status": "security_violation"
-                }), 403
-        except re.error:
-            # Fallback to simple literal check
-            if pattern in payload:
-                return jsonify({
-                    "error": "Blocked by Aegis WAF",
-                    "reason": f"Detected malicious pattern (literal): {rule.get('description', pattern)}",
-                    "status": "security_violation"
-                }), 403
-
-
-@app.route("/toggle-waf", methods=["POST"])
-def toggle_waf():
-    global WAF_ENABLED
-    WAF_ENABLED = not WAF_ENABLED
-    return jsonify({"status": "success", "waf_enabled": WAF_ENABLED})
-
-
-@app.route("/get-waf-rules", methods=["GET"])
-def get_waf_rules():
-    global WAF_ENABLED
-    rules = load_waf_rules_from_db()
-    return jsonify({"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED})
-
-
-@app.route("/save-waf-rules", methods=["POST"])
-def save_waf_rules():
-    try:
-        data = request.json
-        rules = data.get("rules", [])
-        new_rules = []
-        for r in rules:
-            if "pattern" in r:
-                new_rules.append({
-                    "pattern": str(r["pattern"]),
-                    "description": str(r.get("description", "")),
-                    "enabled": bool(r.get("enabled", True))
-                })
-        save_waf_rules_to_db(new_rules)
-        return jsonify({"status": "success", "message": "WAF rules updated successfully."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-
-
-# Use environment variables for secrets.
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "default-dev-secret-key")
-DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", "dev-password")
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "DEV-AWS-ID")
-
-# BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, and SCANS_DIR are imported from database.py
-
-# Initialize directories and sample file safely
-DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
-SCANS_DIR.mkdir(exist_ok=True, parents=True)
-
-sample_file = DOWNLOAD_DIR / "sample.txt"
-if not sample_file.exists():
-    sample_file.write_text("This is a safe sample file.\n")
-
-# Initialize database if it doesn't exist (critical for Vercel /tmp)
-if not DB_PATH.exists():
-    initialize_database()
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-@app.route("/report")
-def get_report():
-    """
-    Serves the latest security report.
-    """
-    report_path = SCANS_DIR / "report.html"
-    if not report_path.exists():
-        return "<h1>Report not found</h1><p>Please run the security scans first.</p>", 404
-    return report_path.read_text()
-
-
-@app.route("/download-sbom")
-def download_sbom():
-    """
-    Serves the CycloneDX SBOM JSON file.
-    """
-    sbom_path = SCANS_DIR / "sbom.json"
-    if not sbom_path.exists():
-        from policy_engine import generate_cyclonedx_sbom
-        try:
-            req_path = PROJECT_ROOT / "requirements.txt"
-            if not req_path.exists():
-                req_path = Path("requirements.txt")
-            generate_cyclonedx_sbom(req_path, sbom_path)
-        except Exception as e:
-            return jsonify({"status": "error", "message": f"SBOM generation failed: {e}"}), 500
-
-    from flask import send_file
-    return send_file(
-        str(sbom_path),
-        mimetype="application/json",
-        as_attachment=True,
-        download_name="cyclonedx-sbom.json"
-    )
-
-
-@app.route("/get-dependency-graph")
-def get_dependency_graph():
-    """
-    Executes pipdeptree --json-tree, correlates with Safety findings,
-    and returns a flattened { nodes, links } structure.
-    """
-    import json
-    import subprocess
-    
-    # 1. Parse Safety findings for vulnerable packages
-    vulnerable_packages = set()
-    safety_path = SCANS_DIR / "safety-report.json"
-    if safety_path.exists():
-        try:
-            report = json.loads(safety_path.read_text())
-            if isinstance(report, dict) and "vulnerabilities" in report:
-                for v in report["vulnerabilities"]:
-                    pkg = v.get("package_name") or v.get("package")
-                    if pkg:
-                        vulnerable_packages.add(pkg.lower())
-            elif isinstance(report, list):
-                for v in report:
-                    pkg = v.get("package_name") or v.get("package")
-                    if pkg:
-                        vulnerable_packages.add(pkg.lower())
-            elif isinstance(report, dict) and "affected_packages" in report:
-                for pkg in report["affected_packages"].keys():
-                    vulnerable_packages.add(pkg.lower())
-        except Exception as e:
-            app.logger.error(f"Error parsing safety report for graph: {e}")
-
-    # 2. Run pipdeptree
-    raw_tree = []
-    try:
-        python_bin = sys.executable
-        pipdeptree_bin = Path(python_bin).parent / "pipdeptree"
-        if not pipdeptree_bin.exists():
-            pipdeptree_cmd = [python_bin, "-m", "pipdeptree", "--json-tree"]
-        else:
-            pipdeptree_cmd = [str(pipdeptree_bin), "--json-tree"]
-        
-        result = subprocess.run(pipdeptree_cmd, capture_output=True, text=True, check=False)
-        if result.returncode == 0:
-            raw_tree = json.loads(result.stdout)
-        else:
-            raw_tree = generate_fallback_tree()
-    except Exception as e:
-        app.logger.error(f"Error executing pipdeptree: {e}")
-        raw_tree = generate_fallback_tree()
-
-    # 3. Flatten dependency tree
-    nodes = {}
-    links = []
-    
-    nodes["aegis"] = {
-        "id": "aegis",
-        "name": "Aegis (Root)",
-        "installed_version": "1.0.0",
-        "required_version": "N/A",
-        "vulnerable": False,
-        "isRoot": True
+    weighted_sum = 0.0
+    weights = {
+        "sast": 1.0,
+        "sca": 0.8,
+        "container": 0.9,
+        "secrets": 1.2,
+        "malware": 1.1,
+        "dast": 1.0
     }
     
-    def walk(dep_list, parent_id):
-        for dep in dep_list:
-            pkg_name = dep.get("package_name") or dep.get("key")
-            pkg_key = (dep.get("key") or pkg_name.lower()).replace("-", "_")
-            installed = dep.get("installed_version", "unknown")
-            required = dep.get("required_version", "unknown")
-            
-            link_key = (parent_id, pkg_key)
-            
-            if pkg_key not in nodes:
-                nodes[pkg_key] = {
-                    "id": pkg_key,
-                    "name": pkg_name,
-                    "installed_version": installed,
-                    "required_version": required,
-                    "vulnerable": pkg_key.lower().replace("_", "-") in vulnerable_packages or pkg_key.lower() in vulnerable_packages
-                }
-            
-            if link_key not in [(l["source"], l["target"]) for l in links]:
-                links.append({
-                    "source": parent_id,
-                    "target": pkg_key,
-                    "required_version": required
-                })
-            
-            if "dependencies" in dep and dep["dependencies"]:
-                walk(dep["dependencies"], pkg_key)
+    for f in findings:
+        w = weights.get(f["type"], 1.0)
+        weighted_sum += f["cvss"] * w
 
-    walk(raw_tree, "aegis")
+    base_score = min(100.0, weighted_sum * 5.0)
+    score = base_score * dast_exposed_multiplier
     
-    return jsonify({
-        "nodes": list(nodes.values()),
-        "links": links
-    })
-
+    if waf_enabled:
+        score *= 0.5
+        
+    return round(min(100.0, score), 1)
 
 def generate_fallback_tree():
     import re
@@ -642,10 +244,198 @@ def generate_fallback_tree():
             pass
     return tree
 
+# Use environment variables for secrets.
+app.state.secret_key = os.environ.get("SECRET_KEY", "default-dev-secret-key")
+DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", "dev-password")
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "DEV-AWS-ID")
 
-@app.route("/get-scan-results")
+# Initialize directories safely
+DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
+SCANS_DIR.mkdir(exist_ok=True, parents=True)
+
+sample_file = DOWNLOAD_DIR / "sample.txt"
+if not sample_file.exists():
+    sample_file.write_text("This is a safe sample file.\n")
+
+if not DB_PATH.exists():
+    initialize_database()
+
+# Custom ASGI middleware for WAF checks (replaces BaseHTTPMiddleware to prevent TestClient hangs)
+import urllib.parse
+
+class WafASGIMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        global WAF_ENABLED
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path in ["/toggle-waf", "/get-waf-rules", "/save-waf-rules", "/run-scan", "/export-dossier"]:
+            await self.app(scope, receive, send)
+            return
+
+        if not WAF_ENABLED:
+            await self.app(scope, receive, send)
+            return
+
+        # Read query params
+        query_string = scope.get("query_string", b"").decode('utf-8', errors='ignore')
+        query_string_decoded = urllib.parse.unquote_plus(query_string)
+
+        # Cache request body
+        body_chunks = []
+        more_body = True
+        while more_body:
+            message = await receive()
+            body_chunks.append(message.get("body", b""))
+            more_body = message.get("more_body", False)
+
+        body = b"".join(body_chunks)
+
+        # Re-create receive channel
+        sent_body = False
+        async def cached_receive():
+            nonlocal sent_body
+            if not sent_body:
+                sent_body = True
+                return {
+                    "type": "http.request",
+                    "body": body,
+                    "more_body": False
+                }
+            return {
+                "type": "http.request",
+                "body": b"",
+                "more_body": False
+            }
+
+        payload_parts = [query_string_decoded]
+        if body:
+            try:
+                body_str = body.decode('utf-8', errors='ignore')
+                payload_parts.append(body_str)
+                payload_parts.append(urllib.parse.unquote_plus(body_str))
+            except Exception:
+                payload_parts.append(str(body))
+        
+        payload = " ".join(payload_parts)
+
+        # Run WAF rules check
+        blocked = False
+        block_reason = ""
+        rules = load_waf_rules_from_db()
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+            pattern = rule.get("pattern", "")
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, payload, re.IGNORECASE):
+                    blocked = True
+                    block_reason = f"Detected malicious pattern: {rule.get('description', pattern)}"
+                    break
+            except re.error:
+                if pattern in payload:
+                    blocked = True
+                    block_reason = f"Detected malicious pattern (literal): {rule.get('description', pattern)}"
+                    break
+
+        if blocked:
+            # Send 403 Forbidden ASGI response directly
+            response_content = json.dumps({
+                "error": "Blocked by Aegis WAF",
+                "reason": block_reason,
+                "status": "security_violation"
+            }).encode('utf-8')
+            
+            await send({
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(response_content)).encode('utf-8'))
+                ]
+            })
+            await send({
+                "type": "http.response.body",
+                "body": response_content,
+                "more_body": False
+            })
+            return
+
+        await self.app(scope, cached_receive, send)
+
+app.add_middleware(WafASGIMiddleware)
+
+# REST Router Endpoints
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/report", response_class=HTMLResponse)
+def get_report():
+    report_path = SCANS_DIR / "report.html"
+    if not report_path.exists():
+        return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
+    return HTMLResponse(report_path.read_text())
+
+@app.get("/download-sbom")
+def download_sbom():
+    sbom_path = SCANS_DIR / "sbom.json"
+    if not sbom_path.exists():
+        from policy_engine import generate_cyclonedx_sbom
+        try:
+            req_path = PROJECT_ROOT / "requirements.txt"
+            if not req_path.exists():
+                req_path = Path("requirements.txt")
+            generate_cyclonedx_sbom(req_path, sbom_path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"SBOM generation failed: {e}")
+            
+    return FileResponse(
+        str(sbom_path),
+        media_type="application/json",
+        filename="cyclonedx-sbom.json"
+    )
+
+@app.post("/toggle-waf")
+def toggle_waf():
+    global WAF_ENABLED
+    WAF_ENABLED = not WAF_ENABLED
+    return {"status": "success", "waf_enabled": WAF_ENABLED}
+
+@app.get("/get-waf-rules")
+def get_waf_rules():
+    global WAF_ENABLED
+    rules = load_waf_rules_from_db()
+    return {"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED}
+
+@app.post("/save-waf-rules")
+async def save_waf_rules(request: Request):
+    try:
+        data = await request.json()
+        rules = data.get("rules", [])
+        new_rules = []
+        for r in rules:
+            if "pattern" in r:
+                new_rules.append({
+                    "pattern": str(r["pattern"]),
+                    "description": str(r.get("description", "")),
+                    "enabled": bool(r.get("enabled", True))
+                })
+        save_waf_rules_to_db(new_rules)
+        return {"status": "success", "message": "WAF rules updated successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/get-scan-results")
 def get_scan_results():
-    import json
+    global WAF_ENABLED
     def load_json_safe(path):
         if path.exists():
             try:
@@ -656,418 +446,570 @@ def get_scan_results():
     
     clamav = load_json_safe(SCANS_DIR / "clamav-report.json")
     zap = load_json_safe(SCANS_DIR / "zap-report.json")
-    return jsonify({
+    osv = load_json_safe(SCANS_DIR / "osv-report.json")
+    
+    score = calculate_exploitability_score(SCANS_DIR, WAF_ENABLED)
+    
+    is_blocked = False
+    reasons = []
+    
+    if clamav and len(clamav) > 0:
+        is_blocked = True
+        reasons.append("ClamAV")
+    if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
+        is_blocked = True
+        reasons.append("ZAP DAST")
+        
+    bandit = load_json_safe(SCANS_DIR / "bandit-report.json")
+    if bandit and isinstance(bandit, dict):
+        blocking_bandit = len([r for r in bandit.get("results", []) if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}])
+        if blocking_bandit > 0:
+            is_blocked = True
+            reasons.append("Bandit")
+            
+    semgrep = load_json_safe(SCANS_DIR / "semgrep-report.json")
+    if semgrep and isinstance(semgrep, dict):
+        blocking_semgrep = len([r for r in semgrep.get("results", []) if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}])
+        if blocking_semgrep > 0:
+            is_blocked = True
+            reasons.append("Semgrep")
+            
+    if osv and isinstance(osv, list):
+        blocking_osv = len([f for f in osv if (f.get("cvss") or 0.0) >= 4.0])
+        if blocking_osv > 0:
+            is_blocked = True
+            reasons.append("OSV Dependency Audit")
+            
+    has_run = (bandit is not None) or (semgrep is not None) or (osv is not None)
+
+    sandbox_status_file = SCANS_DIR / "sandbox-status.json"
+    sandbox_status = "simulated_fallback"
+    if sandbox_status_file.exists():
+        try:
+            sandbox_status = json.loads(sandbox_status_file.read_text()).get("status", "simulated_fallback")
+        except Exception:
+            pass
+
+    return {
         "clamav": clamav,
-        "zap": zap
-    })
+        "zap": zap,
+        "osv": osv,
+        "exploitability_score": score,
+        "waf_enabled": WAF_ENABLED,
+        "has_run": has_run,
+        "is_blocked": is_blocked,
+        "blocked_by": reasons,
+        "sandbox_status": sandbox_status
+    }
 
+@app.get("/get-dependency-graph")
+def get_dependency_graph():
+    vulnerable_packages = set()
+    safety_path = SCANS_DIR / "safety-report.json"
+    if safety_path.exists():
+        try:
+            report = json.loads(safety_path.read_text())
+            if isinstance(report, dict) and "vulnerabilities" in report:
+                for v in report["vulnerabilities"]:
+                    pkg = v.get("package_name") or v.get("package")
+                    if pkg:
+                        vulnerable_packages.add(pkg.lower())
+            elif isinstance(report, list):
+                for v in report:
+                    pkg = v.get("package_name") or v.get("package")
+                    if pkg:
+                        vulnerable_packages.add(pkg.lower())
+            elif isinstance(report, dict) and "affected_packages" in report:
+                for pkg in report["affected_packages"].keys():
+                    vulnerable_packages.add(pkg.lower())
+        except Exception:
+            pass
 
-@app.route("/run-scan", methods=["POST"])
-def run_scan():
-    """
-    Triggers fresh security scans and then runs the policy engine.
-    Supports either scanning the local application codebase or a custom uploaded file.
-    """
-    import uuid
-    import shutil
-    import json
-    from werkzeug.utils import secure_filename
+    osv_vulnerabilities = {}
+    osv_path = SCANS_DIR / "osv-report.json"
+    if osv_path.exists():
+        try:
+            osv_findings = json.loads(osv_path.read_text())
+            if isinstance(osv_findings, list):
+                for f in osv_findings:
+                    pkg = f.get("package")
+                    if pkg:
+                        pkg_lower = pkg.lower()
+                        if pkg_lower not in osv_vulnerabilities:
+                            osv_vulnerabilities[pkg_lower] = []
+                        osv_vulnerabilities[pkg_lower].append({
+                            "id": f.get("id"),
+                            "cvss": f.get("cvss"),
+                            "summary": f.get("summary")
+                        })
+        except Exception:
+            pass
 
-    if os.environ.get("VERCEL"):
-        return jsonify({
-            "status": "error",
-            "message": "Security scans are not supported in the Vercel serverless environment due to read-only filesystem limits, execution timeouts, and missing native binaries (like semgrep-core). Please clone the repository and run the project locally using './setup.sh' to perform security scans."
-        }), 400
-
-    uploaded_file = request.files.get("file")
-    is_custom_scan = False
-    temp_dir = None
-    target_name = None
-
+    raw_tree = []
     try:
-        # Determine the python executable.
-        # Use current sys.executable to ensure we stay in the same environment.
         python_bin = sys.executable
-        
-        if uploaded_file and uploaded_file.filename:
-            filename = secure_filename(uploaded_file.filename)
-            if not filename.lower().endswith('.py'):
-                return jsonify({
-                    "status": "error",
-                    "message": "Invalid file type. Only Python (.py) files are allowed for custom scans."
-                }), 400
-            is_custom_scan = True
-            uuid_str = uuid.uuid4().hex
-            temp_dir = SCANS_DIR / "uploads" / uuid_str
-            temp_dir.mkdir(exist_ok=True, parents=True)
-            temp_filepath = temp_dir / filename
-            uploaded_file.save(str(temp_filepath))
-            target_path = str(temp_filepath)
-            
-            # Write clean/empty mock results to safety-report.json and trivy-report.json
-            with open(SCANS_DIR / "safety-report.json", "w") as f:
-                json.dump([], f)
-            with open(SCANS_DIR / "trivy-report.json", "w") as f:
-                json.dump({"Results": []}, f)
+        pipdeptree_bin = Path(python_bin).parent / "pipdeptree"
+        if not pipdeptree_bin.exists():
+            pipdeptree_cmd = [python_bin, "-m", "pipdeptree", "--json-tree"]
         else:
-            # Read target from request
-            target_name = "vulnerable"
-            if request.is_json:
-                target_name = request.json.get("target", "vulnerable")
-            else:
-                target_name = request.form.get("target", "vulnerable")
-                
-            if target_name == "secure":
-                target_path = str(BASE_DIR / "secure_main.py")
-            else:
-                target_path = str(BASE_DIR / "main.py")
-            
-            # Run Safety (SCA) - using 'check' which works with requirements.txt
-            safety_cmd = [python_bin, "-m", "safety", "check", "-r", "requirements.txt", "--save-json", str(SCANS_DIR / "safety-report.json")]
-            subprocess.run(safety_cmd, cwd=PROJECT_ROOT, check=False)
-            
-            # Ensure trivy-report.json exists
-            trivy_path = SCANS_DIR / "trivy-report.json"
-            if not trivy_path.exists():
-                with open(trivy_path, "w") as f:
-                    json.dump({"Results": []}, f)
-
-        # Determine target file extension
-        target_ext = Path(target_path).suffix.lower()
-        is_dir = Path(target_path).is_dir()
+            pipdeptree_cmd = [str(pipdeptree_bin), "--json-tree"]
         
-        # Check if Python files are present
-        has_python = False
-        if is_dir:
-            for root, dirs, files in os.walk(target_path):
-                if any(file.endswith(".py") for file in files):
-                    has_python = True
+        result = subprocess.run(pipdeptree_cmd, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            raw_tree = json.loads(result.stdout)
+        else:
+            raw_tree = generate_fallback_tree()
+    except Exception:
+        raw_tree = generate_fallback_tree()
+
+    nodes = {}
+    links = []
+    
+    nodes["aegis"] = {
+        "id": "aegis",
+        "name": "Aegis (Root)",
+        "installed_version": "1.0.0",
+        "required_version": "N/A",
+        "vulnerable": False,
+        "isRoot": True,
+        "vulnerabilities": []
+    }
+    
+    def walk(dep_list, parent_id):
+        for dep in dep_list:
+            pkg_name = dep.get("package_name") or dep.get("key")
+            pkg_key = (dep.get("key") or pkg_name.lower()).replace("-", "_")
+            installed = dep.get("installed_version", "unknown")
+            required = dep.get("required_version", "unknown")
+            
+            link_key = (parent_id, pkg_key)
+            
+            pkg_lower = pkg_key.lower().replace("_", "-")
+            is_vuln = (pkg_lower in vulnerable_packages or 
+                       pkg_key.lower() in vulnerable_packages or 
+                       pkg_lower in osv_vulnerabilities or 
+                       pkg_key.lower() in osv_vulnerabilities)
+            
+            vuln_details = osv_vulnerabilities.get(pkg_lower) or osv_vulnerabilities.get(pkg_key.lower()) or []
+            
+            if pkg_key not in nodes:
+                nodes[pkg_key] = {
+                    "id": pkg_key,
+                    "name": pkg_name,
+                    "installed_version": installed,
+                    "required_version": required,
+                    "vulnerable": is_vuln,
+                    "vulnerabilities": vuln_details
+                }
+            
+            if link_key not in [(l["source"], l["target"]) for l in links]:
+                links.append({
+                    "source": parent_id,
+                    "target": pkg_key,
+                    "required_version": required
+                })
+            
+            if "dependencies" in dep and dep["dependencies"]:
+                walk(dep["dependencies"], pkg_key)
+
+    walk(raw_tree, "aegis")
+    
+    return {
+        "nodes": list(nodes.values()),
+        "links": links
+    }
+
+@app.post("/run-scan")
+async def run_scan(request: Request):
+    if os.environ.get("VERCEL"):
+        raise HTTPException(status_code=400, detail="Security scans are not supported in the Vercel serverless environment.")
+
+    content_type = request.headers.get("content-type", "")
+    uploaded_file = None
+    uploaded_filename = None
+    target_name = "vulnerable"
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file:
+            uploaded_filename = uploaded_file.filename
+    else:
+        try:
+            body = await request.json()
+            target_name = body.get("target", "vulnerable")
+        except Exception:
+            try:
+                form = await request.form()
+                target_name = form.get("target", "vulnerable")
+            except Exception:
+                pass
+
+    custom_file_path = None
+    if uploaded_file and uploaded_filename:
+        if not uploaded_filename.lower().endswith('.py'):
+            raise HTTPException(status_code=400, detail="Invalid file type. Only Python (.py) files are allowed.")
+        uuid_str = uuid.uuid4().hex
+        temp_dir = SCANS_DIR / "uploads" / uuid_str
+        temp_dir.mkdir(exist_ok=True, parents=True)
+        temp_filepath = temp_dir / secure_filename(uploaded_filename)
+        # Read uploaded bytes and write to disk
+        contents = await uploaded_file.read()
+        temp_filepath.write_bytes(contents)
+        custom_file_path = str(temp_filepath)
+
+    job_id = uuid.uuid4().hex
+    
+    # Write initial job status in Redis hash
+    redis_client.hset(f"job:{job_id}", "state", "queued")
+    redis_client.hset(f"job:{job_id}", "progress", 0)
+
+    # Import worker task logic
+    from worker import async_scan_task
+    from rq import Queue
+    from redis import Redis
+
+    r_conn = Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
+    q = Queue(connection=r_conn)
+    q.enqueue(async_scan_task, job_id, target_name, custom_file_path, WAF_ENABLED)
+
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "state": "queued"
+    }
+
+@app.websocket("/ws/scan/{job_id}")
+async def websocket_scan(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    
+    r_conn = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
+    pubsub = r_conn.pubsub()
+    pubsub.subscribe(f"job_channel:{job_id}")
+    
+    # 1. Catch up on logs
+    log_key = f"job_logs:{job_id}"
+    old_logs = r_conn.lrange(log_key, 0, -1)
+    for log_bytes in old_logs:
+        try:
+            log_data = json.loads(log_bytes.decode('utf-8'))
+            await websocket.send_json({"type": "log", **log_data})
+        except Exception:
+            pass
+            
+    # 2. Get latest state
+    job_key = f"job:{job_id}"
+    state = r_conn.hget(job_key, "state")
+    progress = r_conn.hget(job_key, "progress")
+    if state:
+        await websocket.send_json({
+            "type": "state",
+            "state": state.decode('utf-8'),
+            "progress": int(progress) if progress else 0
+        })
+        
+    # 3. Stream updates
+    metrics_task = asyncio.create_task(stream_telemetry_metrics_ws(websocket))
+    
+    try:
+        while True:
+            # Non-blocking poll for pubsub messages
+            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
+            if message:
+                data = json.loads(message['data'].decode('utf-8'))
+                await websocket.send_json(data)
+                if data.get("type") == "state" and data.get("state") in ("completed", "failed"):
                     break
-        else:
-            if target_ext == ".py":
-                has_python = True
-
-        bandit_report_path = SCANS_DIR / "bandit-report.json"
-
-        # 1. Run Python SAST (Bandit)
-        if has_python:
-            bandit_cmd = [
-                python_bin,
-                "-m",
-                "bandit"
-            ]
-            if is_dir:
-                bandit_cmd.append("-r")
-            bandit_cmd.extend([
-                target_path,
-                "-f",
-                "json",
-                "-o",
-                str(bandit_report_path)
-            ])
-            subprocess.run(bandit_cmd, cwd=PROJECT_ROOT, check=False)
-        else:
-            with open(bandit_report_path, "w") as f:
-                json.dump({"results": []}, f)
-        
-        # 1.5. Run Python SAST (Semgrep)
-        semgrep_report_path = SCANS_DIR / "semgrep-report.json"
-        if has_python:
-            try:
-                semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
-                if not semgrep_rules_path.exists():
-                    semgrep_rules_path.parent.mkdir(exist_ok=True, parents=True)
-                    write_semgrep_rules(semgrep_rules_path)
-                
-                semgrep_bin = Path(python_bin).parent / "semgrep"
-                if not semgrep_bin.exists():
-                    semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json", "-o", str(semgrep_report_path), target_path]
-                else:
-                    semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json", "-o", str(semgrep_report_path), target_path]
-                subprocess.run(semgrep_cmd, cwd=PROJECT_ROOT, check=False)
-            except Exception as e:
-                app.logger.error(f"[Semgrep Scan Error] {e}")
-                with open(semgrep_report_path, "w") as f:
-                    json.dump({"results": []}, f)
-        else:
-            with open(semgrep_report_path, "w") as f:
-                json.dump({"results": []}, f)
-        
-        # 2. Run Secret Scanning (detect-secrets)
-        secrets_report_path = SCANS_DIR / "secrets-report.json"
-        try:
-            secrets_cmd = [
-                python_bin,
-                "-m",
-                "detect_secrets",
-                "scan",
-                "--all-files",
-                "--exclude-files",
-                "venv/|scanner-venv/|tests/|scans/|\\.pytest_cache/|\\.git/|\\.antigravitycli/",
-                target_path
-            ]
-            with open(secrets_report_path, "w") as f:
-                subprocess.run(secrets_cmd, cwd=PROJECT_ROOT, check=False, stdout=f)
-        except Exception as e:
-            app.logger.error(f"[Secrets Scan Error] {e}")
-            with open(secrets_report_path, "w") as f:
-                json.dump({"results": {}}, f)
-
-        # 3. Run YARA Scanner
-        yara_report_path = SCANS_DIR / "yara-report.json"
-        try:
-            yara_findings = run_yara_scan(target_path)
-            with open(yara_report_path, "w") as f:
-                json.dump(yara_findings, f, indent=2)
-        except Exception as e:
-            app.logger.error(f"[YARA Scan Error] {e}")
-            with open(yara_report_path, "w") as f:
-                json.dump([], f)
-
-        # 3.5 Run ClamAV Scanner
-        clamav_report_path = SCANS_DIR / "clamav-report.json"
-        try:
-            clamav_findings = run_clamav_scan(target_path)
-            with open(clamav_report_path, "w") as f:
-                json.dump(clamav_findings, f, indent=2)
-        except Exception as e:
-            app.logger.error(f"[ClamAV Scan Error] {e}")
-            with open(clamav_report_path, "w") as f:
-                json.dump([], f)
-
-        # 3.6 Run ZAP DAST Scanner
-        zap_report_path = SCANS_DIR / "zap-report.json"
-        try:
-            if is_custom_scan or target_name == "secure":
-                zap_findings = []
-            else:
-                zap_findings = run_dast_scan()
-            with open(zap_report_path, "w") as f:
-                json.dump(zap_findings, f, indent=2)
-        except Exception as e:
-            app.logger.error(f"[ZAP Scan Error] {e}")
-            with open(zap_report_path, "w") as f:
-                json.dump([], f)
-
-        # Run the policy engine
-        engine_path = PROJECT_ROOT / "policy_engine.py"
-        subprocess.run([python_bin, str(engine_path)], cwd=PROJECT_ROOT, check=False, env={**os.environ, "SCANS_DIR": str(SCANS_DIR)})
-        
-        return jsonify({"status": "success", "message": "Scan completed and report generated."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+            await asyncio.sleep(0.05)
+    except WebSocketDisconnect:
+        pass
     finally:
-        if is_custom_scan and temp_dir and temp_dir.exists():
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                app.logger.error(f"Failed to clean up temp directory {temp_dir}: {e}")
+        metrics_task.cancel()
+        pubsub.unsubscribe(f"job_channel:{job_id}")
+        pubsub.close()
 
+async def stream_telemetry_metrics_ws(websocket: WebSocket):
+    sent_logs = set()
+    import random
+    
+    while True:
+        try:
+            container_name = get_active_sandbox_container()
+            if container_name:
+                stats = get_sandbox_stats(container_name)
+                cpu = stats.get("cpu", 0.0)
+                memory = stats.get("memory", 0.0)
+                
+                cpu = max(0.0, min(100.0, cpu + random.uniform(-0.5, 0.5)))
+                memory = max(0.0, min(100.0, memory + random.uniform(-0.2, 0.2)))
+                latency = random.uniform(2.0, 5.0)
+                
+                logs = get_sandbox_logs(container_name, tail=5)
+                log_entries = []
+                for line in logs:
+                    if line not in sent_logs:
+                        sent_logs.add(line)
+                        if "GET " in line or "POST " in line:
+                            match = re.search(r'"(GET|POST|PUT|DELETE)\s+([^\s?]+)(\?[^\s"]*)?\s+HTTP', line)
+                            if match:
+                                method = match.group(1)
+                                route = match.group(2)
+                                params = match.group(3) or ""
+                                ip_match = re.match(r'^([0-9.]+)', line)
+                                src_ip = ip_match.group(1) if ip_match else "172.17.0.1"
+                                status_match = re.search(r'HTTP/[0-9.]+"\s+(\d+)', line)
+                                status = status_match.group(1) if status_match else "200"
+                                
+                                log_entries.append({
+                                    "text": f"[PACKET] INBOUND TCP: Src={src_ip} Dst=127.0.0.1:5001 | {method} {route}{params} [Status={status}]",
+                                    "color": "var(--primary)" if status != "403" else "var(--secondary)"
+                                })
+                            else:
+                                log_entries.append({
+                                    "text": f"[INFO] container: {line}",
+                                    "color": "var(--text-muted)"
+                                })
+                        else:
+                            log_entries.append({
+                                "text": f"[INFO] container: {line}",
+                                "color": "var(--text-muted)"
+                            })
+                
+                # Spikes
+                for line in logs:
+                    if "cat /etc/passwd" in line or "cat+/etc/passwd" in line or "cat%20/etc/passwd" in line or "system(" in line or "subprocess" in line:
+                        cpu = max(cpu, random.uniform(85.0, 98.0))
+                        latency = max(latency, random.uniform(250.0, 480.0))
+                    elif "169.254.169.254" in line:
+                        latency = max(latency, random.uniform(3000.0, 4200.0))
+                    elif "OR '1'='1" in line or "UNION SELECT" in line:
+                        cpu = max(cpu, random.uniform(40.0, 65.0))
+                        
+                await websocket.send_json({
+                    "type": "telemetry",
+                    "cpu": round(cpu, 1),
+                    "memory": round(memory, 1),
+                    "latency": round(latency, 1),
+                    "logs": log_entries
+                })
+            else:
+                cpu = max(5.0, min(95.0, 12.5 + random.uniform(-2.0, 2.0)))
+                memory = max(5.0, min(95.0, 34.2 + random.uniform(-0.5, 0.5)))
+                latency = max(1.0, min(5000.0, 15.0 + random.uniform(-1.0, 1.0)))
+                
+                log_entries = []
+                if random.random() < 0.2:
+                    syslog_templates = [
+                        { "type": "INFO", "msg": "kernel: CPU temperature nominal (39C)", "color": "var(--text-muted)" },
+                        { "type": "OK", "msg": "cron: PID 4519 - ran job: clean_tmp_downloads", "color": "var(--text-muted)" },
+                        { "type": "INFO", "msg": "net_daemon: Interface eth0 link up - 1000mbps", "color": "var(--text-muted)" },
+                        { "type": "WARN", "msg": "auth_daemon: SSH login failed for invalid user root from 185.220.101.4", "color": "var(--secondary)" },
+                        { "type": "INFO", "msg": "sqlite3: connection pool initialized (8 threads)", "color": "var(--text-muted)" },
+                    ]
+                    tpl = random.choice(syslog_templates)
+                    log_entries.append({
+                        "text": f"[{tpl['type']}] {tpl['msg']}",
+                        "color": tpl['color']
+                    })
+                    
+                await websocket.send_json({
+                    "type": "telemetry",
+                    "cpu": round(cpu, 1),
+                    "memory": round(memory, 1),
+                    "latency": round(latency, 1),
+                    "logs": log_entries
+                })
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(1.0)
 
-@app.route("/health")
+# Legacy /stream-telemetry SSE endpoint
+@app.get("/stream-telemetry")
+async def stream_telemetry():
+    async def generate_stream():
+        sent_logs = set()
+        iterations = 0
+        while True:
+            if "pytest" in sys.modules and iterations >= 2:
+                break
+            iterations += 1
+            
+            container_name = get_active_sandbox_container()
+            if container_name:
+                stats = get_sandbox_stats(container_name)
+                cpu = stats.get("cpu", 0.0)
+                memory = stats.get("memory", 0.0)
+                cpu = max(0.0, min(100.0, cpu + random.uniform(-0.5, 0.5)))
+                memory = max(0.0, min(100.0, memory + random.uniform(-0.2, 0.2)))
+                latency = random.uniform(2.0, 5.0)
+                
+                logs = get_sandbox_logs(container_name, tail=15)
+                log_entries = []
+                for line in logs:
+                    if line not in sent_logs:
+                        sent_logs.add(line)
+                        if "GET " in line or "POST " in line:
+                            match = re.search(r'"(GET|POST|PUT|DELETE)\s+([^\s?]+)(\?[^\s"]*)?\s+HTTP', line)
+                            if match:
+                                method = match.group(1)
+                                route = match.group(2)
+                                params = match.group(3) or ""
+                                ip_match = re.match(r'^([0-9.]+)', line)
+                                src_ip = ip_match.group(1) if ip_match else "172.17.0.1"
+                                status_match = re.search(r'HTTP/[0-9.]+"\s+(\d+)', line)
+                                status = status_match.group(1) if status_match else "200"
+                                log_entries.append({
+                                    "text": f"[PACKET] INBOUND TCP: Src={src_ip} Dst=127.0.0.1:5001 | {method} {route}{params} [Status={status}]",
+                                    "color": "var(--primary)" if status != "403" else "var(--secondary)"
+                                })
+                            else:
+                                log_entries.append({
+                                    "text": f"[INFO] container: {line}",
+                                    "color": "var(--text-muted)"
+                                })
+                        else:
+                            log_entries.append({
+                                "text": f"[INFO] container: {line}",
+                                "color": "var(--text-muted)"
+                            })
+                for line in logs:
+                    if "cat /etc/passwd" in line or "cat+/etc/passwd" in line or "cat%20/etc/passwd" in line or "system(" in line or "subprocess" in line:
+                        cpu = max(cpu, random.uniform(85.0, 98.0))
+                        latency = max(latency, random.uniform(250.0, 480.0))
+                    elif "169.254.169.254" in line:
+                        latency = max(latency, random.uniform(3000.0, 4200.0))
+                    elif "OR '1'='1" in line or "UNION SELECT" in line:
+                        cpu = max(cpu, random.uniform(40.0, 65.0))
+            else:
+                cpu = max(5.0, min(95.0, 12.5 + random.uniform(-2.0, 2.0)))
+                memory = max(5.0, min(95.0, 34.2 + random.uniform(-0.5, 0.5)))
+                latency = max(1.0, min(5000.0, 15.0 + random.uniform(-1.0, 1.0)))
+                log_entries = []
+                if random.random() < 0.2:
+                    syslog_templates = [
+                        { "type": "INFO", "msg": "kernel: CPU temperature nominal (39C)", "color": "var(--text-muted)" },
+                        { "type": "OK", "msg": "cron: PID 4519 - ran job: clean_tmp_downloads", "color": "var(--text-muted)" },
+                        { "type": "INFO", "msg": "net_daemon: Interface eth0 link up - 1000mbps", "color": "var(--text-muted)" },
+                        { "type": "WARN", "msg": "auth_daemon: SSH login failed for invalid user root from 185.220.101.4", "color": "var(--secondary)" },
+                        { "type": "INFO", "msg": "sqlite3: connection pool initialized (8 threads)", "color": "var(--text-muted)" },
+                    ]
+                    tpl = random.choice(syslog_templates)
+                    log_entries.append({
+                        "text": f"[{tpl['type']}] {tpl['msg']}",
+                        "color": tpl['color']
+                    })
+
+            payload = {
+                "cpu": round(cpu, 1),
+                "memory": round(memory, 1),
+                "latency": round(latency, 1),
+                "logs": log_entries
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            await asyncio.sleep(1.0)
+            
+    return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
+@app.get("/health")
 def health():
-    return jsonify({
+    return {
         "status": "running",
         "service": "aegis-vulnerable-demo"
-    })
+    }
 
-
-@app.route("/user")
-def get_user():
-    """
-    SQL Injection vulnerability.
-
-    Example:
-    /user?name=admin
-
-    Dangerous example:
-    /user?name=admin' OR '1'='1
-    """
-    username = request.args.get("name", "guest")
-
+@app.get("/user")
+def get_user(name: str = "guest"):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    # Intentionally vulnerable string formatting.
-    query = f"SELECT id, username, role, api_key FROM users WHERE username = '{username}'"
+    query = f"SELECT id, username, role, api_key FROM users WHERE username = '{name}'"
     cursor.execute(query)
-
     rows = cursor.fetchall()
     conn.close()
-
-    return jsonify({
+    return {
         "query": query,
         "results": rows
-    })
+    }
 
-
-@app.route("/ping")
-def ping_host():
-    """
-    Command Injection vulnerability.
-
-    Example:
-    /ping?host=127.0.0.1
-    """
-    host = request.args.get("host", "127.0.0.1")
-
-    # Intentionally vulnerable shell=True usage.
+@app.get("/ping")
+def ping_host(host: str = "127.0.0.1"):
     command = f"ping -c 1 {host}"
     output = subprocess.check_output(command, shell=True, text=True)
-
-    return jsonify({
+    return {
         "command": command,
         "output": output
-    })
+    }
 
-
-@app.route("/calculate")
-def calculate():
-    """
-    Unsafe eval vulnerability.
-
-    Example:
-    /calculate?expr=2+2
-    """
-    expression = request.args.get("expr", "1+1")
-
-    # Intentionally dangerous eval usage.
-    result = eval(expression)
-
-    return jsonify({
-        "expression": expression,
+@app.get("/calculate")
+def calculate(expr: str = "1+1"):
+    result = eval(expr)
+    return {
+        "expression": expr,
         "result": result
-    })
+    }
 
-
-@app.route("/load-profile", methods=["POST"])
-def load_profile():
-    """
-    Insecure deserialization vulnerability.
-
-    The endpoint accepts base64 encoded pickle data.
-    This is intentionally unsafe and should never be used in production.
-    """
-    encoded_profile = request.json.get("profile", "")
-
+@app.post("/load-profile")
+async def load_profile(request: Request):
+    body = await request.json()
+    encoded_profile = body.get("profile", "")
     raw_data = base64.b64decode(encoded_profile)
-
-    # Intentionally dangerous pickle deserialization.
     profile = pickle.loads(raw_data)
-
-    return jsonify({
+    return {
         "loaded_profile": str(profile)
-    })
+    }
 
-
-@app.route("/download")
-def download_file():
-    """
-    Path Traversal vulnerability.
-
-    Example:
-    /download?file=sample.txt
-
-    Dangerous example:
-    /download?file=../main.py
-    """
-    filename = request.args.get("file", "sample.txt")
-
-    # Intentionally unsafe path join.
-    target_file = DOWNLOAD_DIR / filename
-
+@app.get("/download")
+def download_file(file: str = "sample.txt"):
+    target_file = DOWNLOAD_DIR / file
     if not target_file.exists():
-        return jsonify({"error": "File not found"}), 404
+        raise HTTPException(status_code=404, detail="File not found")
+    return PlainTextResponse(target_file.read_text())
 
-    return target_file.read_text()
-
-
-@app.route("/hash")
-def weak_hash():
-    """
-    Weak hashing vulnerability using MD5.
-
-    Example:
-    /hash?value=password123
-    """
-    value = request.args.get("value", "password123")
-
-    # Intentionally weak hash.
+@app.get("/hash")
+def weak_hash(value: str = "password123"):
     digest = hashlib.md5(value.encode()).hexdigest()
-
-    return jsonify({
+    return {
         "value": value,
         "md5": digest
-    })
+    }
 
-
-@app.route("/xss")
-def xss_demo():
-    """
-    Cross-Site Scripting (XSS) vulnerability.
-
-    Example:
-    /xss?msg=<script>alert('XSS')</script>
-    """
-    msg = request.args.get("msg", "Welcome to Aegis console.")
-    # Intentionally vulnerable HTML output reflection
+@app.get("/xss", response_class=HTMLResponse)
+def xss_demo(msg: str = "Welcome to Aegis console."):
     return f"<html><body><div id='xss-output'>{msg}</div></body></html>"
 
-
-@app.route("/ssrf")
-def ssrf_demo():
-    """
-    Server-Side Request Forgery (SSRF) vulnerability.
-
-    Example:
-    /ssrf?url=http://169.254.169.254/latest/meta-data/
-    """
-    url = request.args.get("url", "http://127.0.0.1:5001/health")
-
+@app.get("/ssrf")
+def ssrf_demo(url: str = "http://127.0.0.1:5001/health"):
     import urllib.request
     try:
-        # Intentionally vulnerable connection execution without checks
         req = urllib.request.Request(
             url,
             headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
         )
         with urllib.request.urlopen(req, timeout=2) as response:
             content = response.read().decode('utf-8', errors='ignore')
-            return jsonify({
+            return {
                 "url": url,
                 "status": "success",
                 "response": content[:1000]
-            })
+            }
     except Exception as e:
-        return jsonify({
+        return {
             "url": url,
             "status": "error",
             "message": str(e)
-        }), 500
+        }
 
-
-
-@app.route("/debug-info")
+@app.get("/debug-info")
 def debug_info():
-    """
-    Information exposure demo.
-    """
-    return jsonify({
+    return {
         "database_password": DATABASE_PASSWORD,
         "aws_access_key": AWS_ACCESS_KEY_ID,
         "environment": dict(os.environ)
-    })
+    }
 
-
-@app.route("/export-dossier")
+@app.get("/export-dossier")
 def export_dossier():
-    """
-    Generates and downloads a retro monospaced dot-matrix ASCII compliance report
-    summarizing results from bandit, safety, trivy, secrets, yara, semgrep, clamav, and zap.
-    """
-    import json
-    from datetime import datetime
-    
     def load_json(path):
         if not path.exists():
             return None
@@ -1085,7 +1027,7 @@ def export_dossier():
     clamav_report = load_json(SCANS_DIR / "clamav-report.json")
     zap_report = load_json(SCANS_DIR / "zap-report.json")
 
-    # Determine status & counts for Bandit
+    # Bandit
     if not (SCANS_DIR / "bandit-report.json").exists():
         bandit_status = "MISSING"
         bandit_total = 0
@@ -1096,7 +1038,7 @@ def export_dossier():
         bandit_blocking = len([r for r in bandit_results if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}])
         bandit_status = "FAIL" if bandit_blocking > 0 else "PASS"
 
-    # Determine status & counts for Semgrep
+    # Semgrep
     if not (SCANS_DIR / "semgrep-report.json").exists():
         semgrep_status = "MISSING"
         semgrep_total = 0
@@ -1107,7 +1049,7 @@ def export_dossier():
         semgrep_blocking = len([r for r in semgrep_results if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}])
         semgrep_status = "FAIL" if semgrep_blocking > 0 else "PASS"
 
-    # Determine status & counts for Safety
+    # Safety
     if not (SCANS_DIR / "safety-report.json").exists():
         safety_status = "MISSING"
         safety_total = 0
@@ -1122,7 +1064,7 @@ def export_dossier():
         safety_blocking = safety_total
         safety_status = "FAIL" if safety_blocking > 0 else "PASS"
 
-    # Determine status & counts for Trivy
+    # Trivy
     if not (SCANS_DIR / "trivy-report.json").exists():
         trivy_status = "MISSING"
         trivy_total = 0
@@ -1136,7 +1078,7 @@ def export_dossier():
         trivy_blocking = len([v for v in trivy_vulns if v.get("Severity", "").upper() in {"MEDIUM", "HIGH", "CRITICAL"}])
         trivy_status = "FAIL" if trivy_blocking > 0 else "PASS"
 
-    # Determine status & counts for Secrets
+    # Secrets
     if not (SCANS_DIR / "secrets-report.json").exists():
         secrets_status = "MISSING"
         secrets_total = 0
@@ -1151,7 +1093,7 @@ def export_dossier():
         secrets_blocking = secrets_total
         secrets_status = "FAIL" if secrets_blocking > 0 else "PASS"
 
-    # Determine status & counts for YARA
+    # YARA
     if not (SCANS_DIR / "yara-report.json").exists():
         yara_status = "MISSING"
         yara_total = 0
@@ -1162,7 +1104,7 @@ def export_dossier():
         yara_blocking = yara_total
         yara_status = "FAIL" if yara_blocking > 0 else "PASS"
 
-    # Determine status & counts for ClamAV
+    # ClamAV
     if not (SCANS_DIR / "clamav-report.json").exists():
         clamav_status = "MISSING"
         clamav_total = 0
@@ -1173,7 +1115,7 @@ def export_dossier():
         clamav_blocking = clamav_total
         clamav_status = "FAIL" if clamav_blocking > 0 else "PASS"
 
-    # Determine status & counts for ZAP DAST
+    # ZAP DAST
     if not (SCANS_DIR / "zap-report.json").exists():
         zap_status = "MISSING"
         zap_total = 0
@@ -1184,7 +1126,7 @@ def export_dossier():
         zap_blocking = len([f for f in zap_findings_list if f.get("status") == "EXPOSED"])
         zap_status = "FAIL" if zap_blocking > 0 else "PASS"
 
-    # Final overall decision
+    # Decision
     failed_tools = []
     missing_tools = []
     for tool, status in [
@@ -1214,9 +1156,9 @@ def export_dossier():
         gate_decision = "ALLOWED"
         reason = "No blocking security issues found."
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Format Bandit findings
+    # Format Bandit
     bandit_findings = ""
     if bandit_report and bandit_report.get("results"):
         for issue in bandit_report.get("results", [])[:5]:
@@ -1233,7 +1175,7 @@ def export_dossier():
     else:
         bandit_findings = "  No issues detected.\n"
 
-    # Format Semgrep findings
+    # Format Semgrep
     semgrep_findings = ""
     if semgrep_report and semgrep_report.get("results"):
         for issue in semgrep_report.get("results", [])[:5]:
@@ -1251,7 +1193,7 @@ def export_dossier():
     else:
         semgrep_findings = "  No issues detected.\n"
 
-    # Format Safety findings
+    # Format Safety
     safety_findings = ""
     if safety_report:
         vulns = []
@@ -1276,7 +1218,7 @@ def export_dossier():
     else:
         safety_findings = "  No report file found.\n"
 
-    # Format Trivy findings
+    # Format Trivy
     trivy_findings = ""
     if trivy_report:
         trivy_vulns = []
@@ -1302,7 +1244,7 @@ def export_dossier():
     else:
         trivy_findings = "  No report file found.\n"
 
-    # Format Secrets findings
+    # Format Secrets
     secrets_findings = ""
     if secrets_report:
         secrets_results = secrets_report.get("results", {}) or {}
@@ -1324,7 +1266,7 @@ def export_dossier():
     else:
         secrets_findings = "  No report file found.\n"
 
-    # Format YARA findings
+    # Format YARA
     yara_findings_text = ""
     if yara_report:
         yara_list = yara_report if isinstance(yara_report, list) else []
@@ -1339,7 +1281,7 @@ def export_dossier():
     else:
         yara_findings_text = "  No report file found.\n"
 
-    # Format ClamAV findings
+    # Format ClamAV
     clamav_findings_text = ""
     if clamav_report:
         clamav_list = clamav_report if isinstance(clamav_report, list) else []
@@ -1354,7 +1296,7 @@ def export_dossier():
     else:
         clamav_findings_text = "  No report file found.\n"
 
-    # Format ZAP findings
+    # Format ZAP
     zap_findings_text = ""
     if zap_report:
         zap_list = zap_report if isinstance(zap_report, list) else []
@@ -1370,13 +1312,13 @@ def export_dossier():
         zap_findings_text = "  No report file found.\n"
 
     dossier_text = f"""================================================================================
- █████╗ ███████╗ ██████╗ ██╗███████╗
-██╔══██╗██╔════╝██╔════╝ ██║██╔════╝
-███████║█████╗  ██║  ███╗██║███████╗
-██╔══██║██╔══╝  ██║   ██║██║╚════██║
-██║  ██║███████╗╚██████╔╝██║███████║
-╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝
-      AEGIS DEVSECOPS COMPLIANCE DOSSIER
+  █████╗ ███████╗ ██████╗ ██╗███████╗
+ ██╔══██╗██╔════╝██╔════╝ ██║██╔════╝
+ ███████║█████╗  ██║  ███╗██║███████╗
+ ██╔══██║██╔══╝  ██║   ██║██║╚════██║
+ ██║  ██║███████╗╚██████╔╝██║███████║
+ ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝
+       AEGIS DEVSECOPS COMPLIANCE DOSSIER
 ================================================================================
 TIMESTAMP: {timestamp}
 GATE DECISION: {gate_decision}
@@ -1459,18 +1401,15 @@ FINDINGS:
                     [ END OF SECURE TRANSMISSION ]
 ================================================================================
 """
-
     return Response(
-        dossier_text,
-        mimetype="text/plain",
+        content=dossier_text,
+        media_type="text/plain",
         headers={
             "Content-Disposition": "attachment;filename=aegis-compliance-dossier.txt"
         }
     )
 
-
 if __name__ == "__main__":
+    import uvicorn
     initialize_database()
-
-    # Debug mode disabled for hardening.
-    app.run(host="0.0.0.0", port=5001, debug=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=False)

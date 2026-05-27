@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from policy_engine import analyze_semgrep
 from app.main import app, generate_fallback_tree
-
+from fastapi.testclient import TestClient
 
 def test_analyze_semgrep_pass():
     report = {"results": []}
@@ -66,33 +66,32 @@ def test_generate_fallback_tree():
 
 
 def test_get_dependency_graph_route():
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        response = client.get('/get-dependency-graph')
-        assert response.status_code == 200
-        assert response.headers['Content-Type'] == 'application/json'
-        
-        data = json.loads(response.data.decode('utf-8'))
-        assert "nodes" in data
-        assert "links" in data
-        
-        # Verify root node is present
-        root_node = [n for n in data["nodes"] if n["id"] == "aegis"]
-        assert len(root_node) == 1
-        assert root_node[0]["isRoot"] is True
-        assert root_node[0]["vulnerable"] is False
+    client = TestClient(app)
+    response = client.get('/get-dependency-graph')
+    assert response.status_code == 200
+    ct = response.headers.get('content-type', '') or response.headers.get('Content-Type', '')
+    assert ct.startswith('application/json')
+    
+    data = response.json()
+    assert "nodes" in data
+    assert "links" in data
+    
+    # Verify root node is present
+    root_node = [n for n in data["nodes"] if n["id"] == "aegis"]
+    assert len(root_node) == 1
+    assert root_node[0]["isRoot"] is True
+    assert root_node[0]["vulnerable"] is False
 
 
 def test_run_scan_generates_semgrep_report():
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        # Trigger scan
-        response = client.post('/run-scan', json={"target": "secure"})
-        assert response.status_code == 200
-        assert response.json['status'] == 'success'
-        
-        semgrep_report_path = Path("scans/semgrep-report.json")
-        assert semgrep_report_path.exists()
-        
-        data = json.loads(semgrep_report_path.read_text())
-        assert "results" in data
+    client = TestClient(app)
+    # Trigger scan
+    response = client.post('/run-scan', json={"target": "secure"})
+    assert response.status_code == 200
+    assert response.json()['status'] == 'success'
+    
+    semgrep_report_path = Path("scans/semgrep-report.json")
+    assert semgrep_report_path.exists()
+    
+    data = json.loads(semgrep_report_path.read_text())
+    assert "results" in data
