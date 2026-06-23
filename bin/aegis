@@ -32,8 +32,13 @@ echo "🛡️ Ensuring Python dependencies are installed..."
 pip install --upgrade pip
 pip install -r "$AEGIS_DIR/requirements.txt"
 
-# Run the app
-echo "🛡️ Starting Aegis Security Console..."
-echo "Access the dashboard at http://127.0.0.1:5001"
+# Run the app or CLI
 export AEGIS_DATA_DIR="$AEGIS_HOME"
-python "$AEGIS_DIR/app/main.py"
+if [ $# -gt 0 ]; then
+  python "$AEGIS_DIR/app/cli.py" "$@"
+else
+  echo "🛡️ Starting Aegis Security Console..."
+  echo "Access the dashboard at http://127.0.0.1:5001"
+  python "$AEGIS_DIR/app/main.py"
+fi
+

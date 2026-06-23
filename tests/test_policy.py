@@ -1,30 +1,27 @@
 import json
 from pathlib import Path
 from policy_engine import (
-    analyze_bandit,
+    analyze_ruff,
     analyze_safety,
     analyze_trivy,
 )
 
-def test_analyze_bandit_pass():
-    report = {"results": []}
-    result = analyze_bandit(report)
+def test_analyze_ruff_pass():
+    report = []
+    result = analyze_ruff(report)
     assert result["status"] == "PASS"
     assert result["total_issues"] == 0
 
-def test_analyze_bandit_fail():
-    report = {
-        "results": [
-            {
-                "issue_severity": "HIGH",
-                "test_id": "B101",
-                "filename": "test.py",
-                "line_number": 5,
-                "issue_text": "Use of assert"
-            }
-        ]
-    }
-    result = analyze_bandit(report)
+def test_analyze_ruff_fail():
+    report = [
+        {
+            "code": "S102",
+            "filename": "test.py",
+            "location": {"row": 5, "column": 1},
+            "message": "Use of exec"
+        }
+    ]
+    result = analyze_ruff(report)
     assert result["status"] == "FAIL"
     assert result["blocking_issues"] == 1
 

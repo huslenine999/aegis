@@ -31,6 +31,7 @@ from werkzeug.utils import secure_filename
 import redis
 
 from database import DB_PATH, initialize_database, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client, REDIS_AVAILABLE
+from policy_engine import get_ruff_severity
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
@@ -121,7 +122,7 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
                 pass
         return None
 
-    bandit = read_json_safe(scans_dir / "bandit-report.json")
+    ruff = read_json_safe(scans_dir / "ruff-report.json")
     semgrep = read_json_safe(scans_dir / "semgrep-report.json")
     safety = read_json_safe(scans_dir / "safety-report.json")
     trivy = read_json_safe(scans_dir / "trivy-report.json")
@@ -134,9 +135,9 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
     findings = []
     dast_exposed_multiplier = 1.0
 
-    if bandit and isinstance(bandit, dict):
-        for r in bandit.get("results", []):
-            sev = r.get("issue_severity", "LOW").upper()
+    if ruff and isinstance(ruff, list):
+        for r in ruff:
+            sev = get_ruff_severity(r.get("code", "UNKNOWN"))
             cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
             findings.append({"type": "sast", "cvss": cvss})
 
@@ -458,12 +459,12 @@ def get_scan_results():
         is_blocked = True
         reasons.append("ZAP DAST")
         
-    bandit = load_json_safe(SCANS_DIR / "bandit-report.json")
-    if bandit and isinstance(bandit, dict):
-        blocking_bandit = len([r for r in bandit.get("results", []) if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}])
-        if blocking_bandit > 0:
+    ruff = load_json_safe(SCANS_DIR / "ruff-report.json")
+    if ruff and isinstance(ruff, list):
+        blocking_ruff = len([r for r in ruff if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
+        if blocking_ruff > 0:
             is_blocked = True
-            reasons.append("Bandit")
+            reasons.append("Ruff (SAST)")
             
     semgrep = load_json_safe(SCANS_DIR / "semgrep-report.json")
     if semgrep and isinstance(semgrep, dict):
@@ -478,7 +479,7 @@ def get_scan_results():
             is_blocked = True
             reasons.append("OSV Dependency Audit")
             
-    has_run = (bandit is not None) or (semgrep is not None) or (osv is not None)
+    has_run = (ruff is not None) or (semgrep is not None) or (osv is not None)
 
     sandbox_status_file = SCANS_DIR / "sandbox-status.json"
     sandbox_status = "simulated_fallback"
@@ -692,7 +693,7 @@ async def run_scan(request: Request):
 async def websocket_scan(websocket: WebSocket, job_id: str):
     await websocket.accept()
     
-    r_conn = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379, db=0)
+    r_conn = redis_client
     pubsub = r_conn.pubsub()
     pubsub.subscribe(f"job_channel:{job_id}")
     
@@ -1011,7 +1012,7 @@ def export_dossier():
         except Exception:
             return None
 
-    bandit_report = load_json(SCANS_DIR / "bandit-report.json")
+    ruff_report = load_json(SCANS_DIR / "ruff-report.json")
     safety_report = load_json(SCANS_DIR / "safety-report.json")
     trivy_report = load_json(SCANS_DIR / "trivy-report.json")
     secrets_report = load_json(SCANS_DIR / "secrets-report.json")
@@ -1020,16 +1021,16 @@ def export_dossier():
     clamav_report = load_json(SCANS_DIR / "clamav-report.json")
     zap_report = load_json(SCANS_DIR / "zap-report.json")
 
-    # Bandit
-    if not (SCANS_DIR / "bandit-report.json").exists():
-        bandit_status = "MISSING"
-        bandit_total = 0
-        bandit_blocking = 0
+    # Ruff (SAST)
+    if not (SCANS_DIR / "ruff-report.json").exists():
+        ruff_status = "MISSING"
+        ruff_total = 0
+        ruff_blocking = 0
     else:
-        bandit_results = bandit_report.get("results", []) if bandit_report else []
-        bandit_total = len(bandit_results)
-        bandit_blocking = len([r for r in bandit_results if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}])
-        bandit_status = "FAIL" if bandit_blocking > 0 else "PASS"
+        ruff_results = ruff_report if isinstance(ruff_report, list) else []
+        ruff_total = len(ruff_results)
+        ruff_blocking = len([r for r in ruff_results if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
+        ruff_status = "FAIL" if ruff_blocking > 0 else "PASS"
 
     # Semgrep
     if not (SCANS_DIR / "semgrep-report.json").exists():
@@ -1123,7 +1124,7 @@ def export_dossier():
     failed_tools = []
     missing_tools = []
     for tool, status in [
-        ("Bandit", bandit_status),
+        ("Ruff (SAST)", ruff_status),
         ("Semgrep", semgrep_status),
         ("Safety", safety_status),
         ("Trivy", trivy_status),
@@ -1151,22 +1152,18 @@ def export_dossier():
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Format Bandit
-    bandit_findings = ""
-    if bandit_report and bandit_report.get("results"):
-        for issue in bandit_report.get("results", [])[:5]:
-            bandit_findings += f"  - ID: {issue.get('test_id')} | Severity: {issue.get('issue_severity')} | Confidence: {issue.get('issue_confidence')}\n"
-            bandit_findings += f"    Location: {issue.get('filename')}:{issue.get('line_number')}\n"
-            bandit_findings += f"    Details: {issue.get('issue_text')}\n"
-            code = issue.get('code', '')
-            if code:
-                code_lines = code.strip().split('\n')
-                bandit_findings += f"    Source:\n"
-                for cl in code_lines[:3]:
-                    bandit_findings += f"      >> {cl}\n"
-            bandit_findings += "  ------------------------------------------------------------------\n"
+    # Format Ruff
+    ruff_findings = ""
+    if ruff_report and isinstance(ruff_report, list):
+        for issue in ruff_report[:5]:
+            code = issue.get('code', 'UNKNOWN')
+            severity = get_ruff_severity(code)
+            ruff_findings += f"  - ID: {code} | Severity: {severity}\n"
+            ruff_findings += f"    Location: {issue.get('filename')}:{issue.get('location', {}).get('row')}\n"
+            ruff_findings += f"    Details: {issue.get('message')}\n"
+            ruff_findings += "  ------------------------------------------------------------------\n"
     else:
-        bandit_findings = "  No issues detected.\n"
+        ruff_findings = "  No issues detected.\n"
 
     # Format Semgrep
     semgrep_findings = ""
@@ -1318,14 +1315,14 @@ GATE DECISION: {gate_decision}
 REASON: {reason}
 ================================================================================
 
-[1] PYTHON SECURITY LINTER - BANDIT
+[1] PYTHON SECURITY LINTER - RUFF (SAST)
 --------------------------------------------------------------------------------
-Status: {bandit_status}
-Total Issues Detected: {bandit_total}
-Blocking Issues: {bandit_blocking}
+Status: {ruff_status}
+Total Issues Detected: {ruff_total}
+Blocking Issues: {ruff_blocking}
 
 FINDINGS (Top 5):
-{bandit_findings}
+{ruff_findings}
 
 [1.5] ADVANCED STATIC ANALYSIS ENGINE - SEMGREP
 --------------------------------------------------------------------------------

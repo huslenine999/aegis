@@ -18,6 +18,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client
+from policy_engine import get_ruff_severity
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
@@ -477,18 +478,15 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         # 2. State: RUNNING -> ANALYZING
         publish_job_event(job_id, "state", {"state": "analyzing", "progress": 30})
         
-        # SAST: Bandit
-        bandit_report_path = SCANS_DIR / "bandit-report.json"
+        # SAST: Ruff (SAST)
+        ruff_report_path = SCANS_DIR / "ruff-report.json"
         if has_python:
-            bandit_cmd = [python_bin, "-m", "bandit"]
-            if is_dir:
-                bandit_cmd.append("-r")
-            bandit_cmd.extend([target_path, "-f", "json", "-o", str(bandit_report_path)])
-            execute_subprocess_log(bandit_cmd, PROJECT_ROOT, job_id, "SAST:Bandit")
+            ruff_cmd = [python_bin, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+            execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
         else:
-            with open(bandit_report_path, "w") as f:
-                json.dump({"results": []}, f)
-            publish_job_event(job_id, "log", {"text": "[SAST:Bandit] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
+            with open(ruff_report_path, "w") as f:
+                json.dump([], f)
+            publish_job_event(job_id, "log", {"text": "[SAST:Ruff (SAST)] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
 
         # SAST: Semgrep
         semgrep_report_path = SCANS_DIR / "semgrep-report.json"
@@ -629,7 +627,7 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         clamav = load_json_safe(SCANS_DIR / "clamav-report.json")
         zap = load_json_safe(SCANS_DIR / "zap-report.json")
         osv = load_json_safe(SCANS_DIR / "osv-report.json")
-        bandit_rep = load_json_safe(SCANS_DIR / "bandit-report.json")
+        ruff_rep = load_json_safe(SCANS_DIR / "ruff-report.json")
         semgrep_rep = load_json_safe(SCANS_DIR / "semgrep-report.json")
         
         # Quick check for blocks
@@ -641,10 +639,14 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
             is_blocked = True
             reasons.append("ZAP DAST")
-        if bandit_rep and isinstance(bandit_rep, dict):
-            if len([r for r in bandit_rep.get("results", []) if r.get("issue_severity", "").upper() in {"MEDIUM", "HIGH"}]) > 0:
+        if ruff_rep and isinstance(ruff_rep, list):
+            blocking_issues = [
+                r for r in ruff_rep
+                if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}
+            ]
+            if len(blocking_issues) > 0:
                 is_blocked = True
-                reasons.append("Bandit")
+                reasons.append("Ruff (SAST)")
         if semgrep_rep and isinstance(semgrep_rep, dict):
             if len([r for r in semgrep_rep.get("results", []) if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}]) > 0:
                 is_blocked = True

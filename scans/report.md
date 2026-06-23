@@ -1,5 +1,5 @@
 # Aegis Security Scan Summary
-**Generated on:** 2026-05-27 19:54:53
+**Generated on:** 2026-06-23 12:12:27
 **Final Decision:** DEPLOYMENT ALLOWED
 **Reason:** No blocking security issues found.
 **Exploitability Score:** 0.0%
@@ -7,7 +7,7 @@
 ## Tool Results
 | Tool | Status | Total Issues | Blocking Issues |
 | --- | --- | --- | --- |
-| Bandit | PASS | 0 | 0 |
+| Ruff (SAST) | PASS | 0 | 0 |
 | Semgrep | PASS | 0 | 0 |
 | Safety | PASS | 0 | 0 |
 | OSV Dependency Audit | PASS | 0 | 0 |

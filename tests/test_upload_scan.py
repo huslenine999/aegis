@@ -27,7 +27,7 @@ def test_run_scan_default(client):
     assert response.json()['status'] == 'success'
     
     # Check that reports were generated
-    assert (SCANS_DIR / "bandit-report.json").exists()
+    assert (SCANS_DIR / "ruff-report.json").exists()
     assert (SCANS_DIR / "safety-report.json").exists()
     assert (SCANS_DIR / "trivy-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
@@ -50,10 +50,10 @@ def test_run_scan_custom_clean(client):
         assert len(subdirs) == 0
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "bandit-report.json").exists()
-    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
+    assert (SCANS_DIR / "ruff-report.json").exists()
+    ruff_report = json.loads((SCANS_DIR / "ruff-report.json").read_text())
     # Should find no issues
-    assert len(bandit_report.get("results", [])) == 0
+    assert len(ruff_report) == 0
 
 def test_run_scan_custom_vulnerable(client):
     """Ensure a custom vulnerable Python file upload runs successfully but fails the policy gate due to Bandit flagging it."""
@@ -67,10 +67,10 @@ def test_run_scan_custom_vulnerable(client):
     assert response.json()['status'] == 'success'
     
     # Ensure it contains the vulnerability
-    assert (SCANS_DIR / "bandit-report.json").exists()
-    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
-    assert len(bandit_report.get("results", [])) > 0
-    assert any("eval" in issue.get("issue_text", "").lower() or "b307" in issue.get("test_id", "").lower() for issue in bandit_report.get("results", []))
+    assert (SCANS_DIR / "ruff-report.json").exists()
+    ruff_report = json.loads((SCANS_DIR / "ruff-report.json").read_text())
+    assert len(ruff_report) > 0
+    assert any("eval" in issue.get("message", "").lower() or "s307" in issue.get("code", "").lower() for issue in ruff_report)
 
     # The HTML report should reflect BLOCKED because of the medium/high vulnerability in Bandit
     assert (SCANS_DIR / "report.html").exists()
@@ -84,14 +84,13 @@ def test_run_scan_vulnerable_target(client):
     assert response.json()['status'] == 'success'
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "bandit-report.json").exists()
+    assert (SCANS_DIR / "ruff-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
 
-    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
+    ruff_report = json.loads((SCANS_DIR / "ruff-report.json").read_text())
 
-    # If Bandit did not encounter internal errors, assert findings
-    if not bandit_report.get("errors"):
-        assert len(bandit_report.get("results", [])) > 0
+    # Assert findings are parsed
+    assert len(ruff_report) > 0
 
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "BLOCKED" in report_html
@@ -103,13 +102,13 @@ def test_run_scan_secure_target(client):
     assert response.json()['status'] == 'success'
 
     # Ensure reports are generated
-    assert (SCANS_DIR / "bandit-report.json").exists()
+    assert (SCANS_DIR / "ruff-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
 
-    bandit_report = json.loads((SCANS_DIR / "bandit-report.json").read_text())
+    ruff_report = json.loads((SCANS_DIR / "ruff-report.json").read_text())
 
     # The secure secure_main.py has no issues
-    assert len(bandit_report.get("results", [])) == 0
+    assert len(ruff_report) == 0
 
     report_html = (SCANS_DIR / "report.html").read_text()
     assert "ALLOWED" in report_html

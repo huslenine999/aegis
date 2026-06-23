@@ -60,11 +60,21 @@ async function setupEnv() {
 
 async function run() {
     await setupEnv();
-    console.log('🛡️ Starting Aegis Security Console...');
-    console.log('Access the dashboard at http://127.0.0.1:5001');
+    const args = process.argv.slice(2);
+    const cliPyPath = path.join(packageRoot, 'app', 'cli.py');
     
-    // Spawn Flask app
-    const appProcess = spawn(pythonBin, [mainPyPath], {
+    let targetScript = mainPyPath;
+    let runArgs = [mainPyPath];
+    
+    if (args.length > 0) {
+        targetScript = cliPyPath;
+        runArgs = [cliPyPath, ...args];
+    } else {
+        console.log('🛡️ Starting Aegis Security Console...');
+        console.log('Access the dashboard at http://127.0.0.1:5001');
+    }
+    
+    const appProcess = spawn(pythonBin, runArgs, {
         stdio: 'inherit',
         env: { ...process.env, AEGIS_DATA_DIR: aegisHome }
     });
@@ -75,3 +85,4 @@ async function run() {
 }
 
 run();
+

@@ -3151,6 +3151,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         let selectedNode = null;
         let hoveredNode = null;
         let isDragging = false;
+        let simAlpha = 1.0;
         
         function resizeDepCanvas() {
             if (!depCanvas) return;
@@ -3162,6 +3163,14 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         window.addEventListener('resize', resizeDepCanvas);
         
         function simulatePhysics() {
+            if (simAlpha < 0.005) {
+                depNodes.forEach(node => {
+                    node.vx = 0;
+                    node.vy = 0;
+                });
+                return;
+            }
+
             const kRepel = 900;
             const kAttract = 0.08;
             const friction = 0.85;
@@ -3180,11 +3189,15 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                     const n2 = depNodes[j];
                     const dx = n2.x - n1.x;
                     const dy = n2.y - n1.y;
+                    
+                    // Clamp minimum distance to prevent division by small/zero values causing explosive forces
                     const distSq = dx * dx + dy * dy + 0.1;
                     const dist = Math.sqrt(distSq);
+                    const effectiveDist = Math.max(dist, 30);
+                    const effectiveDistSq = effectiveDist * effectiveDist;
                     
                     if (dist < 180) {
-                        const force = kRepel / distSq;
+                        const force = kRepel / effectiveDistSq;
                         const fx = (dx / dist) * force;
                         const fy = (dy / dist) * force;
                         
@@ -3222,6 +3235,14 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 node.vx *= friction;
                 node.vy *= friction;
                 
+                // Cap maximum velocity to prevent explosive movement / high speed oscillations
+                const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+                const maxSpeed = 10;
+                if (speed > maxSpeed) {
+                    node.vx = (node.vx / speed) * maxSpeed;
+                    node.vy = (node.vy / speed) * maxSpeed;
+                }
+                
                 node.x += node.vx;
                 node.y += node.vy;
                 
@@ -3231,6 +3252,9 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 if (node.y < pad) { node.y = pad; node.vy = 0; }
                 if (node.y > depHeight - pad) { node.y = depHeight - pad; node.vy = 0; }
             });
+
+            // Decay the simulation alpha (cooling)
+            simAlpha *= 0.98;
         }
         
         function drawDepGraph() {
@@ -3448,6 +3472,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 
                 depNodes = data.nodes;
                 depLinks = data.links;
+                simAlpha = 1.0;
                 
             } catch (err) {
                 console.error("Failed to load dependency graph", err);
@@ -3471,6 +3496,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                     selectedNode.y = my;
                     selectedNode.vx = 0;
                     selectedNode.vy = 0;
+                    simAlpha = 1.0; // Reheat simulation during drag
                     updateDepTooltip(e);
                     return;
                 }

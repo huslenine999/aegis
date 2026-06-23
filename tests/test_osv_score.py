@@ -28,7 +28,7 @@ def test_parse_cvss_vector_invalid():
 
 def test_policy_exploitability_score_calculation():
     results = [
-        {"tool": "Bandit", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "examples": [
+        {"tool": "Ruff (SAST)", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "examples": [
             {"severity": "HIGH", "issue_text": "SQL Injection"}
         ]},
         {"tool": "OSV Dependency Audit", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "examples": [
@@ -49,7 +49,7 @@ def test_app_exploitability_score_calculation(tmp_path):
     scans_dir.mkdir()
     
     # Write blank reports
-    (scans_dir / "bandit-report.json").write_text(json.dumps({"results": []}))
+    (scans_dir / "ruff-report.json").write_text(json.dumps([]))
     (scans_dir / "semgrep-report.json").write_text(json.dumps({"results": []}))
     (scans_dir / "safety-report.json").write_text(json.dumps([]))
     (scans_dir / "trivy-report.json").write_text(json.dumps({"Results": []}))
@@ -62,10 +62,10 @@ def test_app_exploitability_score_calculation(tmp_path):
     # Assert base score is 0.0 when no issues
     assert app_main.calculate_exploitability_score(scans_dir, False) == 0.0
 
-    # Add a Bandit issue (HIGH = 8.5) and a ZAP exposed route issue (exposed multiplier = 1.5)
-    (scans_dir / "bandit-report.json").write_text(json.dumps({"results": [
-        {"issue_severity": "HIGH", "test_id": "B608", "filename": "app.py", "line_number": 10, "issue_text": "SQL Injection"}
-    ]}))
+    # Add a Ruff issue (HIGH = 8.5) and a ZAP exposed route issue (exposed multiplier = 1.5)
+    (scans_dir / "ruff-report.json").write_text(json.dumps([
+        {"code": "S608", "filename": "app.py", "location": {"row": 10}, "message": "SQL Injection"}
+    ]))
     (scans_dir / "zap-report.json").write_text(json.dumps([
         {"status": "EXPOSED", "vuln_type": "SQL Injection", "route": "/user", "payload": "' OR 1=1", "description": "SQL Injection"}
     ]))

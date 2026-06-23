@@ -63,7 +63,7 @@ def ping_host():
 
     # SECURE: Pass arguments as a list, shell=False
     command = ["ping", "-c", "1", host]
-    output = subprocess.check_output(command, shell=False, text=True)  # nosemgrep # nosec
+    output = subprocess.check_output(command, shell=False, text=True)  # nosemgrep # nosec # noqa: S603
 
     return jsonify({"output": output})
 
@@ -178,11 +178,11 @@ def ssrf_demo():
 
         # 4. Perform safe fetch of validated public address
         import urllib.request
-        req = urllib.request.Request(
+        req = urllib.request.Request(  # noqa: S310
             url,
             headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
         )
-        with urllib.request.urlopen(req, timeout=2) as response:  # nosec B310
+        with urllib.request.urlopen(req, timeout=2) as response:  # nosec B310  # noqa: S310
             content = response.read().decode('utf-8', errors='ignore')
             return jsonify({
                 "url": url,
@@ -213,5 +213,5 @@ if __name__ == "__main__":
             pass
 
     # SECURE: Debug mode always False in production
-    app.run(host="0.0.0.0", port=port, debug=False)  # nosemgrep # nosec
+    app.run(host="0.0.0.0", port=port, debug=False)  # nosemgrep # nosec # noqa: S104
 

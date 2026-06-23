@@ -15,14 +15,10 @@ from jinja2 import Template
 # Use SCANS_DIR from environment if provided (useful for Vercel /tmp)
 SCAN_DIR = Path(os.environ.get("SCANS_DIR", "scans"))
 
-# First check if the template exists in the current working directory,
-# otherwise fall back to locating it relative to the script's directory.
-TEMPLATE_PATH = Path("app/templates/report_template.html")
-if not TEMPLATE_PATH.exists():
-    script_dir = Path(__file__).resolve().parent
-    TEMPLATE_PATH = script_dir / "app" / "templates" / "report_template.html"
+SCRIPT_DIR = Path(__file__).resolve().parent
+TEMPLATE_PATH = SCRIPT_DIR / "app" / "templates" / "report_template.html"
 
-BANDIT_REPORT = SCAN_DIR / "bandit-report.json"
+RUFF_REPORT = SCAN_DIR / "ruff-report.json"
 SAFETY_REPORT = SCAN_DIR / "safety-report.json"
 TRIVY_REPORT = SCAN_DIR / "trivy-report.json"
 SECRETS_REPORT = SCAN_DIR / "secrets-report.json"
@@ -42,7 +38,7 @@ def get_env_set(var_name: str, default: set) -> set:
     return {item.strip().upper() for item in val.split(",") if item.strip()}
 
 
-FAIL_ON_BANDIT_SEVERITIES = get_env_set("FAIL_ON_BANDIT", {"MEDIUM", "HIGH"})
+FAIL_ON_RUFF_SEVERITIES = get_env_set("FAIL_ON_RUFF", get_env_set("FAIL_ON_BANDIT", {"MEDIUM", "HIGH"}))
 FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
 FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", {"MEDIUM", "HIGH", "CRITICAL"})
 FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", {"MEDIUM", "HIGH"})
@@ -60,35 +56,75 @@ def load_json(path: Path) -> Any:
         return None
 
 
-def analyze_bandit(report: Dict[str, Any]) -> Dict[str, Any]:
-    if not report:
+def get_ruff_severity(code: str) -> str:
+    # Basic mapping of flake8-bandit S-rules in Ruff to severity levels
+    high_rules = {
+        "S102",  # exec
+        "S105", "S106", "S107",  # hardcoded password
+        "S301",  # pickle
+        "S304", "S305",  # insecure ciphers
+        "S307",  # eval
+        "S312",  # telnet
+        "S501",  # ssl no verify
+        "S506",  # unsafe yaml load
+        "S601", "S602", "S605",  # shell injection / subprocess shell=True
+        "S608",  # SQL injection
+        "S701",  # jinja2 autoescape=False
+    }
+    medium_rules = {
+        "S103", "S104",  # bad permissions, bind all interfaces
+        "S113",  # requests without timeout
+        "S302",  # marshal
+        "S303",  # insecure hash
+        "S306",  # mktemp
+        "S308",  # django mark_safe
+        "S310",  # urllib urlopen
+        "S313", "S314", "S315", "S316", "S317", "S318", "S319", "S320",  # xml issues
+        "S324",  # hashlib insecure
+        "S508",  # snmp insecure
+        "S604",  # shell/subprocess
+        "S607",  # partial path
+        "S609",  # wildcard injection
+    }
+    code_upper = code.upper()
+    if code_upper in high_rules:
+        return "HIGH"
+    elif code_upper in medium_rules:
+        return "MEDIUM"
+    return "LOW"
+
+
+def analyze_ruff(report: Any) -> Dict[str, Any]:
+    if report is None or not isinstance(report, list):
         return {
-            "tool": "Bandit",
+            "tool": "Ruff (SAST)",
             "total_issues": 0,
             "blocking_issues": 0,
             "status": "MISSING",
             "examples": [],
         }
 
-    results = report.get("results", []) if report else []
+    results = report if isinstance(report, list) else []
     issues = []
     
     for r in results:
+        code = r.get("code", "UNKNOWN")
+        severity = get_ruff_severity(code)
         issues.append({
-            "severity": r.get("issue_severity", "LOW").upper(),
-            "test_id": r.get("test_id"),
+            "severity": severity,
+            "test_id": code,
             "filename": r.get("filename"),
-            "line_number": r.get("line_number"),
-            "issue_text": r.get("issue_text"),
+            "line_number": r.get("location", {}).get("row"),
+            "issue_text": r.get("message"),
         })
 
     blocking_issues = [
         issue for issue in issues
-        if issue["severity"] in FAIL_ON_BANDIT_SEVERITIES
+        if issue["severity"] in FAIL_ON_RUFF_SEVERITIES
     ]
 
     return {
-        "tool": "Bandit",
+        "tool": "Ruff (SAST)",
         "total_issues": len(issues),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
@@ -618,7 +654,7 @@ def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: b
     
     for r in results:
         tool = r.get("tool")
-        if tool == "Bandit":
+        if tool == "Ruff (SAST)":
             for ex in r.get("examples", []):
                 sev = ex.get("severity", "LOW").upper()
                 cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
@@ -683,8 +719,17 @@ def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: b
     return round(min(100.0, score), 1)
 
 
-def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: str, exploitability_score: float = 0.0):
+def generate_reports(
+    results: List[Dict[str, Any]],
+    final_status: str,
+    reason: str,
+    exploitability_score: float = 0.0,
+    html_path: Path = None,
+    md_path: Path = None
+):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    h_path = html_path if html_path is not None else HTML_REPORT
+    m_path = md_path if md_path is not None else MD_REPORT
     
     # Generate HTML Report
     if TEMPLATE_PATH.exists():
@@ -696,8 +741,8 @@ def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: s
             timestamp=timestamp,
             exploitability_score=exploitability_score
         )
-        HTML_REPORT.write_text(html_content)
-        print(f"[INFO] HTML report generated: {HTML_REPORT}")
+        h_path.write_text(html_content)
+        print(f"[INFO] HTML report generated: {h_path}")
     else:
         print(f"[WARN] Template not found at {TEMPLATE_PATH}, skipping HTML report.")
 
@@ -717,8 +762,8 @@ def generate_reports(results: List[Dict[str, Any]], final_status: str, reason: s
         md_lines.append(f"| {r['tool']} | {r['status']} | {r['total_issues']} | {r['blocking_issues']} |")
     
     md_lines.append("\n---\n*Generated by Aegis Policy Engine*")
-    MD_REPORT.write_text("\n".join(md_lines))
-    print(f"[INFO] Markdown report generated: {MD_REPORT}")
+    m_path.write_text("\n".join(md_lines))
+    print(f"[INFO] Markdown report generated: {m_path}")
 
 
 def print_result(result: Dict[str, Any]) -> None:
@@ -733,40 +778,49 @@ def print_result(result: Dict[str, Any]) -> None:
             print(json.dumps(example, indent=2, ensure_ascii=False))
 
 
-def main() -> int:
-    print("=== Aegis Policy Engine ===")
-
-    # Run CycloneDX SBOM Generation
-    try:
+def run_policy_engine(
+    scan_dir: Path,
+    html_path: Path = None,
+    md_path: Path = None,
+    req_path: Path = None,
+    reporter_callback = None
+) -> int:
+    if not req_path:
         req_path = Path("requirements.txt")
         if not req_path.exists():
             script_dir = Path(__file__).resolve().parent
             req_path = script_dir / "requirements.txt"
-        generate_cyclonedx_sbom(req_path, SCAN_DIR / "sbom.json")
+
+    # Run CycloneDX SBOM Generation
+    try:
+        generate_cyclonedx_sbom(req_path, scan_dir / "sbom.json")
     except Exception as e:
         print(f"[WARN] Failed to generate SBOM manifest: {e}")
 
-    bandit_report = load_json(BANDIT_REPORT)
-    safety_report = load_json(SAFETY_REPORT)
-    trivy_report = load_json(TRIVY_REPORT)
-    secrets_report = load_json(SECRETS_REPORT)
-    yara_report = load_json(YARA_REPORT)
-    semgrep_report = load_json(SEMGREP_REPORT)
-    clamav_report = load_json(CLAMAV_REPORT)
-    zap_report = load_json(ZAP_REPORT)
+    ruff_report = load_json(scan_dir / "ruff-report.json")
+    safety_report = load_json(scan_dir / "safety-report.json")
+    trivy_report = load_json(scan_dir / "trivy-report.json")
+    secrets_report = load_json(scan_dir / "secrets-report.json")
+    yara_report = load_json(scan_dir / "yara-report.json")
+    semgrep_report = load_json(scan_dir / "semgrep-report.json")
+    clamav_report = load_json(scan_dir / "clamav-report.json")
+    zap_report = load_json(scan_dir / "zap-report.json")
 
-    # Execute OSV scan
-    osv_report_path = SCAN_DIR / "osv-report.json"
-    try:
-        osv_findings = query_osv_vulnerabilities(req_path)
-        osv_report_path.write_text(json.dumps(osv_findings, indent=2))
-        print(f"[INFO] OSV scan completed. Report written to {osv_report_path}")
-    except Exception as e:
-        print(f"[WARN] OSV scan execution failed: {e}")
-        osv_findings = []
+    osv_report_path = scan_dir / "osv-report.json"
+    cached_osv_report = load_json(osv_report_path)
+    if cached_osv_report is not None:
+        osv_findings = cached_osv_report
+    else:
+        try:
+            osv_findings = query_osv_vulnerabilities(req_path)
+            osv_report_path.write_text(json.dumps(osv_findings, indent=2))
+            print(f"[INFO] OSV scan completed. Report written to {osv_report_path}")
+        except Exception as e:
+            print(f"[WARN] OSV scan execution failed: {e}")
+            osv_findings = []
 
     results = [
-        analyze_bandit(bandit_report),
+        analyze_ruff(ruff_report),
         analyze_semgrep(semgrep_report),
         analyze_safety(safety_report),
         analyze_osv(osv_findings),
@@ -777,13 +831,8 @@ def main() -> int:
         analyze_zap(zap_report),
     ]
 
-    for result in results:
-        print_result(result)
-
     failed_tools = [result["tool"] for result in results if result["status"] == "FAIL"]
     missing_tools = [result["tool"] for result in results if result["status"] == "MISSING"]
-
-    print("\n=== Final Decision ===")
 
     final_status = "ALLOWED"
     reason = "No blocking security issues found."
@@ -797,17 +846,28 @@ def main() -> int:
             reasons.append(f"Required scan reports missing for: {', '.join(missing_tools)}")
         reason = " | ".join(reasons)
 
-    print(f"DEPLOYMENT {final_status}")
-    print(f"Reason: {reason}")
-
     # Determine WAF status from environment (injected by main.py)
     waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
     exploitability_score = calculate_exploitability_score(results, waf_enabled)
-    print(f"Exploitability Score: {exploitability_score}%")
 
-    generate_reports(results, final_status, reason, exploitability_score)
+    if reporter_callback:
+        reporter_callback(results, final_status, reason, exploitability_score)
+    else:
+        for result in results:
+            print_result(result)
+        print("\n=== Final Decision ===")
+        print(f"DEPLOYMENT {final_status}")
+        print(f"Reason: {reason}")
+        print(f"Exploitability Score: {exploitability_score}%")
+
+    generate_reports(results, final_status, reason, exploitability_score, html_path=html_path, md_path=md_path)
 
     return 1 if final_status == "BLOCKED" else 0
+
+
+def main() -> int:
+    print("=== Aegis Policy Engine ===")
+    return run_policy_engine(SCAN_DIR)
 
 
 if __name__ == "__main__":
