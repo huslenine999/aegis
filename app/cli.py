@@ -1,11 +1,12 @@
 import os
 import sys
-import re
 import json
 import uuid
 import shutil
 import socket
 import subprocess
+import contextlib
+import importlib.metadata
 from pathlib import Path
 
 # Add project root to sys.path
@@ -14,6 +15,9 @@ sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "app"))
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
+from scanners import run_clamav_scan as shared_run_clamav_scan
+from scanners import run_yara_scan as shared_run_yara_scan
+from scanners import write_semgrep_rules
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox
@@ -30,6 +34,51 @@ def should_skip_path(path: Path) -> bool:
 def write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
+
+
+def get_package_version() -> str:
+    package_path = PROJECT_ROOT / "package.json"
+    if package_path.exists():
+        try:
+            return json.loads(package_path.read_text()).get("version", "unknown")
+        except json.JSONDecodeError:
+            return "unknown"
+    return "unknown"
+
+
+def set_fail_on_env(severities: str):
+    severity_set = {
+        severity.strip().upper()
+        for severity in severities.split(",")
+        if severity.strip()
+    }
+    normalized = ",".join(sorted(severity_set))
+    if normalized:
+        os.environ["FAIL_ON_RUFF"] = normalized
+        os.environ["FAIL_ON_SEMGREP"] = normalized
+        os.environ["FAIL_ON_TRIVY"] = normalized
+        import policy_engine
+        policy_engine.FAIL_ON_RUFF_SEVERITIES = severity_set
+        policy_engine.FAIL_ON_SEMGREP_SEVERITIES = severity_set
+        policy_engine.FAIL_ON_TRIVY_SEVERITIES = severity_set
+
+
+def build_scan_summary(target_path: Path, scan_dir: Path, exit_code: int, policy_summary: dict) -> dict:
+    return {
+        "target": str(target_path),
+        "scan_dir": str(scan_dir),
+        "html_report": str(scan_dir / "report.html"),
+        "markdown_report": str(scan_dir / "report.md"),
+        "exit_code": exit_code,
+        "status": "allowed" if exit_code == 0 else "blocked",
+        **policy_summary,
+    }
+
+
+def find_free_host_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
 
 
 def run_scanner_command(command, *, stdout=None, timeout: int = DEFAULT_TOOL_TIMEOUT, label: str = "Scanner") -> int:
@@ -52,168 +101,15 @@ def run_scanner_command(command, *, stdout=None, timeout: int = DEFAULT_TOOL_TIM
     return 1
 
 
-def run_yara_scan(target_path: Path):
-    findings = []
-    # 1. Try to scan using the compiled yara-python library
-    try:
-        import yara
-        yara_rules_path = PROJECT_ROOT / "rules" / "aegis_rules.yar"
-        if not yara_rules_path.exists():
-            yara_rules_path = Path("rules/aegis_rules.yar")
-        
-        if yara_rules_path.exists():
-            rules = yara.compile(filepath=str(yara_rules_path))
-            
-            def scan_file(file_path):
-                try:
-                    matches = rules.match(filepath=str(file_path))
-                    for m in matches:
-                        finding = {
-                            "rule": m.rule,
-                            "filename": str(file_path),
-                            "description": m.meta.get("description", "YARA rule match"),
-                            "author": m.meta.get("author", "Aegis")
-                        }
-                        findings.append(finding)
-                        print(f"  \033[93m[YARA] MATCH: {m.rule} in {file_path}\033[0m")
-                except Exception as e:
-                    print(f"  \033[91m[YARA Error] {file_path}: {e}\033[0m")
-
-            if target_path.is_dir():
-                for root, dirs, files in os.walk(target_path):
-                    if should_skip_path(Path(root)):
-                        continue
-                    for file in files:
-                        if file.endswith(".py"):
-                            scan_file(Path(root) / file)
-            else:
-                scan_file(target_path)
-            return findings
-    except ImportError:
-        print("  \033[90m[YARA] yara-python missing. Falling back to signature scan.\033[0m")
-
-    # 2. Fallback regex-based signature scanner
-    def scan_file_fallback(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            
-            # Rule 1: Backdoor_Webshell
-            p1 = re.search(r'eval\(\s*request\.(args|form|values)', content)
-            p2 = re.search(r'exec\(\s*request\.(args|form|values)', content)
-            p3 = re.search(r'subprocess\.Popen\(\s*request\.args', content)
-            p4 = re.search(r'subprocess\.check_output\(\s*request\.args', content)
-            if p1 or p2 or p3 or p4:
-                findings.append({
-                    "rule": "Backdoor_Webshell",
-                    "filename": str(file_path),
-                    "description": "Detects Python webshell or remote command execution patterns",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                print(f"  \033[93m[YARA Fallback] MATCH: Backdoor_Webshell in {file_path}\033[0m")
-                
-            # Rule 2: Obfuscated_Payload
-            has_b64 = "base64.b64decode" in content
-            has_exec = "exec(" in content
-            has_eval = "eval(" in content
-            if has_b64 and (has_exec or has_eval):
-                findings.append({
-                    "rule": "Obfuscated_Payload",
-                    "filename": str(file_path),
-                    "description": "Detects base64 obfuscation combined with execution",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                print(f"  \033[93m[YARA Fallback] MATCH: Obfuscated_Payload in {file_path}\033[0m")
-                
-            # Rule 3: Suspicious_Shell_Spawn
-            has_sh = ("/bin/sh" in content) or ("/bin/bash" in content)
-            has_pty = "pty.spawn" in content
-            has_socket = "socket.socket" in content
-            has_sub = ("subprocess.Popen" in content) or ("subprocess.call" in content)
-            if (has_sh and has_pty) or (has_socket and has_sub and has_sh):
-                findings.append({
-                    "rule": "Suspicious_Shell_Spawn",
-                    "filename": str(file_path),
-                    "description": "Detects shell spawning commands, likely for reverse shells",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                print(f"  \033[93m[YARA Fallback] MATCH: Suspicious_Shell_Spawn in {file_path}\033[0m")
-        except Exception as e:
-            print(f"  \033[91m[Fallback Scan Error] {file_path}: {e}\033[0m")
-
-    if target_path.is_dir():
-        for root, dirs, files in os.walk(target_path):
-            if should_skip_path(Path(root)):
-                continue
-            for file in files:
-                if file.endswith(".py"):
-                    scan_file_fallback(Path(root) / file)
-    else:
-        scan_file_fallback(target_path)
-    return findings
-
-def run_clamav_scan(target_path: Path):
-    findings = []
-    clamscan_bin = shutil.which("clamscan")
-    if clamscan_bin:
-        try:
-            print("  [ClamAV] Starting ClamAV scanning CLI...")
-            result = subprocess.run(
-                [clamscan_bin, "-r", "--infected", str(target_path)],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=DEFAULT_TOOL_TIMEOUT,
-            )
-            for line in result.stdout.splitlines():
-                if "FOUND" in line:
-                    parts = line.split(":")
-                    if len(parts) >= 2:
-                        filename = parts[0].strip()
-                        virus_part = parts[1].replace("FOUND", "").strip()
-                        findings.append({
-                            "filename": filename,
-                            "virus": virus_part,
-                            "description": f"ClamAV detected malware signature: {virus_part}"
-                        })
-                        print(f"  \033[91m[ClamAV] MATCH: {virus_part} in {filename}\033[0m")
-            return findings
-        except Exception as e:
-            print(f"  \033[91m[ClamAV Error] {e}\033[0m")
-
-    # Fallback pure-Python scan
-    eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-    
-    def scan_file_clamav(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            if eicar_sig in content:
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "EICAR-Test-Signature",
-                    "description": "Matched EICAR standard antivirus test signature"
-                })
-                print(f"  \033[91m[ClamAV Fallback] MATCH: EICAR-Test-Signature in {file_path}\033[0m")
-            if re.search(r'(eval|exec)\(\s*base64\.b64decode', content):
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "Python.Backdoor.Base64Decoder",
-                    "description": "Detected base64-encoded Python execution pattern, indicating potential backdoor/webshell"
-                })
-                print(f"  \033[91m[ClamAV Fallback] MATCH: Python.Backdoor.Base64Decoder in {file_path}\033[0m")
-        except Exception:
-            pass
-
-    if target_path.is_dir():
-        for root, dirs, files in os.walk(target_path):
-            if should_skip_path(Path(root)):
-                continue
-            for file in files:
-                if file.endswith(".py") or file.endswith(".txt"):
-                    scan_file_clamav(Path(root) / file)
-    else:
-        scan_file_clamav(target_path)
-
-    return findings
+def log_scanner_event(message: str, level: str = "info"):
+    colors = {
+        "error": "\033[91m",
+        "match": "\033[93m",
+        "muted": "\033[90m",
+    }
+    color = colors.get(level, "")
+    reset = "\033[0m" if color else ""
+    print(f"  {color}{message}{reset}")
 
 def run_dast_scan(target_url: str = None):
     findings = []
@@ -292,51 +188,6 @@ def run_dast_scan(target_url: str = None):
                 "response_code": status_code
             })
     return findings
-
-def write_semgrep_rules(path: Path):
-    rules_content = """rules:
-  - id: python-sqli
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(..., $VAR)
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-      - pattern-not:
-          - pattern: $CURSOR.execute("...", ...)
-    message: "Detected potential SQL injection via string formatting or interpolation in database execution."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-rce
-    patterns:
-      - pattern-either:
-          - pattern: subprocess.check_output(..., shell=True)
-          - pattern: subprocess.run(..., shell=True)
-          - pattern: subprocess.Popen(..., shell=True)
-          - pattern: os.system(...)
-    message: "Detected command injection risk via subprocess/os.system with shell=True."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-eval
-    pattern: eval(...)
-    message: "Detected unsafe use of eval()."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-pickle
-    pattern: pickle.loads(...)
-    message: "Detected unsafe deserialization with pickle."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-weak-hash
-    pattern: hashlib.md5(...)
-    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
-    languages: [python]
-    severity: WARNING
-"""
-    path.write_text(rules_content)
 
 def format_cell(text: str, width: int, align: str = "left", color: str = "") -> str:
     if align == "left":
@@ -447,16 +298,34 @@ def print_ascii_report(results: list, final_status: str, reason: str, exploitabi
     
     print(f"  {cyan}╚══════════════════════════════════════════════════════════════════════════╝{reset}")
 
-def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout: int = DEFAULT_TOOL_TIMEOUT) -> int:
+def execute_scan(
+    target_path_str: str,
+    *,
+    use_docker: bool = True,
+    tool_timeout: int = DEFAULT_TOOL_TIMEOUT,
+    output_dir: str = None,
+    json_output: bool = False,
+    quiet: bool = False,
+    fail_on: str = None,
+    return_summary: bool = False,
+):
+    if fail_on:
+        set_fail_on_env(fail_on)
+
     target_path = Path(target_path_str).resolve()
     if not target_path.exists():
         print(f"❌ Error: Path '{target_path}' does not exist.")
+        if return_summary:
+            return {"target": str(target_path), "exit_code": 1, "status": "error", "error": "target_not_found"}
         return 1
 
     print(f"🛡️  Aegis CLI Scanner: Auditing target path: {target_path}")
 
     # Set up local scans directory
-    if target_path.is_dir():
+    if output_dir:
+        scan_dir = Path(output_dir).expanduser().resolve()
+        req_file = (target_path / "requirements.txt") if target_path.is_dir() else (target_path.parent / "requirements.txt")
+    elif target_path.is_dir():
         scan_dir = target_path / ".aegis" / "scans"
         req_file = target_path / "requirements.txt"
     else:
@@ -536,12 +405,12 @@ def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout:
 
     # 5. YARA Pattern Audits
     print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
-    yara_findings = run_yara_scan(target_path)
+    yara_findings = shared_run_yara_scan(target_path, log=log_scanner_event)
     write_json(scan_dir / "yara-report.json", yara_findings)
 
     # 6. ClamAV Malware Scan
     print("🔍 [ClamAV] Searching files for virus signatures...")
-    clamav_findings = run_clamav_scan(target_path)
+    clamav_findings = shared_run_clamav_scan(target_path, timeout=tool_timeout, log=log_scanner_event)
     write_json(scan_dir / "clamav-report.json", clamav_findings)
 
     # 7. Sandbox Execution (Trivy & DAST) via Docker
@@ -565,16 +434,20 @@ def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout:
         sandbox_temp_dir = scan_dir / "sandbox" / sandbox_uuid
         
         try:
-            host_port = None
-            # Find a free host port
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
-                host_port = s.getsockname()[1]
+            host_port = find_free_host_port()
                 
-            port = scaffold_sandbox_context(target_path, sandbox_temp_dir)
-            build_sandbox_image(sandbox_temp_dir, sandbox_image)
-            run_sandbox_container(sandbox_container, sandbox_image, port, host_port)
-            wait_for_container(host_port)
+            container_port = scaffold_sandbox_context(target_path, sandbox_temp_dir)
+            target_url = f"http://127.0.0.1:{host_port}"
+            waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
+
+            if not build_sandbox_image(sandbox_temp_dir, sandbox_image):
+                raise RuntimeError("failed to build sandbox image")
+
+            if not run_sandbox_container(sandbox_image, sandbox_container, host_port, container_port, waf_enabled):
+                raise RuntimeError("failed to start sandbox container")
+
+            if not wait_for_container(target_url, timeout=6.0):
+                raise RuntimeError("sandbox container did not become healthy")
 
             # 7a. Trivy layer audits
             trivy_report_path = scan_dir / "trivy-report.json"
@@ -587,7 +460,7 @@ def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout:
             # 7b. ZAP DAST active scanning
             zap_report_path = scan_dir / "zap-report.json"
             print("  [DAST] Running active crawler against endpoints...")
-            zap_findings = run_dast_scan(f"http://127.0.0.1:{host_port}")
+            zap_findings = run_dast_scan(target_url)
             write_json(zap_report_path, zap_findings)
 
         except Exception as e:
@@ -607,6 +480,17 @@ def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout:
     print("\nEvaluating all reports against Aegis Security Gate rules...")
     html_report = scan_dir / "report.html"
     md_report = scan_dir / "report.md"
+    policy_summary = {}
+
+    def capture_policy_summary(results, final_status, reason, exploitability_score):
+        policy_summary.update({
+            "policy_status": final_status,
+            "reason": reason,
+            "exploitability_score": exploitability_score,
+            "results": results,
+        })
+        if not json_output and not quiet:
+            print_ascii_report(results, final_status, reason, exploitability_score)
     
     # Run the policy engine
     exit_code = run_policy_engine(
@@ -614,11 +498,46 @@ def execute_scan(target_path_str: str, *, use_docker: bool = True, tool_timeout:
         html_path=html_report,
         md_path=md_report,
         req_path=req_file if req_file.exists() else None,
-        reporter_callback=print_ascii_report
+        reporter_callback=capture_policy_summary
     )
 
     print(f"\nScan complete. Dossier report available at: {html_report}")
+    if return_summary:
+        return build_scan_summary(target_path, scan_dir, exit_code, policy_summary)
     return exit_code
+
+
+def run_doctor(json_output: bool = False) -> int:
+    checks = []
+
+    def add_check(name, ok, detail):
+        checks.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    add_check("python", True, sys.version.split()[0])
+    add_check("project_root", PROJECT_ROOT.exists(), str(PROJECT_ROOT))
+    add_check("ruff", True, "python module available")
+    try:
+        importlib.metadata.version("ruff")
+    except importlib.metadata.PackageNotFoundError:
+        checks[-1] = {"name": "ruff", "ok": False, "detail": "python module missing"}
+
+    semgrep_bin = shutil.which("semgrep")
+    add_check("semgrep", semgrep_bin is not None, semgrep_bin or "not found")
+    trivy_bin = shutil.which("trivy")
+    add_check("trivy", trivy_bin is not None, trivy_bin or "not found")
+    add_check("docker", is_docker_available(), "available" if is_docker_available() else "unavailable")
+
+    ok = all(check["ok"] for check in checks if check["name"] in {"python", "project_root", "ruff"})
+    payload = {"status": "ok" if ok else "degraded", "checks": checks}
+
+    if json_output:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Aegis doctor: {payload['status']}")
+        for check in checks:
+            marker = "OK" if check["ok"] else "WARN"
+            print(f"  [{marker}] {check['name']}: {check['detail']}")
+    return 0 if ok else 1
 
 def install_hook():
     git_dir = Path(".git")
@@ -681,18 +600,54 @@ def main():
     scan_parser.add_argument("path", nargs="?", default=".", help="Target path to scan (defaults to current directory)")
     scan_parser.add_argument("--no-docker", action="store_true", help="Skip Docker sandbox, Trivy, and DAST scans")
     scan_parser.add_argument("--timeout", type=int, default=DEFAULT_TOOL_TIMEOUT, help="Per-tool timeout in seconds")
+    scan_parser.add_argument("--output", help="Directory for generated scan reports")
+    scan_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON summary to stdout")
+    scan_parser.add_argument("--quiet", action="store_true", help="Suppress scan progress output")
+    scan_parser.add_argument("--fail-on", help="Comma-separated severities that should block, e.g. high,critical")
 
     subparsers.add_parser("install-hook", help="Install Aegis Git pre-push hook")
     subparsers.add_parser("uninstall-hook", help="Uninstall Aegis Git pre-push hook")
+    doctor_parser = subparsers.add_parser("doctor", help="Check local scanner dependencies")
+    doctor_parser.add_argument("--json", action="store_true", help="Print doctor output as JSON")
+    subparsers.add_parser("version", help="Print Aegis version")
 
     args = parser.parse_args()
 
     if args.command == "scan":
-        return execute_scan(args.path, use_docker=not args.no_docker, tool_timeout=args.timeout)
+        if args.json or args.quiet:
+            sink = sys.stderr if args.json else open(os.devnull, "w")
+            with contextlib.redirect_stdout(sink):
+                summary = execute_scan(
+                    args.path,
+                    use_docker=not args.no_docker,
+                    tool_timeout=args.timeout,
+                    output_dir=args.output,
+                    json_output=args.json,
+                    quiet=args.quiet,
+                    fail_on=args.fail_on,
+                    return_summary=True,
+                )
+            if not args.json:
+                sink.close()
+            if args.json:
+                print(json.dumps(summary, indent=2))
+            return summary.get("exit_code", 1)
+        return execute_scan(
+            args.path,
+            use_docker=not args.no_docker,
+            tool_timeout=args.timeout,
+            output_dir=args.output,
+            fail_on=args.fail_on,
+        )
     elif args.command == "install-hook":
         return install_hook()
     elif args.command == "uninstall-hook":
         return uninstall_hook()
+    elif args.command == "doctor":
+        return run_doctor(json_output=args.json)
+    elif args.command == "version":
+        print(get_package_version())
+        return 0
     else:
         parser.print_help()
         return 1

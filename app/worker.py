@@ -1,14 +1,11 @@
 import os
 import sys
-import re
 import uuid
 import json
 import shutil
 import socket
 import subprocess
 import time
-import pickle
-import hashlib
 import sqlite3
 from pathlib import Path
 import redis
@@ -19,6 +16,9 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client
 from policy_engine import get_ruff_severity
+from scanners import run_clamav_scan as shared_run_clamav_scan
+from scanners import run_yara_scan as shared_run_yara_scan
+from scanners import write_semgrep_rules
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
@@ -59,209 +59,30 @@ def load_waf_rules_from_db():
     finally:
         conn.close()
 
-def write_semgrep_rules(path):
-    rules_content = """rules:
-  - id: python-sqli
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(..., $VAR)
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-      - pattern-not:
-          - pattern: $CURSOR.execute("...", ...)
-    message: "Detected potential SQL injection via string formatting or interpolation in database execution."
-    languages: [python]
-    severity: ERROR
 
-  - id: python-rce
-    patterns:
-      - pattern-either:
-          - pattern: subprocess.check_output(..., shell=True)
-          - pattern: subprocess.run(..., shell=True)
-          - pattern: subprocess.Popen(..., shell=True)
-          - pattern: os.system(...)
-    message: "Detected command injection risk via subprocess/os.system with shell=True."
-    languages: [python]
-    severity: ERROR
+def job_log_callback(job_id: str):
+    color_by_level = {
+        "error": "var(--danger)",
+        "match": "var(--secondary)",
+        "muted": "var(--text-muted)",
+        "info": "var(--text-muted)",
+    }
 
-  - id: python-eval
-    pattern: eval(...)
-    message: "Detected unsafe use of eval()."
-    languages: [python]
-    severity: ERROR
+    def log(message: str, level: str = "info"):
+        publish_job_event(
+            job_id,
+            "log",
+            {"text": message, "color": color_by_level.get(level, "var(--text-muted)")},
+        )
 
-  - id: python-pickle
-    pattern: pickle.loads(...)
-    message: "Detected unsafe deserialization with pickle."
-    languages: [python]
-    severity: ERROR
+    return log
 
-  - id: python-weak-hash
-    pattern: hashlib.md5(...)
-    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
-    languages: [python]
-    severity: WARNING
-"""
-    path.write_text(rules_content)
 
 def run_yara_scan(target_path: str, job_id: str):
-    findings = []
-    # 1. Try to scan using the compiled yara-python library
-    try:
-        import yara
-        yara_rules_path = PROJECT_ROOT / "rules" / "aegis_rules.yar"
-        if not yara_rules_path.exists():
-            yara_rules_path = Path("rules/aegis_rules.yar")
-        
-        if yara_rules_path.exists():
-            rules = yara.compile(filepath=str(yara_rules_path))
-            
-            def scan_file(file_path):
-                try:
-                    matches = rules.match(filepath=str(file_path))
-                    for m in matches:
-                        finding = {
-                            "rule": m.rule,
-                            "filename": str(file_path),
-                            "description": m.meta.get("description", "YARA rule match"),
-                            "author": m.meta.get("author", "Aegis")
-                        }
-                        findings.append(finding)
-                        publish_job_event(job_id, "log", {"text": f"[YARA] MATCH: {m.rule} in {file_path}", "color": "var(--secondary)"})
-                except Exception as e:
-                    publish_job_event(job_id, "log", {"text": f"[YARA Error] {file_path}: {e}", "color": "var(--danger)"})
-
-            p = Path(target_path)
-            if p.is_dir():
-                for root, dirs, files in os.walk(p):
-                    for file in files:
-                        if file.endswith(".py"):
-                            scan_file(Path(root) / file)
-            else:
-                scan_file(p)
-            return findings
-    except ImportError:
-        publish_job_event(job_id, "log", {"text": "[YARA] yara-python missing. Falling back to signature scan.", "color": "var(--secondary)"})
-
-    # 2. Fallback regex-based signature scanner
-    def scan_file_fallback(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            
-            # Rule 1: Backdoor_Webshell
-            p1 = re.search(r'eval\(\s*request\.(args|form|values)', content)
-            p2 = re.search(r'exec\(\s*request\.(args|form|values)', content)
-            p3 = re.search(r'subprocess\.Popen\(\s*request\.args', content)
-            p4 = re.search(r'subprocess\.check_output\(\s*request\.args', content)
-            if p1 or p2 or p3 or p4:
-                findings.append({
-                    "rule": "Backdoor_Webshell",
-                    "filename": str(file_path),
-                    "description": "Detects Python webshell or remote command execution patterns",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                publish_job_event(job_id, "log", {"text": f"[YARA Fallback] MATCH: Backdoor_Webshell in {file_path}", "color": "var(--secondary)"})
-                
-            # Rule 2: Obfuscated_Payload
-            has_b64 = "base64.b64decode" in content
-            has_exec = "exec(" in content
-            has_eval = "eval(" in content
-            if has_b64 and (has_exec or has_eval):
-                findings.append({
-                    "rule": "Obfuscated_Payload",
-                    "filename": str(file_path),
-                    "description": "Detects base64 obfuscation combined with execution",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                publish_job_event(job_id, "log", {"text": f"[YARA Fallback] MATCH: Obfuscated_Payload in {file_path}", "color": "var(--secondary)"})
-                
-            # Rule 3: Suspicious_Shell_Spawn
-            has_sh = ("/bin/sh" in content) or ("/bin/bash" in content)
-            has_pty = "pty.spawn" in content
-            has_socket = "socket.socket" in content
-            has_sub = ("subprocess.Popen" in content) or ("subprocess.call" in content)
-            if (has_sh and has_pty) or (has_socket and has_sub and has_sh):
-                findings.append({
-                    "rule": "Suspicious_Shell_Spawn",
-                    "filename": str(file_path),
-                    "description": "Detects shell spawning commands, likely for reverse shells",
-                    "author": "Aegis Secure Console (Fallback)"
-                })
-                publish_job_event(job_id, "log", {"text": f"[YARA Fallback] MATCH: Suspicious_Shell_Spawn in {file_path}", "color": "var(--secondary)"})
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[Fallback Scan Error] {file_path}: {e}", "color": "var(--danger)"})
-
-    p = Path(target_path)
-    if p.is_dir():
-        for root, dirs, files in os.walk(p):
-            for file in files:
-                if file.endswith(".py"):
-                    scan_file_fallback(Path(root) / file)
-    else:
-        scan_file_fallback(p)
-        
-    return findings
+    return shared_run_yara_scan(target_path, log=job_log_callback(job_id))
 
 def run_clamav_scan(target_path: str, job_id: str):
-    findings = []
-    import shutil
-    clamscan_bin = shutil.which("clamscan")
-    if clamscan_bin:
-        try:
-            publish_job_event(job_id, "log", {"text": "[ClamAV] Starting ClamAV scanning CLI...", "color": "var(--text-muted)"})
-            result = subprocess.run([clamscan_bin, "-r", "--infected", target_path], capture_output=True, text=True, check=False)
-            for line in result.stdout.splitlines():
-                if "FOUND" in line:
-                    parts = line.split(":")
-                    if len(parts) >= 2:
-                        filename = parts[0].strip()
-                        virus_part = parts[1].replace("FOUND", "").strip()
-                        findings.append({
-                            "filename": filename,
-                            "virus": virus_part,
-                            "description": f"ClamAV detected malware signature: {virus_part}"
-                        })
-                        publish_job_event(job_id, "log", {"text": f"[ClamAV] MATCH: {virus_part} in {filename}", "color": "var(--secondary)"})
-            return findings
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[ClamAV Error] {e}", "color": "var(--danger)"})
-
-    # Fallback pure-Python scan
-    eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-    
-    def scan_file_clamav(file_path):
-        try:
-            content = file_path.read_text(errors='ignore')
-            if eicar_sig in content:
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "EICAR-Test-Signature",
-                    "description": "Matched EICAR standard antivirus test signature"
-                })
-                publish_job_event(job_id, "log", {"text": f"[ClamAV Fallback] MATCH: EICAR-Test-Signature in {file_path}", "color": "var(--secondary)"})
-            # Check for base64 backdoors
-            if re.search(r'(eval|exec)\(\s*base64\.b64decode', content):
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "Python.Backdoor.Base64Decoder",
-                    "description": "Detected base64-encoded Python execution pattern, indicating potential backdoor/webshell"
-                })
-                publish_job_event(job_id, "log", {"text": f"[ClamAV Fallback] MATCH: Python.Backdoor.Base64Decoder in {file_path}", "color": "var(--secondary)"})
-        except Exception:
-            pass
-
-    p = Path(target_path)
-    if p.is_dir():
-        for root, dirs, files in os.walk(p):
-            if any(k in root for k in ["venv", "scanner-venv", ".git", ".pytest_cache", ".antigravitycli"]):
-                continue
-            for file in files:
-                if file.endswith(".py") or file.endswith(".txt"):
-                    scan_file_clamav(Path(root) / file)
-    else:
-        scan_file_clamav(p)
-
-    return findings
+    return shared_run_clamav_scan(target_path, log=job_log_callback(job_id))
 
 def run_dast_scan(target_url: str = None, job_id: str = None, waf_enabled: bool = None):
     findings = []

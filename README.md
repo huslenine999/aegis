@@ -32,6 +32,30 @@ Set a per-tool timeout:
 aegis scan . --timeout 60
 ```
 
+Write reports to a specific directory:
+
+```bash
+aegis scan app/main.py --output ./aegis-reports
+```
+
+Print a JSON summary for CI or scripts:
+
+```bash
+aegis scan app/main.py --no-docker --json
+```
+
+Suppress progress output:
+
+```bash
+aegis scan app/main.py --quiet
+```
+
+Override blocking severities for supported scanner families:
+
+```bash
+aegis scan . --fail-on high,critical
+```
+
 The CLI writes reports next to the target:
 
 ```txt
@@ -88,21 +112,88 @@ http://127.0.0.1:5001
 
 ## Package Installation
 
-Install from npm:
+Install from the GitHub package source:
 
 ```bash
-npm install -g aegis-secure-console
+npm install -g github:huslenine999/aegis
 aegis scan app/main.py
 ```
 
-The package exposes both commands:
+The package exposes the command:
 
 ```txt
 aegis
-aegis-secure-console
 ```
 
-Homebrew formula support is also present in `Formula/` for local tap-based installation.
+The public npm name `aegis` is already taken by another package. If that registry name becomes available or transferred, the install command can become `npm install -g aegis`. Homebrew formula support is also present in `Formula/` for local tap-based installation.
+
+---
+
+## Health and Version Checks
+
+Check local scanner dependencies:
+
+```bash
+aegis doctor
+aegis doctor --json
+```
+
+Print the package version:
+
+```bash
+aegis version
+```
+
+---
+
+## Cloud Approval Gate
+
+Aegis can run as the approval gate after developers push code to GitHub:
+
+```mermaid
+graph LR
+    Push[Developer pushes to Git] --> Action[GitHub Actions starts]
+    Action --> Scan[Aegis scans the checkout]
+    Scan --> Policy[Policy engine evaluates findings]
+    Policy --> Reports[HTML, Markdown, JSON, and SBOM reports]
+    Policy --> Decision{Decision}
+    Decision -->|Allowed| Approved[Project approved]
+    Decision -->|Blocked| Declined[Project declined]
+```
+
+This repository wires that flow in `.github/workflows/security-pipeline.yml`. The `security-gate` job uses the local GitHub Action and runs:
+
+```bash
+aegis scan . --no-docker --output aegis-reports --json --fail-on medium,high,critical
+```
+
+When Aegis returns exit code `0`, the project is approved and downstream jobs can continue. When it returns exit code `1`, the project is declined, the workflow fails, and the generated report explains which scanner blocked the project.
+
+Generated cloud reports are available in the GitHub Actions run summary and in the `aegis-approval-reports` artifact.
+
+To use Aegis from another GitHub repository:
+
+```yaml
+name: Aegis Security Gate
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: huslenine999/aegis@main
+        with:
+          scan-target: .
+          output-dir: aegis-reports
+          no-docker: "true"
+          fail-on: medium,high,critical
+```
 
 ---
 
@@ -123,6 +214,10 @@ Aegis coordinates these scanner paths:
 11. WAF-aware risk reduction in the web console flow.
 
 The CLI initializes placeholder reports for skipped tools so policy decisions stay deterministic. Docker-dependent checks are skipped cleanly when Docker is disabled or unavailable.
+
+Shared scanner implementations for Semgrep rule generation, YARA fallback matching, and ClamAV fallback matching live in `app/scanners.py`. The CLI and web worker call that shared module with different log adapters, so report shapes stay consistent across terminal and dashboard scans.
+
+When Docker scanning is enabled, the CLI builds a temporary sandbox image, starts the container with memory, CPU, PID, and `WAF_ENABLED` controls, waits for the actual localhost sandbox URL to become healthy, then runs Trivy and DAST probes against that URL.
 
 ---
 
@@ -161,6 +256,7 @@ aegis/
 │   ├── secure_main.py          # Hardened demo target
 │   ├── database.py             # SQLite setup and WAF rule seed data
 │   ├── sandbox.py              # Docker sandbox lifecycle and telemetry
+│   ├── scanners.py             # Shared Semgrep, YARA, and ClamAV scanner helpers
 │   └── templates/
 │       ├── index.html          # CRT dashboard UI
 │       └── report_template.html
@@ -188,27 +284,31 @@ aegis/
 
 ## Testing
 
-Focused CLI and policy verification:
+Focused scanner, CLI, sandbox, and policy-adjacent verification:
 
 ```bash
-./venv/bin/pytest tests/test_cli.py tests/test_policy.py
+./venv/bin/python -m pytest tests/test_cli.py tests/test_sandbox.py tests/test_phase1.py tests/test_phase3.py::test_run_clamav_scan_eicar tests/test_phase3.py::test_run_clamav_scan_backdoor
 ```
 
 Syntax and help checks:
 
 ```bash
-./venv/bin/python -m py_compile app/cli.py policy_engine.py tests/test_cli.py
+./venv/bin/python -m py_compile app/scanners.py app/cli.py app/worker.py
 ./venv/bin/python app/cli.py --help
 ./venv/bin/python app/cli.py scan --help
+./venv/bin/python app/cli.py doctor --json
+./venv/bin/python app/cli.py version
 ```
 
 Current focused verification status:
 
 ```txt
-9 passed, 46 warnings
+29 passed, 96 warnings
 ```
 
-The full suite currently collects 64 tests. A previous full run was interrupted after 29 passing tests because a later integration test path hung, so the next QA task is to isolate that slow test before marking the complete suite green.
+The full suite currently collects 64 tests. A broader phase3 run was interrupted after 29 passing tests because a later WAF/DAST integration path hung, so the next QA task is to isolate that slow test before marking the complete suite green.
+
+The GitHub Actions workflow in `.github/workflows/security-pipeline.yml` runs both the cloud approval gate and the focused CLI/policy validation path on pushes and pull requests.
 
 ---
 
@@ -240,5 +340,6 @@ and blocks the push when the policy engine returns a non-zero exit code.
 
 - Use `aegis scan <filename>` for quick local review before committing.
 - Use `aegis scan . --no-docker` in fast pre-push or CI jobs when Docker is unavailable.
+- Use `aegis scan . --json --output ./reports` when integrating with automation.
 - Run the full dashboard flow when you want live logs, WAF controls, sandbox telemetry, and visual reports.
 - Treat generated `.aegis/scans/` output as local scan artifacts unless you explicitly want to archive reports.

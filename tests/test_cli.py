@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "app"))
 
-from app.cli import install_hook, uninstall_hook, execute_scan
+from app.cli import install_hook, uninstall_hook, execute_scan, main, run_doctor
 
 
 def fake_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
@@ -75,6 +75,100 @@ def test_execute_scan_unsafe_target(tmp_path, monkeypatch):
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
         assert execute_scan(str(target_file), use_docker=False, tool_timeout=5) == 1
+
+def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.chdir(tmp_path)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
+        summary = execute_scan(
+            str(target_file),
+            use_docker=False,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    assert summary["scan_dir"] == str(output_dir.resolve())
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "report.html").exists()
+
+def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WAF_ENABLED", raising=False)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command), \
+         patch("app.cli.is_docker_available", return_value=True), \
+         patch("app.cli.find_free_host_port", return_value=5678), \
+         patch("app.cli.scaffold_sandbox_context", return_value=5001) as scaffold, \
+         patch("app.cli.build_sandbox_image", return_value=True) as build_image, \
+         patch("app.cli.run_sandbox_container", return_value=True) as run_container, \
+         patch("app.cli.wait_for_container", return_value=True) as wait_container, \
+         patch("app.cli.run_trivy_scan", return_value=[]), \
+         patch("app.cli.run_dast_scan", return_value=[]) as dast_scan, \
+         patch("app.cli.stop_and_cleanup_sandbox") as cleanup:
+        summary = execute_scan(
+            str(target_file),
+            use_docker=True,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    scaffold.assert_called_once()
+    build_image.assert_called_once()
+    run_container.assert_called_once()
+    cleanup.assert_called_once()
+
+    image_tag, container_name, host_port, container_port, waf_enabled = run_container.call_args.args
+    assert image_tag.startswith("aegis-sandbox-")
+    assert container_name.startswith("aegis-sandbox-container-")
+    assert host_port == 5678
+    assert container_port == 5001
+    assert waf_enabled is False
+
+    target_url = f"http://127.0.0.1:{host_port}"
+    wait_container.assert_called_once_with(target_url, timeout=6.0)
+    dast_scan.assert_called_once_with(target_url)
+
+def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, capsys):
+    target_file = tmp_path / "safe.py"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["aegis", "scan", str(target_file), "--no-docker", "--json"])
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
+        assert main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "allowed"
+    assert payload["target"] == str(target_file.resolve())
+
+def test_doctor_and_version_commands(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["aegis", "version"])
+    assert main() == 0
+    assert capsys.readouterr().out.strip()
+
+    with patch("app.cli.is_docker_available", return_value=False):
+        assert run_doctor(json_output=True) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] in {"ok", "degraded"}
+    assert any(check["name"] == "python" for check in payload["checks"])
 
 def test_print_ascii_report(capsys):
     from app.cli import print_ascii_report
