@@ -1,6 +1,6 @@
 {
   "name": "aegis",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Aegis retro CRT DevSecOps console for static code scanning and threat simulation",
   "main": "bin/cli.js",
   "bin": {
@@ -10,6 +10,7 @@
     "app/",
     "bin/",
     "scripts/",
+    "aegis.yml",
     "policy_engine.py",
     "requirements.txt",
     "README.md",

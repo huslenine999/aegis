@@ -86,17 +86,46 @@ def _emit(log: LogCallback | None, message: str, level: str = "info"):
         log(message, level)
 
 
-def _iter_scan_files(target_path: Path, suffixes: tuple[str, ...], ignored_dirs: set[str]):
+def _is_ignored_path(path: Path, ignored_paths: set[str]) -> bool:
+    if not ignored_paths:
+        return False
+
+    resolved = path.resolve()
+    path_text = str(path)
+    resolved_text = str(resolved)
+    for ignored in ignored_paths:
+        ignored_path = Path(ignored)
+        ignored_text = str(ignored_path)
+        if path_text == ignored_text or path_text.endswith(f"{os.sep}{ignored_text}"):
+            return True
+        if path_text.startswith(f"{ignored_text}{os.sep}"):
+            return True
+        if resolved_text == ignored_text or resolved_text.endswith(f"{os.sep}{ignored_text}"):
+            return True
+        if resolved_text.startswith(f"{ignored_text}{os.sep}"):
+            return True
+    return False
+
+
+def _iter_scan_files(
+    target_path: Path,
+    suffixes: tuple[str, ...],
+    ignored_dirs: set[str],
+    ignored_paths: set[str] | None = None,
+):
+    ignored_paths = ignored_paths or set()
     if target_path.is_dir():
         for root, dirs, files in os.walk(target_path):
             dirs[:] = [d for d in dirs if d not in ignored_dirs]
             if should_skip_path(Path(root), ignored_dirs):
                 continue
             for file in files:
-                if file.endswith(suffixes):
-                    yield Path(root) / file
+                file_path = Path(root) / file
+                if file.endswith(suffixes) and not _is_ignored_path(file_path, ignored_paths):
+                    yield file_path
     else:
-        yield target_path
+        if not _is_ignored_path(target_path, ignored_paths):
+            yield target_path
 
 
 def run_yara_scan(
@@ -104,6 +133,7 @@ def run_yara_scan(
     *,
     rules_path: str | Path | None = None,
     ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS,
+    ignored_paths: set[str] | None = None,
     log: LogCallback | None = None,
 ):
     findings = []
@@ -116,7 +146,7 @@ def run_yara_scan(
         if yara_rules_path.exists():
             rules = yara.compile(filepath=str(yara_rules_path))
 
-            for file_path in _iter_scan_files(target, (".py",), ignored_dirs):
+            for file_path in _iter_scan_files(target, (".py",), ignored_dirs, ignored_paths):
                 try:
                     matches = rules.match(filepath=str(file_path))
                     for match in matches:
@@ -134,7 +164,7 @@ def run_yara_scan(
     except ImportError:
         _emit(log, "[YARA] yara-python missing. Falling back to signature scan.", "muted")
 
-    for file_path in _iter_scan_files(target, (".py",), ignored_dirs):
+    for file_path in _iter_scan_files(target, (".py",), ignored_dirs, ignored_paths):
         try:
             content = file_path.read_text(errors="ignore")
 
@@ -183,6 +213,7 @@ def run_clamav_scan(
     target_path: str | Path,
     *,
     ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS,
+    ignored_paths: set[str] | None = None,
     timeout: int = 120,
     log: LogCallback | None = None,
 ):
@@ -190,7 +221,7 @@ def run_clamav_scan(
     target = Path(target_path)
     clamscan_bin = shutil.which("clamscan")
 
-    if clamscan_bin:
+    if clamscan_bin and not ignored_paths:
         try:
             _emit(log, "[ClamAV] Starting ClamAV scanning CLI...", "muted")
             result = subprocess.run(
@@ -219,7 +250,7 @@ def run_clamav_scan(
 
     eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
-    for file_path in _iter_scan_files(target, (".py", ".txt"), ignored_dirs):
+    for file_path in _iter_scan_files(target, (".py", ".txt"), ignored_dirs, ignored_paths):
         try:
             content = file_path.read_text(errors="ignore")
             if eicar_sig in content:

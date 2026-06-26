@@ -7,7 +7,17 @@ def client():
     from app.database import initialize_database
     initialize_database()
     app_main.WAF_ENABLED = False
+    app_main.DEMO_LAB_ENABLED = True
     yield TestClient(app_main.app)
+    app_main.DEMO_LAB_ENABLED = False
+
+
+def test_demo_lab_disabled_by_default():
+    """Vulnerable training routes should not be reachable unless explicitly enabled."""
+    app_main.DEMO_LAB_ENABLED = False
+    client = TestClient(app_main.app)
+    response = client.get("/user?name=guest")
+    assert response.status_code == 404
 
 def test_waf_disabled_by_default(client):
     """Ensure the WAF is disabled by default and allow SQLi."""
@@ -48,6 +58,28 @@ def test_waf_toggle(client):
     # Toggle off
     response = client.post('/toggle-waf')
     assert response.json()['waf_enabled'] is False
+
+
+def test_admin_token_protects_state_changing_routes(client):
+    """When configured, admin routes require the Aegis token."""
+    app_main.ADMIN_TOKEN = "test-admin-token"
+    try:
+        unauthorized = client.post("/toggle-waf")
+        assert unauthorized.status_code == 401
+
+        authorized = client.post("/toggle-waf", headers={"X-Aegis-Token": "test-admin-token"})
+        assert authorized.status_code == 200
+        assert authorized.json()["waf_enabled"] is True
+    finally:
+        app_main.ADMIN_TOKEN = None
+        if app_main.WAF_ENABLED:
+            client.post("/toggle-waf")
+
+
+def test_invalid_waf_rule_regex_is_rejected(client):
+    response = client.post("/save-waf-rules", json={"rules": [{"pattern": "(", "description": "broken"}]})
+    assert response.status_code == 400
+    assert "Invalid WAF rule regex" in response.json()["detail"]
 
 def test_waf_custom_rules(client):
     """Test custom WAF rules retrieval, saving, and blocking."""

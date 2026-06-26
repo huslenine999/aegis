@@ -242,8 +242,10 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         else:
             if target == "secure":
                 target_path = str(BASE_DIR / "secure_main.py")
+            elif target == "vulnerable":
+                target_path = str(BASE_DIR / "demo_lab.py")
             else:
-                target_path = str(BASE_DIR / "main.py")
+                target_path = str(PROJECT_ROOT)
                 
             # Run Safety SCA
             publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})

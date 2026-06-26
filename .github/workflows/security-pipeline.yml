@@ -1,8 +1,12 @@
 name: Aegis CI
 
+permissions:
+  contents: read
+  security-events: write
+
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "codex/**"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
@@ -22,6 +26,8 @@ jobs:
           scan-target: .
           output-dir: aegis-reports
           no-docker: "true"
+          config: aegis.yml
+          sarif: "true"
           timeout: "120"
           fail-on: medium,high,critical
 
@@ -31,6 +37,12 @@ jobs:
         with:
           name: aegis-approval-reports
           path: aegis-reports/
+
+      - name: Upload Aegis SARIF
+        if: always() && hashFiles('aegis-reports/aegis.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aegis-reports/aegis.sarif
 
   validate:
     name: Validate CLI and Policy
@@ -74,3 +86,11 @@ jobs:
       - name: Focused tests
         run: |
           pytest tests/test_cli.py tests/test_policy.py
+
+      - name: Full non-Docker test suite
+        run: |
+          pytest -q --timeout=60 --timeout-method=thread
+
+      - name: SARIF smoke scan
+        run: |
+          python app/cli.py scan . --config aegis.yml --fast --sarif --json

@@ -1,0 +1,15 @@
+.aegis/
+.git/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.db
+*.egg-info/
+*.pyc
+.env
+build/
+dist/
+node_modules/
+scanner-venv/
+scans/
+venv/

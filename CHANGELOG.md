@@ -2,6 +2,27 @@
 
 All notable changes to the Aegis project will be documented in this file.
 
+## [2.1.0] - 2026-06-26
+
+### Added
+- `aegis.yml` project config discovery for scan defaults, SARIF output, and path excludes.
+- Audited config suppressions through `suppressions-report.json`.
+- SARIF report generation via `aegis scan --sarif`.
+- Optional `AEGIS_ADMIN_TOKEN` protection for state-changing web console routes.
+- CI full-suite execution with per-test timeouts.
+- Docker Compose stack for dashboard + Redis.
+- Release checklist documentation.
+
+### Changed
+- Moved intentionally vulnerable training endpoints into `app/demo_lab.py`.
+- Disabled the demo lab by default; enable it explicitly with `AEGIS_ENABLE_DEMO_LAB=true`.
+- Restricted default CORS origins to localhost instead of `*`.
+- Updated Docker image defaults to use port 5001 and a non-root user.
+- GitHub Actions uploads Aegis SARIF when generated.
+
+### Fixed
+- Product self-scans can exclude intentional lab targets through `aegis.yml`.
+
 ## [1.1.0] - 2026-05-19
 
 ### Added

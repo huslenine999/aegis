@@ -26,6 +26,14 @@ inputs:
     description: 'Comma-separated severities that block supported scanner families, for example high,critical'
     required: false
     default: 'medium,high,critical'
+  config:
+    description: 'Optional path to an aegis.yml configuration file'
+    required: false
+    default: ''
+  sarif:
+    description: 'Write SARIF output in the report directory'
+    required: false
+    default: 'false'
 outputs:
   decision:
     description: 'Aegis policy decision: approved or declined'
@@ -63,9 +71,19 @@ runs:
         if [ "${{ inputs.no-docker }}" = "true" ]; then
           DOCKER_FLAG="--no-docker"
         fi
+        CONFIG_FLAG=""
+        if [ -n "${{ inputs.config }}" ]; then
+          CONFIG_FLAG="--config ${{ inputs.config }}"
+        fi
+        SARIF_FLAG=""
+        if [ "${{ inputs.sarif }}" = "true" ]; then
+          SARIF_FLAG="--sarif"
+        fi
         echo "[Aegis] Scanning pushed project: $TARGET"
         python "${{ github.action_path }}/app/cli.py" scan "$TARGET" \
           $DOCKER_FLAG \
+          $CONFIG_FLAG \
+          $SARIF_FLAG \
           --timeout "${{ inputs.timeout }}" \
           --output "$OUTPUT_DIR" \
           --fail-on "${{ inputs.fail-on }}" \

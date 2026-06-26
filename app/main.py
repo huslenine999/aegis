@@ -1,7 +1,4 @@
-import base64
-import hashlib
 import os
-import pickle
 import re
 import sqlite3
 import subprocess
@@ -23,7 +20,7 @@ sys_exec_dir = os.path.dirname(sys.executable)
 if sys_exec_dir and sys_exec_dir not in os.environ.get("PATH", "").split(os.pathsep):
     os.environ["PATH"] = sys_exec_dir + os.pathsep + os.environ.get("PATH", "")
 
-from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,11 +37,18 @@ from sandbox import (
 )
 
 app = FastAPI(title="Aegis DevSecOps Console")
+DEMO_LAB_ENABLED = os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower() in {"1", "true", "yes", "on"}
+ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
 
 # Enable CORS for convenience
+def parse_cors_origins() -> list[str]:
+    raw_origins = os.environ.get("AEGIS_CORS_ORIGINS", "http://127.0.0.1:5001,http://localhost:5001")
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,6 +56,30 @@ app.add_middleware(
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+def require_demo_lab_enabled():
+    if not DEMO_LAB_ENABLED:
+        raise HTTPException(
+            status_code=404,
+            detail="Aegis demo lab is disabled. Set AEGIS_ENABLE_DEMO_LAB=true to enable vulnerable training routes.",
+        )
+
+
+def require_admin_token(request: Request):
+    if not ADMIN_TOKEN:
+        return
+    supplied = request.headers.get("X-Aegis-Token") or request.query_params.get("token")
+    if supplied != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Missing or invalid Aegis admin token.")
+
+
+try:
+    from demo_lab import router as demo_lab_router
+except ImportError:
+    from .demo_lab import router as demo_lab_router
+
+app.include_router(demo_lab_router, dependencies=[Depends(require_demo_lab_enabled)])
 
 # Global state for the WAF toggle (demo only)
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
@@ -245,10 +273,9 @@ def generate_fallback_tree():
             pass
     return tree
 
-# Use environment variables for secrets.
-app.state.secret_key = os.environ.get("SECRET_KEY", "default-dev-secret-key")
-DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", "dev-password")
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "DEV-AWS-ID")
+# Use environment variables for secrets. The console does not ship fallback
+# application secrets; demo-only credentials live in app/demo_lab.py.
+app.state.secret_key = os.environ.get("SECRET_KEY")
 
 # Initialize directories safely
 DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
@@ -404,7 +431,7 @@ def download_sbom():
         filename="cyclonedx-sbom.json"
     )
 
-@app.post("/toggle-waf")
+@app.post("/toggle-waf", dependencies=[Depends(require_admin_token)])
 def toggle_waf():
     global WAF_ENABLED
     WAF_ENABLED = not WAF_ENABLED
@@ -416,7 +443,7 @@ def get_waf_rules():
     rules = load_waf_rules_from_db()
     return {"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED}
 
-@app.post("/save-waf-rules")
+@app.post("/save-waf-rules", dependencies=[Depends(require_admin_token)])
 async def save_waf_rules(request: Request):
     try:
         data = await request.json()
@@ -424,8 +451,15 @@ async def save_waf_rules(request: Request):
         new_rules = []
         for r in rules:
             if "pattern" in r:
+                pattern = str(r["pattern"])
+                if len(pattern) > 256:
+                    raise HTTPException(status_code=400, detail="WAF rule pattern is too long.")
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid WAF rule regex: {e}")
                 new_rules.append({
-                    "pattern": str(r["pattern"]),
+                    "pattern": pattern,
                     "description": str(r.get("description", "")),
                     "enabled": bool(r.get("enabled", True))
                 })
@@ -639,7 +673,7 @@ def get_dependency_graph():
         "links": links
     }
 
-@app.post("/run-scan")
+@app.post("/run-scan", dependencies=[Depends(require_admin_token)])
 async def run_scan(request: Request):
     if os.environ.get("VERCEL"):
         raise HTTPException(status_code=400, detail="Security scans are not supported in the Vercel serverless environment.")
@@ -931,96 +965,8 @@ async def stream_telemetry():
 def health():
     return {
         "status": "running",
-        "service": "aegis-vulnerable-demo"
-    }
-
-@app.get("/user")
-def get_user(name: str = "guest"):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    query = f"SELECT id, username, role, api_key FROM users WHERE username = '{name}'"
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    conn.close()
-    return {
-        "query": query,
-        "results": rows
-    }
-
-@app.get("/ping")
-def ping_host(host: str = "127.0.0.1"):
-    command = f"ping -c 1 {host}"
-    output = subprocess.check_output(command, shell=True, text=True)
-    return {
-        "command": command,
-        "output": output
-    }
-
-@app.get("/calculate")
-def calculate(expr: str = "1+1"):
-    result = eval(expr)
-    return {
-        "expression": expr,
-        "result": result
-    }
-
-@app.post("/load-profile")
-async def load_profile(request: Request):
-    body = await request.json()
-    encoded_profile = body.get("profile", "")
-    raw_data = base64.b64decode(encoded_profile)
-    profile = pickle.loads(raw_data)
-    return {
-        "loaded_profile": str(profile)
-    }
-
-@app.get("/download")
-def download_file(file: str = "sample.txt"):
-    target_file = DOWNLOAD_DIR / file
-    if not target_file.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return PlainTextResponse(target_file.read_text())
-
-@app.get("/hash")
-def weak_hash(value: str = "password123"):
-    digest = hashlib.md5(value.encode()).hexdigest()
-    return {
-        "value": value,
-        "md5": digest
-    }
-
-@app.get("/xss", response_class=HTMLResponse)
-def xss_demo(msg: str = "Welcome to Aegis console."):
-    return f"<html><body><div id='xss-output'>{msg}</div></body></html>"
-
-@app.get("/ssrf")
-def ssrf_demo(url: str = "http://127.0.0.1:5001/health"):
-    import urllib.request
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
-        )
-        with urllib.request.urlopen(req, timeout=2) as response:
-            content = response.read().decode('utf-8', errors='ignore')
-            return {
-                "url": url,
-                "status": "success",
-                "response": content[:1000]
-            }
-    except Exception as e:
-        return {
-            "url": url,
-            "status": "error",
-            "message": str(e)
-        }
-
-@app.get("/debug-info")
-def debug_info():
-    return {
-        "database_password": DATABASE_PASSWORD,
-        "aws_access_key": AWS_ACCESS_KEY_ID,
-        "environment": dict(os.environ)
+        "service": "aegis-security-console",
+        "demo_lab_enabled": DEMO_LAB_ENABLED,
     }
 
 @app.get("/export-dossier")
@@ -1095,7 +1041,7 @@ def export_dossier():
 
     # Secrets
     if not (SCANS_DIR / "secrets-report.json").exists():
-        secrets_status = "MISSING"
+        secrets_status = "MISSING"  # pragma: allowlist secret
         secrets_total = 0
         secrets_blocking = 0
     else:
@@ -1106,7 +1052,7 @@ def export_dossier():
                 secrets_findings.append(secret)
         secrets_total = len(secrets_findings)
         secrets_blocking = secrets_total
-        secrets_status = "FAIL" if secrets_blocking > 0 else "PASS"
+        secrets_status = "FAIL" if secrets_blocking > 0 else "PASS"  # pragma: allowlist secret
 
     # YARA
     if not (SCANS_DIR / "yara-report.json").exists():

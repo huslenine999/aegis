@@ -70,6 +70,31 @@ Print a JSON summary for CI or scripts:
 aegis scan app/main.py --no-docker --json
 ```
 
+Write SARIF for GitHub code scanning or review tooling:
+
+```bash
+aegis scan . --sarif
+```
+
+Use a project config file:
+
+```yaml
+scan:
+  no_docker: true
+  fail_on: medium,high,critical
+  timeout: 120
+  sarif: aegis.sarif
+  exclude_paths:
+    - app/demo_lab.py
+  suppressions:
+    - tool: Ruff
+      rule: S103
+      path: app/cli.py
+      reason: Git hook installer intentionally writes an executable pre-push hook.
+```
+
+Aegis discovers `aegis.yml`, `aegis.yaml`, `.aegis.yml`, or `.aegis.yaml` from the scan target upward. CLI flags override config values. Suppressed findings are written to `suppressions-report.json` so release exceptions stay auditable.
+
 Suppress progress output:
 
 ```bash
@@ -143,6 +168,26 @@ Open:
 
 ```txt
 http://127.0.0.1:5001
+```
+
+The web console starts in scanner-console mode by default. Intentionally vulnerable training routes are disabled unless you opt in:
+
+```bash
+AEGIS_ENABLE_DEMO_LAB=true ./setup.sh
+```
+
+For shared or remote deployments, protect state-changing dashboard actions with an admin token:
+
+```bash
+AEGIS_ADMIN_TOKEN="$(openssl rand -hex 24)" ./setup.sh
+```
+
+Requests to `/run-scan`, `/toggle-waf`, and `/save-waf-rules` must then include `X-Aegis-Token: <token>`. CORS defaults to localhost origins; set `AEGIS_CORS_ORIGINS` to a comma-separated allowlist when deploying elsewhere.
+
+Run the dashboard with Redis through Docker Compose:
+
+```bash
+docker compose up --build
 ```
 
 ---
@@ -318,6 +363,8 @@ The dashboard defaults to Simple view, a cleaner security workbench for daily us
 
 Tactical view preserves the original CRT-style console with live scan state updates, EventSource telemetry, WAF rule controls, dependency graph visualization, threat simulation, and generated compliance reports.
 
+The intentionally vulnerable lab endpoints (`/user`, `/ping`, `/calculate`, `/load-profile`, `/download`, `/hash`, `/xss`, `/ssrf`, and `/debug-info`) live in `app/demo_lab.py` and are disabled in the default console process. Enable them only for local training or sandboxed demonstrations with `AEGIS_ENABLE_DEMO_LAB=true`.
+
 ---
 
 ## Project Structure
@@ -327,6 +374,7 @@ aegis/
 ├── app/
 │   ├── cli.py                  # CLI scanner entrypoint for aegis scan
 │   ├── main.py                 # FastAPI app, WAF middleware, routes, WebSockets
+│   ├── demo_lab.py             # Opt-in intentionally vulnerable training routes
 │   ├── worker.py               # Redis Queue worker for async scans
 │   ├── secure_main.py          # Hardened demo target
 │   ├── database.py             # SQLite setup and WAF rule seed data
@@ -353,6 +401,7 @@ aegis/
 │   ├── test_upload_scan.py
 │   └── ...
 ├── policy_engine.py
+├── aegis.yml
 ├── package.json
 ├── pyproject.toml
 ├── requirements.txt
@@ -390,15 +439,15 @@ Dashboard smoke checks:
 /get-scan-results 200
 ```
 
-Current focused verification status:
+Current verification status:
 
 ```txt
-29 passed, 96 warnings
+Focused CLI/policy tests pass locally. CI now also runs the full non-Docker suite with per-test timeouts.
 ```
 
-The full suite currently collects 64 tests. A broader phase3 run was interrupted after 29 passing tests because a later WAF/DAST integration path hung, so the next QA task is to isolate that slow test before marking the complete suite green.
+If a Docker, WAF, or DAST integration path stalls, `pytest-timeout` fails the specific test instead of hanging the whole validation job.
 
-The GitHub Actions workflow in `.github/workflows/security-pipeline.yml` runs both the cloud approval gate and the focused CLI/policy validation path on pushes and pull requests.
+The GitHub Actions workflow in `.github/workflows/security-pipeline.yml` runs the cloud approval gate, focused CLI/policy validation, the full timeout-protected suite, and a SARIF smoke scan on pushes and pull requests.
 
 ---
 

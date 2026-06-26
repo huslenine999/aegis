@@ -1,0 +1,27 @@
+scan:
+  no_docker: true
+  fail_on: medium,high,critical
+  timeout: 120
+  sarif: aegis.sarif
+  exclude_paths:
+    - app/demo_lab.py
+    - app/scanners.py
+    - app/templates/report_template.html
+    - tests
+  suppressions:
+    - tool: Ruff
+      rule: S103
+      path: app/cli.py
+      reason: Git hook installer intentionally writes an executable pre-push hook.
+    - tool: Ruff
+      rule: S104
+      path: app/main.py
+      reason: Development dashboard binds to all interfaces only when launched directly.
+    - tool: Ruff
+      rule: S607
+      path: app/sandbox.py
+      reason: Docker CLI invocations intentionally use PATH discovery for local developer tooling.
+    - tool: Ruff
+      rule: S310
+      path: policy_engine.py
+      reason: OSV vulnerability queries call a fixed HTTPS endpoint assembled by the scanner.

@@ -17,6 +17,7 @@ sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "app"))
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
+from config import config_bool, config_list, load_config
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import write_semgrep_rules
@@ -57,6 +58,243 @@ def add_semgrep_excludes(command: list[str]) -> list[str]:
     for ignored_dir in sorted(IGNORED_DIRS):
         command.extend(["--exclude", ignored_dir])
     return command
+
+
+def get_config_section(config: dict) -> dict:
+    section = config.get("scan", {})
+    return section if isinstance(section, dict) else {}
+
+
+def config_value(config: dict, key: str, default=None):
+    section = get_config_section(config)
+    if key in section:
+        return section[key]
+    return config.get(key, default)
+
+
+def resolve_exclude_paths(config: dict, target_path: Path) -> set[str]:
+    exclude_values = config_list(get_config_section(config), "exclude_paths") or config_list(config, "exclude_paths")
+    if not exclude_values:
+        return set()
+
+    config_base = Path(config.get("_config_path", target_path)).resolve()
+    if config_base.is_file():
+        config_base = config_base.parent
+
+    resolved = set()
+    for value in exclude_values:
+        raw = Path(value)
+        resolved.add(str(raw))
+        resolved.add(str((config_base / raw).resolve() if not raw.is_absolute() else raw.resolve()))
+    return resolved
+
+
+def get_config_base(config: dict, target_path: Path) -> Path:
+    config_base = Path(config.get("_config_path", target_path)).resolve()
+    return config_base.parent if config_base.is_file() else config_base
+
+
+def is_excluded_path(path: Path, excluded_paths: set[str]) -> bool:
+    if not excluded_paths:
+        return False
+    path_text = str(path)
+    resolved_text = str(path.resolve())
+    for excluded in excluded_paths:
+        if path_text == excluded or path_text.endswith(f"{os.sep}{excluded}"):
+            return True
+        if path_text.startswith(f"{excluded}{os.sep}"):
+            return True
+        if resolved_text == excluded or resolved_text.endswith(f"{os.sep}{excluded}"):
+            return True
+        if resolved_text.startswith(f"{excluded}{os.sep}"):
+            return True
+    return False
+
+
+def normalize_suppressions(config: dict, target_path: Path) -> list[dict]:
+    raw_items = []
+    section = get_config_section(config)
+    for value in (config.get("suppressions", []), section.get("suppressions", [])):
+        if isinstance(value, list):
+            raw_items.extend(value)
+
+    base = get_config_base(config, target_path)
+    normalized = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        path_value = item.get("path")
+        resolved_path = None
+        if path_value:
+            path_obj = Path(str(path_value))
+            resolved_path = str(path_obj.resolve() if path_obj.is_absolute() else (base / path_obj).resolve())
+        normalized.append({
+            "tool": str(item.get("tool", "")).lower(),
+            "rule": str(item.get("rule", "")).lower(),
+            "path": str(path_value) if path_value else "",
+            "resolved_path": resolved_path,
+            "reason": str(item.get("reason", "No reason provided.")),
+        })
+    return normalized
+
+
+def suppression_matches(suppression: dict, *, tool: str, rule: str = "", path: str = "") -> bool:
+    tool_value = tool.lower()
+    rule_value = str(rule or "").lower()
+    path_value = str(path or "")
+    resolved_path = str(Path(path_value).resolve()) if path_value else ""
+
+    if suppression["tool"] and suppression["tool"] not in tool_value:
+        return False
+    if suppression["rule"] and suppression["rule"] != rule_value:
+        return False
+    if suppression["resolved_path"]:
+        expected = suppression["resolved_path"]
+        if resolved_path != expected and not resolved_path.endswith(f"{os.sep}{suppression['path']}"):
+            return False
+    elif suppression["path"] and not path_value.endswith(suppression["path"]):
+        return False
+    return True
+
+
+def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
+    if not suppressions:
+        return
+
+    applied = []
+
+    def suppress_item(tool: str, item: dict, *, rule_keys: tuple[str, ...], path_keys: tuple[str, ...]) -> bool:
+        rule = next((item.get(key) for key in rule_keys if item.get(key)), "")
+        path = next((item.get(key) for key in path_keys if item.get(key)), "")
+        for suppression in suppressions:
+            if suppression_matches(suppression, tool=tool, rule=str(rule), path=str(path)):
+                applied.append({
+                    "tool": tool,
+                    "rule": rule,
+                    "path": path,
+                    "reason": suppression["reason"],
+                })
+                return True
+        return False
+
+    ruff_path = scan_dir / "ruff-report.json"
+    if ruff_path.exists():
+        ruff = json.loads(ruff_path.read_text())
+        if isinstance(ruff, list):
+            ruff = [
+                item for item in ruff
+                if not suppress_item("Ruff", item, rule_keys=("code",), path_keys=("filename",))
+            ]
+            write_json(ruff_path, ruff)
+
+    semgrep_path = scan_dir / "semgrep-report.json"
+    if semgrep_path.exists():
+        semgrep = json.loads(semgrep_path.read_text())
+        if isinstance(semgrep, dict):
+            results = semgrep.get("results", [])
+            semgrep["results"] = [
+                item for item in results
+                if not suppress_item("Semgrep", item, rule_keys=("check_id",), path_keys=("path",))
+            ]
+            write_json(semgrep_path, semgrep)
+
+    yara_path = scan_dir / "yara-report.json"
+    if yara_path.exists():
+        yara = json.loads(yara_path.read_text())
+        if isinstance(yara, list):
+            yara = [
+                item for item in yara
+                if not suppress_item("YARA", item, rule_keys=("rule",), path_keys=("filename",))
+            ]
+            write_json(yara_path, yara)
+
+    clamav_path = scan_dir / "clamav-report.json"
+    if clamav_path.exists():
+        clamav = json.loads(clamav_path.read_text())
+        if isinstance(clamav, list):
+            clamav = [
+                item for item in clamav
+                if not suppress_item("ClamAV", item, rule_keys=("virus",), path_keys=("filename",))
+            ]
+            write_json(clamav_path, clamav)
+
+    secrets_path = scan_dir / "secrets-report.json"
+    if secrets_path.exists():
+        secrets = json.loads(secrets_path.read_text())
+        if isinstance(secrets, dict):
+            results = secrets.get("results", {})
+            for filename, items in list(results.items()):
+                results[filename] = [
+                    item for item in items
+                    if not suppress_item("Secrets", {**item, "filename": filename}, rule_keys=("type",), path_keys=("filename",))
+                ]
+                if not results[filename]:
+                    del results[filename]
+            write_json(secrets_path, secrets)
+
+    write_json(scan_dir / "suppressions-report.json", applied)
+
+
+def write_sarif_report(path: Path, results: list[dict], base_path: Path | None = None):
+    severity_to_level = {
+        "HIGH": "error",
+        "CRITICAL": "error",
+        "MEDIUM": "warning",
+        "LOW": "note",
+    }
+    sarif_results = []
+    rules = {}
+
+    for tool_result in results or []:
+        tool_name = tool_result.get("tool", "Aegis")
+        for issue in tool_result.get("examples", []):
+            rule_id = str(issue.get("test_id") or issue.get("vulnerability_id") or issue.get("rule") or tool_name)
+            message = str(issue.get("issue_text") or issue.get("description") or issue.get("package_name") or "Aegis finding")
+            severity = str(issue.get("severity") or "MEDIUM").upper()
+            filename = issue.get("filename") or issue.get("path") or "requirements.txt"
+            artifact_uri = str(filename)
+            if base_path:
+                try:
+                    artifact_uri = str(Path(artifact_uri).resolve().relative_to(base_path.resolve()))
+                except ValueError:
+                    artifact_uri = str(filename)
+            line = issue.get("line_number") or 1
+            rules.setdefault(rule_id, {
+                "id": rule_id,
+                "name": rule_id,
+                "shortDescription": {"text": message[:120]},
+            })
+            sarif_results.append({
+                "ruleId": rule_id,
+                "level": severity_to_level.get(severity, "warning"),
+                "message": {"text": message},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": artifact_uri},
+                        "region": {"startLine": int(line) if str(line).isdigit() else 1},
+                    }
+                }],
+                "properties": {
+                    "tool": tool_name,
+                    "severity": severity,
+                },
+            })
+
+    sarif = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "Aegis",
+                    "informationUri": "https://github.com/huslenine999/aegis",
+                    "rules": list(rules.values()),
+                }
+            },
+            "results": sarif_results,
+        }],
+    }
+    write_json(path, sarif)
 
 
 def write_json(path: Path, data):
@@ -365,18 +603,16 @@ def execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
-    tool_timeout: int = DEFAULT_TOOL_TIMEOUT,
+    tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
     output_dir: str = None,
     json_output: bool = False,
     quiet: bool = False,
     fail_on: str = None,
     fast: bool = False,
+    config_path: str = None,
+    sarif: str | bool | None = None,
     return_summary: bool = False,
 ):
-    if fail_on:
-        set_fail_on_env(fail_on)
-    if fast:
-        use_docker = False
     timings = []
     total_start = time.perf_counter()
 
@@ -386,6 +622,29 @@ def execute_scan(
         if return_summary:
             return {"target": str(target_path), "exit_code": 1, "status": "error", "error": "target_not_found"}
         return 1
+
+    config = load_config(target_path, config_path)
+    if config:
+        if fail_on is None:
+            fail_on = config_value(config, "fail_on")
+        if output_dir is None:
+            output_dir = config_value(config, "output_dir")
+        if sarif is None:
+            sarif = config_value(config, "sarif", None)
+        if tool_timeout is None:
+            tool_timeout = int(config_value(config, "timeout", DEFAULT_TOOL_TIMEOUT))
+        fast = fast or config_bool(get_config_section(config), "fast", config_bool(config, "fast", False))
+        use_docker = use_docker and not config_bool(get_config_section(config), "no_docker", config_bool(config, "no_docker", False))
+
+    if tool_timeout is None:
+        tool_timeout = DEFAULT_TOOL_TIMEOUT
+    if fail_on:
+        set_fail_on_env(str(fail_on))
+    if fast:
+        use_docker = False
+
+    excluded_paths = resolve_exclude_paths(config, target_path)
+    suppressions = normalize_suppressions(config, target_path)
 
     print(f"🛡️  Aegis CLI Scanner: Auditing target path: {target_path}")
 
@@ -447,7 +706,8 @@ def execute_scan(
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
         ruff_report_path = scan_dir / "ruff-report.json"
         ruff_cmd = [sys.executable, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
-        ruff_cmd.extend(["--exclude", ",".join(sorted(IGNORED_DIRS))])
+        ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
+        ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
         run_scanner_command(ruff_cmd, timeout=tool_timeout, label="Ruff")
 
 
@@ -470,6 +730,8 @@ def execute_scan(
             os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
             semgrep_cmd = [semgrep_bin, "scan", "--config", str(semgrep_rules_path), "--json"]
             add_semgrep_excludes(semgrep_cmd)
+            for excluded_path in sorted(excluded_paths):
+                semgrep_cmd.extend(["--exclude", excluded_path])
             semgrep_cmd.extend(["-o", str(semgrep_report_path), str(target_path)])
             run_scanner_command(semgrep_cmd, timeout=tool_timeout, label="Semgrep")
     else:
@@ -486,7 +748,7 @@ def execute_scan(
         "scan",
         "--all-files",
         "--exclude-files",
-        EXCLUDE_FILES_PATTERN,
+        "|".join([EXCLUDE_FILES_PATTERN, *[re.escape(path) for path in sorted(excluded_paths)]]),
         "--no-verify",
         str(target_path),
     ]
@@ -500,7 +762,7 @@ def execute_scan(
     # 5. YARA Pattern Audits
     with timed_step(timings, "YARA"):
         print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
-        yara_findings = shared_run_yara_scan(target_path, log=log_scanner_event)
+        yara_findings = shared_run_yara_scan(target_path, ignored_paths=excluded_paths, log=log_scanner_event)
         write_json(scan_dir / "yara-report.json", yara_findings)
 
     # 6. ClamAV Malware Scan
@@ -510,7 +772,7 @@ def execute_scan(
     else:
         with timed_step(timings, "ClamAV"):
             print("🔍 [ClamAV] Searching files for virus signatures...")
-            clamav_findings = shared_run_clamav_scan(target_path, timeout=tool_timeout, log=log_scanner_event)
+            clamav_findings = shared_run_clamav_scan(target_path, ignored_paths=excluded_paths, timeout=tool_timeout, log=log_scanner_event)
             write_json(scan_dir / "clamav-report.json", clamav_findings)
 
     # 7. Sandbox Execution (Trivy & DAST) via Docker
@@ -586,6 +848,7 @@ def execute_scan(
     html_report = scan_dir / "report.html"
     md_report = scan_dir / "report.md"
     policy_summary = {}
+    apply_suppressions(scan_dir, suppressions)
 
     def capture_policy_summary(results, final_status, reason, exploitability_score):
         policy_summary.update({
@@ -607,6 +870,17 @@ def execute_scan(
             reporter_callback=capture_policy_summary
         )
     record_timing(timings, "Total", total_start)
+
+    sarif_path = None
+    if sarif:
+        if isinstance(sarif, str) and sarif not in {"1", "true", "yes", "on"}:
+            candidate = Path(sarif)
+            sarif_path = candidate if candidate.is_absolute() else scan_dir / candidate
+        else:
+            sarif_path = scan_dir / "aegis.sarif"
+        sarif_base = target_path if target_path.is_dir() else target_path.parent
+        write_sarif_report(sarif_path, policy_summary.get("results", []), base_path=sarif_base)
+        policy_summary["sarif_report"] = str(sarif_path)
 
     print(f"\nScan complete. Dossier report available at: {html_report}")
     if not json_output and not quiet:
@@ -757,11 +1031,13 @@ def main():
     scan_parser = subparsers.add_parser("scan", help="Run in-process security audit scan")
     scan_parser.add_argument("path", nargs="?", default=".", help="Target path to scan (defaults to current directory)")
     scan_parser.add_argument("--no-docker", action="store_true", help="Skip Docker sandbox, Trivy, and DAST scans")
-    scan_parser.add_argument("--timeout", type=int, default=DEFAULT_TOOL_TIMEOUT, help="Per-tool timeout in seconds")
+    scan_parser.add_argument("--timeout", type=int, default=None, help="Per-tool timeout in seconds")
     scan_parser.add_argument("--output", help="Directory for generated scan reports")
     scan_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON summary to stdout")
     scan_parser.add_argument("--quiet", action="store_true", help="Suppress scan progress output")
     scan_parser.add_argument("--fail-on", help="Comma-separated severities that should block, e.g. high,critical")
+    scan_parser.add_argument("--config", help="Path to aegis.yml config file")
+    scan_parser.add_argument("--sarif", nargs="?", const="aegis.sarif", help="Write SARIF output, optionally to the given filename")
     scan_parser.add_argument(
         "--fast",
         action="store_true",
@@ -794,6 +1070,8 @@ def main():
                     quiet=args.quiet,
                     fail_on=args.fail_on,
                     fast=args.fast,
+                    config_path=args.config,
+                    sarif=args.sarif,
                     return_summary=True,
                 )
             if not args.json:
@@ -808,6 +1086,8 @@ def main():
             output_dir=args.output,
             fail_on=args.fail_on,
             fast=args.fast,
+            config_path=args.config,
+            sarif=args.sarif,
         )
     elif args.command == "install-hook":
         return install_hook()

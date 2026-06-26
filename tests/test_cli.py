@@ -101,6 +101,85 @@ def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
     assert any(timing["name"] == "Ruff" for timing in summary["timings"])
     assert any(timing["name"] == "Total" for timing in summary["timings"])
 
+
+def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "configured-reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+    config_path = tmp_path / "aegis.yml"
+    config_path.write_text(
+        "scan:\n"
+        "  output_dir: configured-reports\n"
+        "  no_docker: true\n"
+        "  sarif: results.sarif\n"
+        "  exclude_paths:\n"
+        "    - ignored_lab.py\n"
+    )
+
+    monkeypatch.chdir(tmp_path)
+    commands = []
+
+    def record_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
+        commands.append(command)
+        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
+         patch("app.cli.is_docker_available", return_value=True):
+        summary = execute_scan(
+            str(target_file),
+            tool_timeout=None,
+            config_path=str(config_path),
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    assert summary["scan_dir"] == str(output_dir.resolve())
+    assert summary["sarif_report"] == str((output_dir / "results.sarif").resolve())
+    assert (output_dir / "results.sarif").exists()
+    ruff_command = next(command for command in commands if "ruff" in command)
+    assert "ignored_lab.py" in " ".join(ruff_command)
+
+
+def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
+    target_file = tmp_path / "unsafe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("eval(input())\n")
+    config_path = tmp_path / "aegis.yml"
+    config_path.write_text(
+        "scan:\n"
+        "  fail_on: medium,high,critical\n"
+        "  suppressions:\n"
+        "    - tool: Ruff\n"
+        "      rule: S307\n"
+        "      path: unsafe.py\n"
+        "      reason: Regression fixture for suppression behavior.\n"
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
+        summary = execute_scan(
+            str(target_file),
+            use_docker=False,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            config_path=str(config_path),
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    suppressions = json.loads((output_dir / "suppressions-report.json").read_text())
+    assert suppressions == [{
+        "tool": "Ruff",
+        "rule": "S307",
+        "path": str(target_file),
+        "reason": "Regression fixture for suppression behavior.",
+    }]
+
 def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
     output_dir = tmp_path / "reports"
