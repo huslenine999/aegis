@@ -1,11 +1,10 @@
 {
-  "name": "aegis-secure-console",
+  "name": "aegis",
   "version": "2.0.0",
   "description": "Aegis retro CRT DevSecOps console for static code scanning and threat simulation",
   "main": "bin/cli.js",
   "bin": {
-    "aegis": "./bin/cli.js",
-    "aegis-secure-console": "./bin/cli.js"
+    "aegis": "./bin/cli.js"
   },
   "files": [
     "app/",

@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/enhanced-dashboard.css">
     <style>
         :root {
             /* Retro Green Phosphor Theme (Dark) */
@@ -894,6 +895,148 @@
     </nav>
 
     <div class="container">
+        <section id="modern-dashboard" class="modern-dashboard" aria-label="Aegis dashboard">
+            <div class="modern-hero">
+                <div>
+                    <div class="modern-kicker">AEGIS SECURITY WORKBENCH</div>
+                    <h1>Project Security Dashboard</h1>
+                    <p>Run scans, review the active verdict, triage findings, and reopen generated reports from one focused workspace.</p>
+                </div>
+                <div class="modern-actions">
+                    <select id="uxScanTarget" class="modern-select" aria-label="Scan target">
+                        <option value="vulnerable">Vulnerable demo target</option>
+                        <option value="secure">Secure demo target</option>
+                    </select>
+                    <button id="uxScanBtn" class="modern-btn primary" type="button">Run Audit</button>
+                    <button id="uxUploadBtn" class="modern-btn" type="button">Upload Python</button>
+                </div>
+            </div>
+
+            <div class="modern-tabs" role="tablist" aria-label="Dashboard sections">
+                <button class="modern-tab active" type="button" data-tab="overview">Overview</button>
+                <button class="modern-tab" type="button" data-tab="findings">Findings</button>
+                <button class="modern-tab" type="button" data-tab="reports">Reports</button>
+                <button class="modern-tab" type="button" data-tab="waf">WAF</button>
+                <button class="modern-tab" type="button" data-tab="logs">Logs</button>
+                <button class="modern-tab" type="button" data-tab="settings">Settings</button>
+            </div>
+
+            <div class="modern-tab-panel active" data-panel="overview">
+                <div class="modern-overview-grid">
+                    <article class="modern-card verdict-card">
+                        <div class="modern-card-label">Current Verdict</div>
+                        <div id="uxVerdict" class="modern-verdict neutral">No Scan Yet</div>
+                        <div id="uxVerdictReason" class="modern-muted">Run an audit to generate a deployment decision.</div>
+                    </article>
+                    <article class="modern-card">
+                        <div class="modern-card-label">Exploitability</div>
+                        <div class="modern-metric"><span id="uxRiskScore">0</span><small>/100</small></div>
+                        <div class="modern-meter"><span id="uxRiskMeter"></span></div>
+                    </article>
+                    <article class="modern-card">
+                        <div class="modern-card-label">WAF Status</div>
+                        <div id="uxWafState" class="modern-status muted">Unknown</div>
+                        <button id="uxWafToggle" class="modern-btn compact" type="button">Toggle WAF</button>
+                    </article>
+                    <article class="modern-card">
+                        <div class="modern-card-label">Latest Scan</div>
+                        <div id="uxLatestScan" class="modern-status muted">No report found</div>
+                        <div id="uxSandboxStatus" class="modern-muted">Sandbox status unavailable.</div>
+                    </article>
+                </div>
+
+                <div class="modern-card progress-card">
+                    <div class="modern-card-header">
+                        <div>
+                            <div class="modern-card-label">Scan Progress</div>
+                            <h2 id="uxProgressTitle">Ready</h2>
+                        </div>
+                        <span id="uxJobId" class="modern-chip">Idle</span>
+                    </div>
+                    <div class="modern-stepper" id="uxStepper">
+                        <div class="modern-step" data-step="queued"><span></span>Queued</div>
+                        <div class="modern-step" data-step="running"><span></span>Running</div>
+                        <div class="modern-step" data-step="analyzing"><span></span>Analyzing</div>
+                        <div class="modern-step" data-step="correlating"><span></span>Correlating</div>
+                        <div class="modern-step" data-step="reporting"><span></span>Reporting</div>
+                        <div class="modern-step" data-step="completed"><span></span>Complete</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modern-tab-panel" data-panel="findings">
+                <div class="modern-card">
+                    <div class="modern-card-header">
+                        <div>
+                            <div class="modern-card-label">Findings</div>
+                            <h2>Actionable Issues</h2>
+                        </div>
+                        <div class="modern-filter-group" aria-label="Finding filters">
+                            <button class="modern-filter active" type="button" data-filter="all">All</button>
+                            <button class="modern-filter" type="button" data-filter="critical">Critical</button>
+                            <button class="modern-filter" type="button" data-filter="high">High</button>
+                            <button class="modern-filter" type="button" data-filter="medium">Medium</button>
+                        </div>
+                    </div>
+                    <div id="uxFindings" class="modern-findings empty-state">Run a scan to populate security findings.</div>
+                </div>
+            </div>
+
+            <div class="modern-tab-panel" data-panel="reports">
+                <div class="modern-report-grid">
+                    <a class="modern-report-action" href="/report">Open HTML Report</a>
+                    <a class="modern-report-action" href="/export-dossier">Download Markdown Dossier</a>
+                    <a class="modern-report-action" href="/download-sbom">Download SBOM</a>
+                    <button id="uxCopyReport" class="modern-report-action" type="button">Copy Report Path</button>
+                </div>
+                <div id="uxReportPath" class="modern-path">Report path appears after a scan.</div>
+            </div>
+
+            <div class="modern-tab-panel" data-panel="waf">
+                <div class="modern-card">
+                    <div class="modern-card-header">
+                        <div>
+                            <div class="modern-card-label">Firewall Rules</div>
+                            <h2>Web Application Firewall</h2>
+                        </div>
+                        <button id="uxShowWafEditor" class="modern-btn compact" type="button">Open Advanced Editor</button>
+                    </div>
+                    <p class="modern-muted">The simple dashboard exposes WAF status and toggling. Tactical view contains the full custom rule editor and threat simulator.</p>
+                </div>
+            </div>
+
+            <div class="modern-tab-panel" data-panel="logs">
+                <div class="modern-card">
+                    <div class="modern-card-header">
+                        <div>
+                            <div class="modern-card-label">Live Events</div>
+                            <h2>Scan Log</h2>
+                        </div>
+                        <button id="uxClearLogs" class="modern-btn compact" type="button">Clear</button>
+                    </div>
+                    <div id="uxLogStream" class="modern-log-stream">No live scan events yet.</div>
+                </div>
+                <div class="modern-card">
+                    <div class="modern-card-label">Recent Scans</div>
+                    <div id="uxScanHistory" class="modern-history empty-state">Scan history is stored locally in this browser.</div>
+                </div>
+            </div>
+
+            <div class="modern-tab-panel" data-panel="settings">
+                <div class="modern-settings-grid">
+                    <label class="modern-setting">
+                        <span>Reduce visual effects</span>
+                        <input type="checkbox" id="uxReduceMotion">
+                    </label>
+                    <label class="modern-setting">
+                        <span>Default to simple dashboard</span>
+                        <input type="checkbox" id="uxDefaultSimple">
+                    </label>
+                </div>
+            </div>
+        </section>
+
+        <div id="legacy-experience" class="legacy-experience">
         <!-- Hero Console -->
         <h2 class="section-title reveal mono" data-i18n="static_audit">> STEP 1: STATIC CODE AUDIT &amp; SCAN</h2>
         <div class="terminal-panel hero reveal">
@@ -1336,6 +1479,7 @@
                 </a>
             </div>
         </div>
+        </div>
     </div>
 
     <footer>
@@ -1736,6 +1880,9 @@
             if (typeof currentLang !== 'undefined') {
                 setLanguage(currentLang);
             }
+            if (window.AegisUX && typeof window.AegisUX.handleViewChange === 'function') {
+                window.AegisUX.handleViewChange(view);
+            }
         }
 
         // Apply Language
@@ -1870,6 +2017,9 @@
             try {
                 const response = await fetch('/get-scan-results');
                 const data = await response.json();
+                if (window.AegisUX && typeof window.AegisUX.updateResults === 'function') {
+                    window.AegisUX.updateResults(data);
+                }
                 
                 const clamavSummary = document.getElementById('clamav-summary');
                 const clamavList = document.getElementById('clamav-findings-list');
@@ -2746,6 +2896,9 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                if (window.AegisUX && typeof window.AegisUX.handleScanMessage === 'function') {
+                    window.AegisUX.handleScanMessage(data);
+                }
                 if (data.type === 'state') {
                     const stateText = data.state.toUpperCase();
                     text.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> STATUS: ${stateText}`;
@@ -2767,6 +2920,9 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 } else if (data.type === 'result') {
                     text.innerText = i18n[currentLang]['scan_btn_scanned' + suffix] || 'SCAN COMPLETE';
                     addSyslogEntry('[OK] systemd: Scan completed. Report compiled successfully.', 'var(--primary)');
+                    if (window.AegisUX && typeof window.AegisUX.recordScanComplete === 'function') {
+                        window.AegisUX.recordScanComplete(data.result || {});
+                    }
                     ws.close();
                     setTimeout(() => {
                         window.location.href = '/report';
@@ -2811,6 +2967,9 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 });
                 const result = await response.json();
                 if (result.status === 'success') {
+                    if (window.AegisUX && typeof window.AegisUX.startScan === 'function') {
+                        window.AegisUX.startScan(result.job_id, { target: targetVal });
+                    }
                     startWebSocketScan(result.job_id, btn, text, suffix);
                 } else {
                     alert('SCAN ABORTED: ' + result.message);
@@ -2874,6 +3033,9 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                     });
                     const result = await response.json();
                     if (result.status === 'success') {
+                        if (window.AegisUX && typeof window.AegisUX.startScan === 'function') {
+                            window.AegisUX.startScan(result.job_id, { target: file.name, uploaded: true });
+                        }
                         startWebSocketScan(result.job_id, btn, text, suffix);
                     } else {
                         alert('SCAN ABORTED: ' + result.message);
@@ -3547,5 +3709,6 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             }, 500);
         }
     </script>
+    <script src="/static/enhanced-dashboard.js"></script>
 </body>
 </html>

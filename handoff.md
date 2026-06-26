@@ -2,7 +2,7 @@
 
 ## Current State
 
-Aegis is now a CLI-first security scanner, GitHub Actions approval gate, and FastAPI DevSecOps dashboard.
+Aegis is a CLI-first security scanner, reusable GitHub Actions approval gate, Python-installable command line package, and FastAPI DevSecOps dashboard.
 
 The main user-facing command is:
 
@@ -10,7 +10,13 @@ The main user-facing command is:
 aegis scan .
 ```
 
-The desired cloud flow is wired:
+The fastest local feedback path is:
+
+```bash
+aegis scan . --fast
+```
+
+The cloud approval flow is:
 
 ```txt
 Developer pushes to GitHub
@@ -21,46 +27,52 @@ Developer pushes to GitHub
 -> workflow passes when approved and fails when declined
 ```
 
-The public product/command name is now just `aegis`. The old `aegis-secure-console` package/bin naming has been removed from repo metadata and docs.
-
-Important npm caveat: the public npm package name `aegis` is already taken by another package (`aegis@0.1.0`). This repo can package locally as `aegis`, but publishing to public npm as unscoped `aegis` requires getting that package name transferred or choosing a scoped name.
+The public product/command name is `aegis`. The Python distribution name is `aegis-security-console`. The npm package metadata also exposes the `aegis` command, but the public npm name `aegis` is already taken by another package, so public npm publishing still requires a transfer or a scoped package name.
 
 ## Install and Use
 
-Install from the GitHub repo source:
+Install as a Python CLI with pipx:
 
 ```bash
-npm install -g github:huslenine999/aegis
-```
-
-Use the CLI:
-
-```bash
+pipx install git+https://github.com/huslenine999/aegis
 aegis scan .
 ```
 
-Fast local scan without Docker, Trivy, and DAST:
+Install into an active Python environment:
 
 ```bash
+pip install git+https://github.com/huslenine999/aegis
+aegis scan .
+```
+
+Local editable install:
+
+```bash
+pip install -e ".[dev]"
+aegis scan .
+```
+
+Install through the GitHub npm source wrapper:
+
+```bash
+npm install -g github:huslenine999/aegis
+aegis scan .
+```
+
+Useful CLI commands:
+
+```bash
+aegis scan .
+aegis scan . --fast
 aegis scan . --no-docker
-```
-
-Write reports to a specific folder:
-
-```bash
-aegis scan . --no-docker --output ./aegis-reports
-```
-
-Print JSON for automation:
-
-```bash
-aegis scan . --no-docker --json
-```
-
-Override supported blocking severities:
-
-```bash
+aegis scan . --output ./aegis-reports
+aegis scan . --json
 aegis scan . --fail-on medium,high,critical
+aegis report --path
+aegis report --open
+aegis doctor
+aegis doctor --json
+aegis version
 ```
 
 Expected exit codes:
@@ -70,12 +82,34 @@ Expected exit codes:
 1 = project declined / security gate blocked or command failed
 ```
 
-Health and version checks:
+## CLI Performance and Reports
+
+`--fast` skips the slowest optional scanner paths:
+
+- Safety/OSV dependency checks.
+- Semgrep.
+- ClamAV.
+- Docker sandbox execution.
+- Trivy.
+- DAST endpoint probes.
+
+Fast mode still runs:
+
+- Ruff SAST.
+- detect-secrets.
+- YARA/fallback signatures.
+- Policy engine/report generation.
+
+The CLI now records scanner timings. Normal terminal output prints a `Scanner timings:` block, and JSON summaries include a `timings` array.
+
+The report command locates generated reports:
 
 ```bash
-aegis doctor
-aegis doctor --json
-aegis version
+aegis report
+aegis report --path
+aegis report --open
+aegis report --markdown
+aegis report --dir ./aegis-reports
 ```
 
 ## GitHub Actions Gate
@@ -124,9 +158,9 @@ jobs:
           fail-on: medium,high,critical
 ```
 
-This repo’s own workflow, `.github/workflows/security-pipeline.yml`, now has two jobs:
+This repo's workflow, `.github/workflows/security-pipeline.yml`, has:
 
-- `security-gate`: runs the Aegis approval scan on every push/PR.
+- `security-gate`: runs the reusable Aegis approval scan on every push/PR.
 - `validate`: runs syntax, CLI, package metadata, and focused policy tests.
 
 ## Local Git Hook
@@ -143,10 +177,10 @@ Remove it:
 aegis uninstall-hook
 ```
 
-The hook runs:
+The hook now runs fast mode:
 
 ```bash
-aegis scan "$REPO_DIR"
+aegis scan "$REPO_DIR" --fast
 ```
 
 and blocks `git push` when the policy engine returns non-zero.
@@ -159,18 +193,32 @@ Start the dashboard:
 ./setup.sh
 ```
 
-The setup script verifies Redis, starts an RQ worker, and launches Uvicorn on:
+The setup script verifies Redis, starts an RQ worker when Redis is available, and launches Uvicorn on:
 
 ```txt
 http://127.0.0.1:5001
 ```
 
-The dashboard supports:
+The dashboard now defaults to a cleaner Simple view. Tactical view preserves the original CRT/security-console experience.
 
-- Simple and Tactical view modes.
+Simple view includes:
+
+- Overview cards for verdict, exploitability, WAF status, and latest scan.
+- Scan and upload actions.
+- Stepper-style scan progress.
+- Findings tab with severity filters and fix guidance.
+- Reports tab with HTML, Markdown dossier, SBOM, and copy-path actions.
+- WAF tab with simple status/toggle and a route to the advanced editor.
+- Logs tab with live scan events and local browser scan history.
+- Settings tab with reduced-motion and default-view controls.
+
+Tactical view includes:
+
 - Live scan state streaming over `/ws/scan/{job_id}`.
 - Legacy telemetry over `/stream-telemetry`.
-- WAF rule toggling and rule editing.
+- WAF custom rule editing.
+- Threat simulation lab.
+- Dependency graph visualization.
 - Static, dependency, sandbox, Trivy, DAST, secrets, YARA, and ClamAV scan summaries.
 - HTML and Markdown compliance reports.
 
@@ -190,24 +238,32 @@ The active scanner path includes:
 - DAST-style probes against sandboxed endpoints.
 - Policy decisions through `policy_engine.py`.
 
-The CLI creates placeholder reports for skipped tools so policy decisions stay deterministic. Docker-dependent checks are skipped cleanly when Docker is unavailable or `--no-docker` is used.
+The CLI creates placeholder reports for skipped tools so policy decisions stay deterministic. Docker-dependent checks are skipped cleanly when Docker is unavailable, `--no-docker` is used, or `--fast` is used.
 
 Recent implementation notes:
 
-- `app/scanners.py` now owns shared Semgrep rule generation, YARA scanning/fallback matching, and ClamAV scanning/fallback matching.
-- `app/cli.py` uses the shared scanner module with a terminal log adapter.
-- `app/worker.py` uses the shared scanner module with Redis/WebSocket log publishing wrappers, preserving the existing `run_yara_scan(..., job_id=...)` and `run_clamav_scan(..., job_id=...)` import surface.
-- The CLI Docker path now matches `app/sandbox.py`: it starts containers as `(image_tag, container_name, host_port, container_port, waf_enabled)`, waits on `http://127.0.0.1:{host_port}`, then runs DAST against that URL.
+- `pyproject.toml` packages Aegis as `aegis-security-console` and exposes `aegis = app.cli:main`.
+- `app/__init__.py` and `rules/__init__.py` make package resources importable.
+- `app/static/enhanced-dashboard.css` owns the cleaner dashboard styling.
+- `app/static/enhanced-dashboard.js` owns Simple-view dashboard behavior.
+- `app/main.py` mounts `/static` and expands `/get-scan-results` with scanner reports, latest report metadata, and report links.
+- `app/scanners.py` owns shared Semgrep rule generation, YARA scanning/fallback matching, and ClamAV scanning/fallback matching.
+- `app/worker.py` uses the shared scanner module with Redis/WebSocket log publishing wrappers.
+- The CLI Docker path matches `app/sandbox.py`: it starts containers as `(image_tag, container_name, host_port, container_port, waf_enabled)`, waits on `http://127.0.0.1:{host_port}`, then runs DAST against that URL.
 
 ## Key Files
 
+- `pyproject.toml`: Python package metadata and CLI entry point.
 - `action.yml`: reusable GitHub Action approval gate.
 - `.github/workflows/security-pipeline.yml`: repo CI with approval gate and validation job.
 - `app/cli.py`: CLI scanner implementation.
-- `app/scanners.py`: shared Semgrep, YARA, and ClamAV scanner helpers.
-- `policy_engine.py`: report analyzers, CVSS scoring, policy decision, report generation.
-- `app/main.py`: FastAPI web app, WAF middleware, dashboard routes, WebSockets.
+- `app/main.py`: FastAPI web app, WAF middleware, dashboard routes, static assets, WebSockets.
 - `app/worker.py`: Redis Queue scan worker and live log publisher.
+- `app/scanners.py`: shared Semgrep, YARA, and ClamAV scanner helpers.
+- `app/static/enhanced-dashboard.css`: Simple-view dashboard styles.
+- `app/static/enhanced-dashboard.js`: Simple-view dashboard controller.
+- `app/templates/index.html`: dashboard shell and preserved tactical UI.
+- `policy_engine.py`: report analyzers, CVSS scoring, policy decision, report generation.
 - `app/sandbox.py`: Docker sandbox lifecycle, telemetry, Trivy helpers.
 - `bin/aegis`: local shell wrapper.
 - `bin/cli.js`: npm wrapper.
@@ -218,62 +274,54 @@ Recent implementation notes:
 
 ## Verification Performed
 
-Passed:
+Recent passing checks:
 
 ```bash
+./venv/bin/python -m py_compile app/main.py app/cli.py app/worker.py
 ./venv/bin/python -m py_compile app/scanners.py app/cli.py app/worker.py
-./venv/bin/python -m pytest tests/test_cli.py tests/test_sandbox.py tests/test_phase1.py tests/test_phase3.py::test_run_clamav_scan_eicar tests/test_phase3.py::test_run_clamav_scan_backdoor
+node --check app/static/enhanced-dashboard.js
+./venv/bin/python -m pytest tests/test_cli.py
 ```
 
 Result:
 
 ```txt
-29 passed, 96 warnings
+11 passed, 46 warnings
 ```
 
-Additional note: a broader phase3 run was interrupted after 29 passing tests because later WAF/DAST integration tests hung. The scanner refactor and Docker CLI contract are covered by the focused passing suite above.
-
-YAML validation passed:
+Static/dashboard endpoint smoke checks passed through FastAPI `TestClient`:
 
 ```txt
-action.yml: ok
-.github/workflows/security-pipeline.yml: ok
+/ 200
+/static/enhanced-dashboard.css 200
+/static/enhanced-dashboard.js 200
+/get-scan-results 200
 ```
 
-Package metadata and packaging checks passed:
+Python packaging checks passed:
 
 ```bash
-node -e "const p=require('./package.json'); if (p.name !== 'aegis') process.exit(1)"
-env npm_config_cache=/private/tmp/aegis-npm-cache npm pack --dry-run --loglevel=warn
+python3 -m pip wheel . --no-deps -w /private/tmp/aegis-wheel-test
+./venv/bin/python -m pip install -e . --no-deps --no-build-isolation
+./venv/bin/aegis version
+./venv/bin/aegis --help
 ```
 
-`npm pack --dry-run` produced:
+Browser verification performed with the in-app browser:
 
-```txt
-aegis-2.0.0.tgz
-```
+- Simple view opens by default.
+- New dashboard is visible.
+- Tactical legacy experience is hidden in Simple view.
+- Findings tab interaction works.
+- Desktop screenshot had no console errors.
+- Mobile viewport had no horizontal overflow.
 
-Note: plain `npm pack --dry-run` initially failed because npm tried to write logs under `/Users/huslenine/.npm/_logs`, which was outside the writable sandbox. Using a temp npm cache fixed it.
+Known test caveat:
+
+- A broader web test subset was interrupted after `tests/test_cli.py` completed because an existing upload/WAF integration path hung. This appears consistent with the previous handoff note about slow WAF/DAST integration tests and was not introduced by the dashboard static asset checks.
 
 ## Current Git/Workspace Notes
 
-There were pre-existing uncommitted changes before the latest edits, including changes in `app/cli.py`, `tests/test_cli.py`, `README.md`, `handoff.md`, and deleted generated files under `scans/`. Those were not reverted.
-
-Current notable generated/deleted artifacts:
-
-```txt
-scans/report.html deleted
-scans/report.md deleted
-```
-
-Decide before release whether generated `scans/` reports should remain tracked or be ignored.
-
-## Recommended Next Moves
-
-1. Decide npm publishing strategy:
-   - get `aegis` transferred on npm, or
-   - publish under a scoped name such as `@huslenine/aegis`, while keeping the command binary as `aegis`.
-2. Run the GitHub Action in a real GitHub push/PR to verify artifact upload and branch-protection behavior.
-3. Isolate the hanging full-suite test path and restore a clean full-suite result.
-4. Update `CHANGELOG.md` with the cloud gate and `aegis` rename.
-5. Tag a release after CI is stable.
+- Generated reports under `scans/` changed during local verification and should generally stay out of commits unless intentionally refreshing committed sample output.
+- The new dashboard assets are under `app/static/`.
+- `scanner-venv/`, `.aegis/`, cache folders, build outputs, and egg metadata are ignored in `.gitignore`.

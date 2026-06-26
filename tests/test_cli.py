@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "app"))
 
-from app.cli import install_hook, uninstall_hook, execute_scan, main, run_doctor
+from app.cli import install_hook, uninstall_hook, execute_scan, main, run_doctor, run_report
 
 
 def fake_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
@@ -98,6 +98,41 @@ def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
     assert summary["scan_dir"] == str(output_dir.resolve())
     assert (output_dir / "report.md").exists()
     assert (output_dir / "report.html").exists()
+    assert any(timing["name"] == "Ruff" for timing in summary["timings"])
+    assert any(timing["name"] == "Total" for timing in summary["timings"])
+
+def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.chdir(tmp_path)
+    labels = []
+
+    def record_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
+        labels.append(label)
+        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+
+    with patch("app.cli.query_osv_vulnerabilities") as osv_query, \
+         patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
+         patch("app.cli.is_docker_available", return_value=True), \
+         patch("app.cli.run_dast_scan") as dast_scan, \
+         patch("app.cli.shared_run_clamav_scan") as clamav_scan:
+        summary = execute_scan(
+            str(target_file),
+            use_docker=True,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            fast=True,
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    assert labels == ["Ruff", "Secrets"]
+    osv_query.assert_not_called()
+    dast_scan.assert_not_called()
+    clamav_scan.assert_not_called()
 
 def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
@@ -158,6 +193,32 @@ def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, 
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "allowed"
     assert payload["target"] == str(target_file.resolve())
+    assert any(timing["name"] == "Total" for timing in payload["timings"])
+
+def test_report_command_prints_and_opens_report(tmp_path, capsys):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_path = report_dir / "report.html"
+    report_path.write_text("<html>Aegis</html>")
+
+    assert run_report(report_dir=str(report_dir), path_only=True) == 0
+    assert capsys.readouterr().out.strip() == str(report_path.resolve())
+
+    with patch("app.cli.open_report_file", return_value=0) as open_report:
+        assert run_report(report_dir=str(report_dir), open_report=True) == 0
+    open_report.assert_called_once_with(report_path.resolve())
+
+def test_report_command_markdown_and_missing_report(tmp_path, capsys):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    md_path = report_dir / "report.md"
+    md_path.write_text("# Aegis")
+
+    assert run_report(report_dir=str(report_dir), markdown=True, path_only=True) == 0
+    assert capsys.readouterr().out.strip() == str(md_path.resolve())
+
+    assert run_report(report_dir=str(tmp_path / "missing")) == 1
+    assert "No Aegis report found" in capsys.readouterr().out
 
 def test_doctor_and_version_commands(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["aegis", "version"])

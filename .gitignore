@@ -1,7 +1,14 @@
 venv/
+scanner-venv/
 __pycache__/
 *.pyc
 *.db
 scans/
+.aegis/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+*.egg-info/
 .env
 .DS_Store

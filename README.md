@@ -26,6 +26,14 @@ Skip Docker, Trivy, and DAST checks for a faster local-only scan:
 aegis scan app/main.py --no-docker
 ```
 
+Run the quickest local iteration scan:
+
+```bash
+aegis scan . --fast
+```
+
+Fast mode skips Safety/OSV, Semgrep, ClamAV, Docker sandbox, Trivy, and DAST checks. It still runs Ruff SAST, detect-secrets, YARA/fallback signatures, and the policy engine.
+
 Set a per-tool timeout:
 
 ```bash
@@ -36,6 +44,24 @@ Write reports to a specific directory:
 
 ```bash
 aegis scan app/main.py --output ./aegis-reports
+```
+
+Show the latest report path:
+
+```bash
+aegis report --path
+```
+
+Open the latest HTML report:
+
+```bash
+aegis report --open
+```
+
+Use a custom report directory:
+
+```bash
+aegis report --dir ./aegis-reports --path
 ```
 
 Print a JSON summary for CI or scripts:
@@ -61,6 +87,17 @@ The CLI writes reports next to the target:
 ```txt
 .aegis/scans/report.html
 .aegis/scans/report.md
+```
+
+Normal terminal scans print per-tool timing output. JSON summaries include the same information in a `timings` array:
+
+```txt
+Scanner timings:
+  Ruff: 0.16s
+  Secrets: 0.40s
+  YARA: 0.01s
+  Policy Engine: 0.05s
+  Total: 0.62s
 ```
 
 Exit codes:
@@ -112,14 +149,41 @@ http://127.0.0.1:5001
 
 ## Package Installation
 
-Install from the GitHub package source:
+Install as a Python CLI with pipx:
+
+```bash
+pipx install git+https://github.com/huslenine999/aegis
+aegis scan app/main.py
+```
+
+Or install into an active Python environment:
+
+```bash
+pip install git+https://github.com/huslenine999/aegis
+aegis scan app/main.py
+```
+
+For local development, install the checkout in editable mode:
+
+```bash
+pip install -e ".[dev]"
+aegis scan app/main.py
+```
+
+The Python distribution name is `aegis-security-console`; it exposes the command:
+
+```txt
+aegis
+```
+
+The npm wrapper remains available from the GitHub package source:
 
 ```bash
 npm install -g github:huslenine999/aegis
 aegis scan app/main.py
 ```
 
-The package exposes the command:
+The npm package also exposes the command:
 
 ```txt
 aegis
@@ -238,10 +302,21 @@ graph TD
     Policy --> Reports[HTML and Markdown Reports]
     Worker --> Redis[Redis Pub/Sub]
     Redis --> WS[WebSocket /ws/scan/job_id]
-    WS --> UI[CRT Dashboard]
+    WS --> UI[Simple Dashboard and Tactical Console]
 ```
 
-The dashboard supports Simple and Tactical views, live scan state updates, EventSource telemetry, WAF rule controls, dependency graph visualization, and generated compliance reports.
+The dashboard defaults to Simple view, a cleaner security workbench for daily use:
+
+- Overview cards for verdict, exploitability, WAF status, and latest scan.
+- Scan and upload actions.
+- Stepper-style scan progress.
+- Findings tab with severity filters and fix guidance.
+- Reports tab with HTML, Markdown dossier, SBOM, and copy-path actions.
+- WAF tab with status/toggle and a route to the advanced editor.
+- Logs tab with live scan events and browser-local scan history.
+- Settings tab with reduced-motion and default-view controls.
+
+Tactical view preserves the original CRT-style console with live scan state updates, EventSource telemetry, WAF rule controls, dependency graph visualization, threat simulation, and generated compliance reports.
 
 ---
 
@@ -257,8 +332,11 @@ aegis/
 │   ├── database.py             # SQLite setup and WAF rule seed data
 │   ├── sandbox.py              # Docker sandbox lifecycle and telemetry
 │   ├── scanners.py             # Shared Semgrep, YARA, and ClamAV scanner helpers
+│   ├── static/
+│   │   ├── enhanced-dashboard.css
+│   │   └── enhanced-dashboard.js
 │   └── templates/
-│       ├── index.html          # CRT dashboard UI
+│       ├── index.html          # Simple dashboard shell and tactical UI
 │       └── report_template.html
 ├── bin/
 │   ├── aegis                   # Local shell wrapper
@@ -276,6 +354,7 @@ aegis/
 │   └── ...
 ├── policy_engine.py
 ├── package.json
+├── pyproject.toml
 ├── requirements.txt
 └── setup.sh
 ```
@@ -293,11 +372,22 @@ Focused scanner, CLI, sandbox, and policy-adjacent verification:
 Syntax and help checks:
 
 ```bash
+./venv/bin/python -m py_compile app/main.py app/cli.py app/worker.py
 ./venv/bin/python -m py_compile app/scanners.py app/cli.py app/worker.py
+node --check app/static/enhanced-dashboard.js
 ./venv/bin/python app/cli.py --help
 ./venv/bin/python app/cli.py scan --help
 ./venv/bin/python app/cli.py doctor --json
 ./venv/bin/python app/cli.py version
+```
+
+Dashboard smoke checks:
+
+```txt
+/ 200
+/static/enhanced-dashboard.css 200
+/static/enhanced-dashboard.js 200
+/get-scan-results 200
 ```
 
 Current focused verification status:
@@ -329,7 +419,7 @@ aegis uninstall-hook
 The hook runs:
 
 ```bash
-aegis scan "$REPO_DIR"
+aegis scan "$REPO_DIR" --fast
 ```
 
 and blocks the push when the policy engine returns a non-zero exit code.
@@ -339,7 +429,9 @@ and blocks the push when the policy engine returns a non-zero exit code.
 ## Notes for Teams
 
 - Use `aegis scan <filename>` for quick local review before committing.
+- Use `aegis scan . --fast` for quick local feedback when you do not need the slower optional scanners.
 - Use `aegis scan . --no-docker` in fast pre-push or CI jobs when Docker is unavailable.
 - Use `aegis scan . --json --output ./reports` when integrating with automation.
+- Use `aegis report --open` after a scan to inspect the generated HTML report.
 - Run the full dashboard flow when you want live logs, WAF controls, sandbox telemetry, and visual reports.
 - Treat generated `.aegis/scans/` output as local scan artifacts unless you explicitly want to archive reports.

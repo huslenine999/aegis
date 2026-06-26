@@ -7,12 +7,22 @@ from typing import Callable
 
 
 DEFAULT_IGNORED_DIRS = {
-    "venv",
-    "scanner-venv",
-    ".git",
-    ".pytest_cache",
-    ".antigravitycli",
     ".aegis",
+    ".antigravitycli",
+    ".git",
+    ".mypy_cache",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "scanner-venv",
+    "scans",
+    "venv",
 }
 
 LogCallback = Callable[[str, str], None]

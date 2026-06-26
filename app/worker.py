@@ -7,6 +7,7 @@ import socket
 import subprocess
 import time
 import sqlite3
+import re
 from pathlib import Path
 import redis
 
@@ -18,12 +19,22 @@ from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, r
 from policy_engine import get_ruff_severity
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
+from scanners import DEFAULT_IGNORED_DIRS
 from scanners import write_semgrep_rules
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
     get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
 )
+
+EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
+
+
+def add_semgrep_excludes(command: list[str]) -> list[str]:
+    for ignored_dir in sorted(DEFAULT_IGNORED_DIRS):
+        command.extend(["--exclude", ignored_dir])
+    return command
+
 
 def publish_job_event(job_id: str, event_type: str, data: dict):
     channel = f"job_channel:{job_id}"
@@ -224,6 +235,8 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
             # Empty placeholders for custom scans
             with open(SCANS_DIR / "safety-report.json", "w") as f:
                 json.dump([], f)
+            with open(SCANS_DIR / "osv-report.json", "w") as f:
+                json.dump([], f)
             with open(SCANS_DIR / "trivy-report.json", "w") as f:
                 json.dump({"Results": []}, f)
         else:
@@ -303,6 +316,7 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         ruff_report_path = SCANS_DIR / "ruff-report.json"
         if has_python:
             ruff_cmd = [python_bin, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+            ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
             execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
         else:
             with open(ruff_report_path, "w") as f:
@@ -320,9 +334,12 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                 
                 semgrep_bin = Path(python_bin).parent / "semgrep"
                 if not semgrep_bin.exists():
-                    semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json", "-o", str(semgrep_report_path), target_path]
+                    semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
                 else:
-                    semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json", "-o", str(semgrep_report_path), target_path]
+                    semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json"]
+                os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
+                add_semgrep_excludes(semgrep_cmd)
+                semgrep_cmd.extend(["-o", str(semgrep_report_path), target_path])
                 execute_subprocess_log(semgrep_cmd, PROJECT_ROOT, job_id, "SAST:Semgrep")
             except Exception as e:
                 with open(semgrep_report_path, "w") as f:
@@ -337,7 +354,8 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         try:
             secrets_cmd = [
                 python_bin, "-m", "detect_secrets", "scan", "--all-files",
-                "--exclude-files", "venv/|scanner-venv/|tests/|scans/|\\.pytest_cache/|\\.git/|\\.antigravitycli/",
+                "--exclude-files", EXCLUDE_FILES_PATTERN,
+                "--no-verify",
                 target_path
             ]
             publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})

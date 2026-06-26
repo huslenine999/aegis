@@ -1,0 +1,433 @@
+body.view-simple {
+    --bg-base: #07100b;
+    --bg-surface: rgba(9, 20, 14, 0.78);
+    --text-main: #d8f5de;
+    --text-muted: #9bb9a4;
+}
+
+body.view-simple::before,
+body.view-simple::after {
+    opacity: 0.16;
+}
+
+body.view-simple .legacy-experience {
+    display: none;
+}
+
+body:not(.view-simple) #modern-dashboard {
+    display: none;
+}
+
+.modern-dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding-bottom: 3rem;
+}
+
+.modern-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1.25rem;
+    align-items: end;
+    padding: 1.5rem 0 0.75rem;
+}
+
+.modern-hero h1 {
+    margin: 0.2rem 0 0.45rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 2.35rem;
+    line-height: 1.05;
+    letter-spacing: 0;
+    color: var(--text-main);
+    text-shadow: none;
+    animation: none;
+    text-transform: none;
+}
+
+.modern-hero p {
+    max-width: 760px;
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+.modern-kicker,
+.modern-card-label {
+    color: var(--secondary);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0;
+    text-transform: uppercase;
+}
+
+.modern-actions,
+.modern-tabs,
+.modern-filter-group,
+.modern-card-header,
+.modern-report-grid,
+.modern-settings-grid {
+    display: flex;
+    gap: 0.65rem;
+}
+
+.modern-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.modern-btn,
+.modern-select,
+.modern-tab,
+.modern-filter,
+.modern-report-action {
+    min-height: 38px;
+    border: 1px solid rgba(61, 251, 87, 0.32);
+    border-radius: 6px;
+    background: rgba(5, 12, 8, 0.78);
+    color: var(--text-main);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.86rem;
+    letter-spacing: 0;
+    text-decoration: none;
+}
+
+.modern-btn,
+.modern-tab,
+.modern-filter,
+.modern-report-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.55rem 0.85rem;
+    cursor: pointer;
+}
+
+.modern-btn.primary,
+.modern-tab.active,
+.modern-filter.active {
+    border-color: var(--primary);
+    background: rgba(61, 251, 87, 0.14);
+    color: var(--primary);
+}
+
+.modern-btn:hover,
+.modern-tab:hover,
+.modern-filter:hover,
+.modern-report-action:hover {
+    border-color: var(--secondary);
+    color: var(--secondary);
+}
+
+.modern-btn.compact {
+    min-height: 32px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+}
+
+.modern-select {
+    padding: 0.45rem 0.65rem;
+    min-width: 210px;
+}
+
+.modern-tabs {
+    flex-wrap: wrap;
+    padding: 0.35rem;
+    border: 1px solid rgba(61, 251, 87, 0.18);
+    border-radius: 8px;
+    background: rgba(2, 6, 4, 0.38);
+}
+
+.modern-tab-panel {
+    display: none;
+}
+
+.modern-tab-panel.active {
+    display: block;
+}
+
+.modern-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.modern-card {
+    border: 1px solid rgba(61, 251, 87, 0.22);
+    border-radius: 8px;
+    background: rgba(6, 15, 8, 0.74);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.18);
+    padding: 1rem;
+}
+
+.modern-card h2 {
+    margin: 0.2rem 0 0;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.28rem;
+    color: var(--text-main);
+    text-shadow: none;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.modern-card-header {
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-bottom: 0.9rem;
+}
+
+.modern-verdict,
+.modern-metric,
+.modern-status {
+    margin-top: 0.35rem;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.5rem;
+    color: var(--primary);
+}
+
+.modern-verdict.blocked {
+    color: var(--danger);
+}
+
+.modern-verdict.allowed {
+    color: var(--primary);
+}
+
+.modern-verdict.neutral,
+.modern-status.muted {
+    color: var(--text-muted);
+}
+
+.modern-muted {
+    margin-top: 0.35rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.modern-metric small {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.modern-meter {
+    height: 8px;
+    margin-top: 0.65rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+
+.modern-meter span {
+    display: block;
+    width: 0%;
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.progress-card {
+    margin-top: 1rem;
+}
+
+.modern-chip {
+    border: 1px solid rgba(61, 251, 87, 0.3);
+    border-radius: 999px;
+    padding: 0.25rem 0.65rem;
+    color: var(--text-muted);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.75rem;
+}
+
+.modern-stepper {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.55rem;
+}
+
+.modern-step {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    color: var(--text-muted);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.8rem;
+}
+
+.modern-step span {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+}
+
+.modern-step.active {
+    color: var(--secondary);
+}
+
+.modern-step.done {
+    color: var(--primary);
+}
+
+.modern-findings,
+.modern-history,
+.modern-log-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.modern-finding,
+.modern-history-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.8rem;
+    border: 1px solid rgba(61, 251, 87, 0.14);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.22);
+}
+
+.modern-severity {
+    min-width: 68px;
+    text-align: center;
+    border-radius: 999px;
+    padding: 0.2rem 0.45rem;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.72rem;
+}
+
+.modern-severity.critical,
+.modern-severity.high {
+    color: #fff;
+    background: rgba(255, 51, 51, 0.75);
+}
+
+.modern-severity.medium {
+    color: #140d00;
+    background: rgba(255, 184, 26, 0.9);
+}
+
+.modern-severity.low,
+.modern-severity.info {
+    color: var(--primary);
+    background: rgba(61, 251, 87, 0.12);
+}
+
+.modern-finding-title {
+    color: var(--text-main);
+    font-weight: 700;
+    word-break: break-word;
+}
+
+.modern-finding-meta,
+.modern-finding-fix {
+    margin-top: 0.25rem;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
+
+.modern-log-stream {
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 0.75rem;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.32);
+    color: var(--text-muted);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.82rem;
+}
+
+.modern-report-grid,
+.modern-settings-grid {
+    flex-wrap: wrap;
+}
+
+.modern-report-action {
+    flex: 1 1 190px;
+}
+
+.modern-path {
+    margin-top: 0.85rem;
+    padding: 0.75rem;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.28);
+    color: var(--text-muted);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.82rem;
+    word-break: break-all;
+}
+
+.modern-setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex: 1 1 260px;
+    border: 1px solid rgba(61, 251, 87, 0.18);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    color: var(--text-main);
+}
+
+.empty-state {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+body.ux-reduce-motion *,
+body.ux-reduce-motion::before,
+body.ux-reduce-motion::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+}
+
+@media (max-width: 920px) {
+    .modern-hero {
+        grid-template-columns: 1fr;
+    }
+
+    .modern-actions {
+        justify-content: stretch;
+    }
+
+    .modern-actions > * {
+        flex: 1 1 180px;
+    }
+
+    .modern-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .modern-stepper {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 620px) {
+    .modern-hero h1 {
+        font-size: 1.75rem;
+    }
+
+    .modern-overview-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .modern-finding,
+    .modern-history-item {
+        grid-template-columns: 1fr;
+    }
+
+    .modern-filter-group {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 0.15rem;
+    }
+}

@@ -65,7 +65,6 @@ else
 fi
 
 # 4. Run the application
-echo "[4/4] Setup complete! Starting Aegis secure console..."
+echo "[4/4] Setup complete! Starting Aegis..."
 echo "Access the dashboard at http://127.0.0.1:5001"
 exec venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 5001 --reload
-

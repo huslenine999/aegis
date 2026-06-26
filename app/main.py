@@ -27,6 +27,7 @@ from fastapi import FastAPI, Request, Response, HTTPException, WebSocket, WebSoc
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from werkzeug.utils import secure_filename
 import redis
 
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # Global state for the WAF toggle (demo only)
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
@@ -446,6 +448,12 @@ def get_scan_results():
     clamav = load_json_safe(SCANS_DIR / "clamav-report.json")
     zap = load_json_safe(SCANS_DIR / "zap-report.json")
     osv = load_json_safe(SCANS_DIR / "osv-report.json")
+    ruff = load_json_safe(SCANS_DIR / "ruff-report.json")
+    semgrep = load_json_safe(SCANS_DIR / "semgrep-report.json")
+    safety = load_json_safe(SCANS_DIR / "safety-report.json")
+    trivy = load_json_safe(SCANS_DIR / "trivy-report.json")
+    secrets = load_json_safe(SCANS_DIR / "secrets-report.json")
+    yara = load_json_safe(SCANS_DIR / "yara-report.json")
     
     score = calculate_exploitability_score(SCANS_DIR, WAF_ENABLED)
     
@@ -459,14 +467,12 @@ def get_scan_results():
         is_blocked = True
         reasons.append("ZAP DAST")
         
-    ruff = load_json_safe(SCANS_DIR / "ruff-report.json")
     if ruff and isinstance(ruff, list):
         blocking_ruff = len([r for r in ruff if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
         if blocking_ruff > 0:
             is_blocked = True
             reasons.append("Ruff (SAST)")
             
-    semgrep = load_json_safe(SCANS_DIR / "semgrep-report.json")
     if semgrep and isinstance(semgrep, dict):
         blocking_semgrep = len([r for r in semgrep.get("results", []) if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}])
         if blocking_semgrep > 0:
@@ -479,7 +485,12 @@ def get_scan_results():
             is_blocked = True
             reasons.append("OSV Dependency Audit")
             
-    has_run = (ruff is not None) or (semgrep is not None) or (osv is not None)
+    has_run = any(report is not None for report in [ruff, semgrep, osv, safety, trivy, secrets, yara, clamav, zap])
+
+    latest_report = SCANS_DIR / "report.html"
+    latest_scan_time = None
+    if latest_report.exists():
+        latest_scan_time = latest_report.stat().st_mtime
 
     sandbox_status_file = SCANS_DIR / "sandbox-status.json"
     sandbox_status = "simulated_fallback"
@@ -493,12 +504,22 @@ def get_scan_results():
         "clamav": clamav,
         "zap": zap,
         "osv": osv,
+        "ruff": ruff,
+        "semgrep": semgrep,
+        "safety": safety,
+        "trivy": trivy,
+        "secrets": secrets,
+        "yara": yara,
         "exploitability_score": score,
         "waf_enabled": WAF_ENABLED,
         "has_run": has_run,
         "is_blocked": is_blocked,
         "blocked_by": reasons,
-        "sandbox_status": sandbox_status
+        "sandbox_status": sandbox_status,
+        "latest_scan_time": latest_scan_time,
+        "report_url": "/report" if latest_report.exists() else None,
+        "markdown_url": "/export-dossier" if latest_report.exists() else None,
+        "sbom_url": "/download-sbom" if (SCANS_DIR / "sbom.json").exists() else None
     }
 
 @app.get("/get-dependency-graph")

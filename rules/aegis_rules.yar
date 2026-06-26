@@ -1,7 +1,7 @@
 rule Backdoor_Webshell {
     meta:
         description = "Detects Python webshell or remote command execution patterns"
-        author = "Aegis Secure Console"
+        author = "Aegis"
     strings:
         $p1 = "eval(request.args" ascii wide
         $p2 = "eval(request.form" ascii wide
@@ -18,7 +18,7 @@ rule Backdoor_Webshell {
 rule Obfuscated_Payload {
     meta:
         description = "Detects base64 obfuscation combined with execution"
-        author = "Aegis Secure Console"
+        author = "Aegis"
     strings:
         $s1 = "base64.b64decode" ascii wide
         $s2 = "exec(" ascii wide
@@ -30,7 +30,7 @@ rule Obfuscated_Payload {
 rule Suspicious_Shell_Spawn {
     meta:
         description = "Detects shell spawning commands, likely for reverse shells"
-        author = "Aegis Secure Console"
+        author = "Aegis"
     strings:
         $sh1 = "/bin/sh" ascii wide
         $sh2 = "/bin/bash" ascii wide
