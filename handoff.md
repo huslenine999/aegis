@@ -163,8 +163,8 @@ jobs:
   security-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: huslenine999/aegis@main
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: huslenine999/aegis@5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff
         with:
           scan-target: .
           output-dir: aegis-reports
@@ -175,11 +175,22 @@ jobs:
 
 This repo's workflow, `.github/workflows/security-pipeline.yml`, has:
 
-- `security-gate`: runs the reusable Aegis approval scan on every push/PR.
+- `security-gate`: scans each push/PR with an immutable Aegis revision and
+  separately sourced policy.
 - `validate`: runs dependency consistency, compile, critical lint, wheel,
   installed-command, Action contract, CLI/policy, full suite, and SARIF checks.
 - Workflow/job timeouts, pip caching, concurrency cancellation, and
   least-privilege job permissions are configured.
+- The approval gate checks PR code out under `target/` and separately installs
+  the scanner and policy from immutable revision
+  `5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff`.
+- Third-party Actions are pinned to full commit SHAs and tracked by Dependabot.
+- `.github/workflows/action-e2e.yml` runs for relevant main-branch changes,
+  weekly, or manually against the published immutable Aegis revision and
+  asserts Action outputs and reports.
+- `.github/CODEOWNERS` assigns security-sensitive workflow, policy, and package
+  files to `@huslenine999`; repository rules must require code-owner review for
+  this to become an enforced boundary.
 
 ## Local Git Hook
 
@@ -344,11 +355,10 @@ Browser verification performed with the in-app browser:
 
 ## Next Production Priorities
 
-- Do not treat `uses: ./` as a trusted PR security boundary: a pull request can
-  change the scanner and policy it is running. Consume a reviewed release by
-  immutable commit SHA and source policy from a protected location.
-- Pin third-party Actions to reviewed immutable SHAs.
-- Add a real runner-level end-to-end test for the published Action.
+- Move the required approval workflow to GitHub organization/repository rules
+  or another protected location so a pull request cannot alter its own gate.
+- After the next reviewed release, update both immutable Aegis SHA references
+  and manually run the published Action E2E workflow.
 - Resolve the 194 FastAPI/Starlette deprecation warnings before upgrading the
   supported Python runtime.
 

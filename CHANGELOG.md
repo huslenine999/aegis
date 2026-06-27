@@ -9,6 +9,9 @@ All notable changes to the Aegis project will be documented in this file.
 - Atomic JSON report writes and an auditable `scan-manifest.json`.
 - Stable GitHub Action `decision`, `summary-json`, and `exit-code` outputs.
 - Composite Action contract and Bash syntax tests.
+- Scheduled runner-level verification of the published GitHub Action.
+- Dependabot tracking for pinned GitHub Action revisions.
+- CODEOWNERS coverage for security-sensitive workflow, policy, and package files.
 
 ### Changed
 - GitHub Action arguments are passed through environment variables and Bash
@@ -16,6 +19,9 @@ All notable changes to the Aegis project will be documented in this file.
 - GitHub Action scans run through the installed Python entry point.
 - CI now validates package installation, dependency consistency, critical lint
   rules, wheel construction, and Action syntax.
+- CI third-party Actions are pinned to immutable commit SHAs.
+- The approval gate scans PR code with a separately checked-out, immutable Aegis
+  scanner and protected policy revision.
 
 ## [2.1.0] - 2026-06-26
 

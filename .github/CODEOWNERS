@@ -1,0 +1,9 @@
+# Security-sensitive automation and policy require explicit owner review.
+/.github/CODEOWNERS @huslenine999
+/.github/workflows/ @huslenine999
+/.github/dependabot.yml @huslenine999
+/action.yml @huslenine999
+/aegis.yml @huslenine999
+/policy_engine.py @huslenine999
+/pyproject.toml @huslenine999
+/rules/ @huslenine999

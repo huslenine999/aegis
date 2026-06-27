@@ -283,10 +283,12 @@ graph LR
     Decision -->|Operational error| Error[Scan failed closed]
 ```
 
-This repository wires that flow in `.github/workflows/security-pipeline.yml`. The `security-gate` job uses the local GitHub Action and runs:
+This repository wires that flow in `.github/workflows/security-pipeline.yml`.
+The `security-gate` job checks the pushed project out separately from a reviewed,
+immutable Aegis scanner and policy revision, then runs:
 
 ```bash
-aegis scan . --no-docker --strict --output aegis-reports --json --fail-on medium,high,critical
+aegis scan target --no-docker --strict --output aegis-reports --json --fail-on medium,high,critical
 ```
 
 Exit code `0` approves the project, `1` means the security policy found blocking
@@ -310,8 +312,8 @@ jobs:
   security-gate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: huslenine999/aegis@main
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: huslenine999/aegis@5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff
         with:
           scan-target: .
           output-dir: aegis-reports
@@ -320,10 +322,10 @@ jobs:
           fail-on: medium,high,critical
 ```
 
-For a protected production workflow, replace `@main` with a reviewed immutable
-commit SHA. Also keep the policy configuration in a protected location; a pull
-request that can modify both the scanner and its policy is not an independent
-security gate.
+The example pins both Actions to reviewed commits. Update the Aegis SHA only
+after validating a new release. Keep the policy configuration and required
+workflow in a protected location; a pull request that can modify its own
+security workflow is not an independent approval boundary.
 
 ---
 

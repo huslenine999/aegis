@@ -1,0 +1,58 @@
+name: Published Action E2E
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/action-e2e.yml"
+      - "action.yml"
+      - "app/**"
+      - "policy_engine.py"
+      - "pyproject.toml"
+      - "rules/**"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  published-action:
+    name: Exercise published Aegis Action
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Create a safe scan target
+        shell: bash
+        run: |
+          mkdir -p action-e2e-target
+          printf 'def add(left, right):\n    return left + right\n' > action-e2e-target/example.py
+
+      - name: Run published Aegis revision
+        id: aegis
+        uses: huslenine999/aegis@5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff
+        with:
+          scan-target: action-e2e-target
+          output-dir: action-e2e-reports
+          no-docker: "true"
+          timeout: "120"
+          fail-on: medium,high,critical
+          strict: "true"
+
+      - name: Verify Action outputs and reports
+        shell: bash
+        env:
+          AEGIS_DECISION: ${{ steps.aegis.outputs.decision }}
+          AEGIS_EXIT_CODE: ${{ steps.aegis.outputs.exit-code }}
+          AEGIS_SUMMARY: ${{ steps.aegis.outputs.summary-json }}
+        run: |
+          set -euo pipefail
+          test "$AEGIS_DECISION" = "approved"
+          test "$AEGIS_EXIT_CODE" = "0"
+          test -f "$AEGIS_SUMMARY"
+          test -f action-e2e-reports/scan-manifest.json
+          test -f action-e2e-reports/report.md
+          python -m json.tool "$AEGIS_SUMMARY" >/dev/null
+          python -m json.tool action-e2e-reports/scan-manifest.json >/dev/null

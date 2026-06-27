@@ -10,4 +10,6 @@ Use this checklist before tagging a public release.
 6. Smoke-test editable install with `pip install -e ".[dev]"` and `aegis doctor --json`.
 7. Build the container image and verify `/health` returns `aegis-security-console`.
 8. Run `docker compose up --build` and verify the dashboard reaches `http://127.0.0.1:5001`.
-9. Tag the release and publish artifacts only after CI is green.
+9. Update the immutable Aegis SHA in the approval and published-Action E2E
+   workflows, then run the E2E workflow manually.
+10. Tag the release and publish artifacts only after CI is green.

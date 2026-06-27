@@ -25,29 +25,68 @@ jobs:
 
     steps:
       - name: Checkout pushed project
-        uses: actions/checkout@v6
-
-      - name: Run Aegis approval scan
-        uses: ./
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          scan-target: .
-          output-dir: aegis-reports
-          no-docker: "true"
-          config: aegis.yml
-          sarif: "true"
-          timeout: "120"
-          fail-on: medium,high,critical
+          path: target
+          persist-credentials: false
+
+      - name: Checkout trusted Aegis scanner and policy
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: huslenine999/aegis
+          ref: 5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff
+          path: trusted-aegis
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install trusted Aegis revision
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./trusted-aegis
+
+      - name: Run trusted Aegis approval scan
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p aegis-reports
+          set +e
+          aegis scan target \
+            --no-docker \
+            --strict \
+            --timeout 120 \
+            --output aegis-reports \
+            --config trusted-aegis/aegis.yml \
+            --fail-on medium,high,critical \
+            --sarif \
+            --json > aegis-reports/summary.json
+          status=$?
+          set -e
+
+          cat aegis-reports/summary.json
+          if ! python -m json.tool aegis-reports/summary.json >/dev/null; then
+            echo "::error title=Aegis operational error::Scanner did not produce a valid JSON summary."
+            status=2
+          fi
+          if [ -f aegis-reports/report.md ]; then
+            cat aegis-reports/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
 
       - name: Upload Aegis reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aegis-approval-reports
           path: aegis-reports/
+          if-no-files-found: error
 
       - name: Upload Aegis SARIF
         if: always() && hashFiles('aegis-reports/aegis.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
           sarif_file: aegis-reports/aegis.sarif
 
@@ -58,10 +97,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
           cache: pip
@@ -71,7 +112,7 @@ jobs:
             requirements-dev.txt
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
 
