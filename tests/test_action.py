@@ -41,6 +41,31 @@ def test_all_external_actions_use_immutable_commit_shas():
             )
 
 
+def test_repository_has_no_tracked_absolute_symlinks():
+    tracked_files = subprocess.run(
+        ["git", "ls-files", "-s"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    symlink_paths = [
+        line.split("\t", 1)[1]
+        for line in tracked_files
+        if line.startswith("120000 ")
+    ]
+
+    absolute_symlinks = []
+    for relative_path in symlink_paths:
+        target = os.readlink(PROJECT_ROOT / relative_path)
+        if os.path.isabs(target):
+            absolute_symlinks.append((relative_path, target))
+
+    assert not absolute_symlinks, (
+        f"tracked absolute symlinks are not portable: {absolute_symlinks}"
+    )
+
+
 def test_security_gate_uses_trusted_scanner_and_policy_revision():
     workflow = (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
 

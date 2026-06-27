@@ -191,6 +191,12 @@ This repo's workflow, `.github/workflows/security-pipeline.yml`, has:
 - `.github/CODEOWNERS` assigns security-sensitive workflow, policy, and package
   files to `@huslenine999`; repository rules must require code-owner review for
   this to become an enforced boundary.
+- Machine-local `.antigravitycli/` symlinks are ignored and a contract test
+  rejects tracked absolute symlinks because GitHub cannot stage them as part of
+  a published Action.
+- The accidentally tracked `scanner-venv/` directory has been removed from Git;
+  it remains ignored and must be recreated from `pyproject.toml` or
+  `requirements.txt` when needed locally.
 
 ## Local Git Hook
 

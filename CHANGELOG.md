@@ -23,6 +23,12 @@ All notable changes to the Aegis project will be documented in this file.
 - The approval gate scans PR code with a separately checked-out, immutable Aegis
   scanner and protected policy revision.
 
+### Fixed
+- Removed machine-local absolute symlinks that prevented GitHub from staging
+  the published composite Action.
+- Removed the accidentally tracked local `scanner-venv/` environment, including
+  platform-specific binaries and thousands of vendored dependency files.
+
 ## [2.1.0] - 2026-06-26
 
 ### Added
