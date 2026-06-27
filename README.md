@@ -313,7 +313,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: huslenine999/aegis@5725dcb63ebe0f0eac070c2b908ec6f1cd1a45ff
+      - uses: huslenine999/aegis@2b424233936ca7ee98029e487e8ca361bfd0cc40
         with:
           scan-target: .
           output-dir: aegis-reports
