@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: huslenine999/aegis@2b424233936ca7ee98029e487e8ca361bfd0cc40
+      - uses: huslenine999/aegis@1048b036a04a8a6a28a212ebc5d623a2fe23f8c0
         with:
           scan-target: .
           output-dir: aegis-reports
@@ -183,7 +183,7 @@ This repo's workflow, `.github/workflows/security-pipeline.yml`, has:
   least-privilege job permissions are configured.
 - The approval gate checks PR code out under `target/` and separately installs
   the scanner and policy from immutable revision
-  `2b424233936ca7ee98029e487e8ca361bfd0cc40`.
+  `1048b036a04a8a6a28a212ebc5d623a2fe23f8c0`.
 - Third-party Actions are pinned to full commit SHAs and tracked by Dependabot.
 - `.github/workflows/action-e2e.yml` runs for relevant main-branch changes,
   weekly, or manually against the published immutable Aegis revision and

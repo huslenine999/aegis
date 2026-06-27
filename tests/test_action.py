@@ -70,7 +70,7 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     workflow = (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
 
     assert "uses: ./" not in workflow
-    assert "ref: 2b424233936ca7ee98029e487e8ca361bfd0cc40" in workflow
+    assert "ref: 1048b036a04a8a6a28a212ebc5d623a2fe23f8c0" in workflow
     assert "python -m pip install ./trusted-aegis" in workflow
     assert "--config trusted-aegis/aegis.yml" in workflow
     assert "aegis scan target" in workflow
@@ -101,7 +101,7 @@ def test_security_gate_shell_script_has_valid_bash_syntax(tmp_path):
 def test_published_action_e2e_asserts_outputs_and_reports():
     workflow = (WORKFLOWS_PATH / "action-e2e.yml").read_text()
 
-    assert "huslenine999/aegis@2b424233936ca7ee98029e487e8ca361bfd0cc40" in workflow
+    assert "huslenine999/aegis@1048b036a04a8a6a28a212ebc5d623a2fe23f8c0" in workflow
     assert "steps.aegis.outputs.decision" in workflow
     assert "steps.aegis.outputs.exit-code" in workflow
     assert "steps.aegis.outputs.summary-json" in workflow
