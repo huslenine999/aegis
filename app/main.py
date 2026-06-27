@@ -969,6 +969,39 @@ def health():
         "demo_lab_enabled": DEMO_LAB_ENABLED,
     }
 
+
+@app.get("/ready")
+def readiness():
+    try:
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.execute("SELECT 1").fetchone()
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail="Database is not ready.") from exc
+
+    redis_required = os.environ.get("AEGIS_REQUIRE_REDIS", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if redis_required and not REDIS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Redis is required but unavailable.")
+
+    redis_state = "in-memory" if not REDIS_AVAILABLE else "connected"
+    try:
+        redis_client.ping()
+    except Exception as exc:
+        if redis_required:
+            raise HTTPException(status_code=503, detail="Redis is not ready.") from exc
+        redis_state = "unavailable"
+
+    return {
+        "status": "ready",
+        "service": "aegis-security-console",
+        "redis": redis_state,
+    }
+
+
 @app.get("/export-dossier")
 def export_dossier():
     def load_json(path):

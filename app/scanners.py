@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -30,13 +31,11 @@ LogCallback = Callable[[str, str], None]
 
 SEMGREP_RULES = """rules:
   - id: python-sqli
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(..., $VAR)
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-      - pattern-not:
-          - pattern: $CURSOR.execute("...", ...)
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...")
+      - pattern: $CURSOR.execute("..." % ...)
+      - pattern: $CURSOR.execute("...".format(...))
+      - pattern: $CURSOR.execute($QUERY + ...)
     message: "Detected potential SQL injection via string formatting or interpolation in database execution."
     languages: [python]
     severity: ERROR
@@ -70,6 +69,20 @@ SEMGREP_RULES = """rules:
     languages: [python]
     severity: WARNING
 """
+
+
+def configure_semgrep_environment():
+    os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
+    os.environ.setdefault(
+        "SEMGREP_LOG_FILE",
+        str(Path(tempfile.gettempdir()) / "aegis-semgrep.log"),
+    )
+    try:
+        import certifi
+
+        os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    except ImportError:
+        pass
 
 
 def write_semgrep_rules(path: Path):

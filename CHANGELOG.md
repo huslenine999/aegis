@@ -22,12 +22,27 @@ All notable changes to the Aegis project will be documented in this file.
 - CI third-party Actions are pinned to immutable commit SHAs.
 - The approval gate scans PR code with a separately checked-out, immutable Aegis
   scanner and protected policy revision.
+- FastAPI, Starlette, Uvicorn, and the httpx2 test client were upgraded to
+  Python 3.14-compatible releases.
+- Container images use immutable base-image digests, non-root processes,
+  read-only root filesystems, dropped capabilities, persistent data volumes,
+  and liveness/readiness probes.
+- Docker Compose now runs a dedicated RQ worker and keeps Redis off the host
+  network.
 
 ### Fixed
+- Updated the custom Semgrep SQL-injection rule to the current schema and
+  disabled telemetry/version checks for deterministic offline execution.
+- Added CI validation for custom Semgrep rules and an audited suppression for
+  the trusted scanner's immutable Git SHA.
+- Test runs now restore checked-in example reports instead of dirtying the
+  working tree with regenerated timestamps and assets.
 - Removed machine-local absolute symlinks that prevented GitHub from staging
   the published composite Action.
 - Removed the accidentally tracked local `scanner-venv/` environment, including
   platform-specific binaries and thousands of vendored dependency files.
+- Separated the immutable application source root from `AEGIS_DATA_DIR` so
+  persistent container data no longer redirects worker scans away from source.
 
 ## [2.1.0] - 2026-06-26
 

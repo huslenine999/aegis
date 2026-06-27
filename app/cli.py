@@ -21,6 +21,7 @@ from policy_engine import run_policy_engine, query_osv_vulnerabilities
 from config import config_bool, config_list, load_config
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
+from scanners import configure_semgrep_environment
 from scanners import write_semgrep_rules
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
@@ -840,8 +841,17 @@ def execute_scan(
         mark_tool("Semgrep", "skipped", detail="fast mode")
     elif semgrep_bin:
         with timed_step(timings, "Semgrep"):
-            os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
-            semgrep_cmd = [semgrep_bin, "scan", "--config", str(semgrep_rules_path), "--json"]
+            configure_semgrep_environment()
+            semgrep_cmd = [
+                semgrep_bin,
+                "scan",
+                "--metrics",
+                "off",
+                "--disable-version-check",
+                "--config",
+                str(semgrep_rules_path),
+                "--json",
+            ]
             add_semgrep_excludes(semgrep_cmd)
             for excluded_path in sorted(excluded_paths):
                 semgrep_cmd.extend(["--exclude", excluded_path])

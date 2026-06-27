@@ -1,6 +1,28 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import json
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GENERATED_REPORTS = (
+    PROJECT_ROOT / "scans" / "report.html",
+    PROJECT_ROOT / "scans" / "report.md",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def preserve_checked_in_reports():
+    originals = {
+        path: path.read_bytes() if path.exists() else None
+        for path in GENERATED_REPORTS
+    }
+    yield
+    for path, content in originals.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(content)
 
 class MockRedis:
     def __init__(self, *args, **kwargs):

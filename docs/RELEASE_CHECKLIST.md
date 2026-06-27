@@ -8,7 +8,8 @@ Use this checklist before tagging a public release.
 4. Run `python app/cli.py scan . --config aegis.yml --sarif --json`.
 5. Build the Python wheel with `python -m pip wheel . --no-deps -w dist`.
 6. Smoke-test editable install with `pip install -e ".[dev]"` and `aegis doctor --json`.
-7. Build the container image and verify `/health` returns `aegis-security-console`.
+7. Build the container image and verify `/health` reports liveness and `/ready`
+   reports SQLite/Redis readiness.
 8. Run `docker compose up --build` and verify the dashboard reaches `http://127.0.0.1:5001`.
 9. Update the immutable Aegis SHA in the approval and published-Action E2E
    workflows, then run the E2E workflow manually.

@@ -4,34 +4,32 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 local_root = BASE_DIR.parent
+PROJECT_ROOT = local_root
 
 if os.environ.get("VERCEL"):
     DB_PATH = Path("/tmp/aegis_demo.db")
-    PROJECT_ROOT = Path("/tmp")
     DOWNLOAD_DIR = Path("/tmp/downloads")
     SCANS_DIR = Path("/tmp/scans")
 else:
     data_dir = os.environ.get("AEGIS_DATA_DIR")
     if data_dir:
-        PROJECT_ROOT = Path(data_dir)
-        DB_PATH = PROJECT_ROOT / "aegis_demo.db"
-        DOWNLOAD_DIR = PROJECT_ROOT / "downloads"
-        SCANS_DIR = PROJECT_ROOT / "scans"
+        data_root = Path(data_dir).expanduser().resolve()
+        DB_PATH = data_root / "aegis_demo.db"
+        DOWNLOAD_DIR = data_root / "downloads"
+        SCANS_DIR = data_root / "scans"
     else:
         try:
             test_file = local_root / ".test_write"
             test_file.touch()
             test_file.unlink()
-            
-            PROJECT_ROOT = local_root
+
             DB_PATH = BASE_DIR / "aegis_demo.db"
             DOWNLOAD_DIR = BASE_DIR / "downloads"
-            SCANS_DIR = PROJECT_ROOT / "scans"
+            SCANS_DIR = local_root / "scans"
         except (IOError, OSError):
             user_root = Path.home() / ".aegis"
             user_root.mkdir(parents=True, exist_ok=True)
-            
-            PROJECT_ROOT = user_root
+
             DB_PATH = user_root / "aegis_demo.db"
             DOWNLOAD_DIR = user_root / "downloads"
             SCANS_DIR = user_root / "scans"
@@ -198,4 +196,3 @@ try:
 except Exception:
     redis_client = InMemoryRedis()
     REDIS_AVAILABLE = False
-

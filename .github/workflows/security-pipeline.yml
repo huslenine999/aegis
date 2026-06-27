@@ -130,6 +130,17 @@ jobs:
         run: |
           ruff check app/cli.py app/config.py policy_engine.py --select E9,F63,F7,F82
 
+      - name: Validate Semgrep rules
+        env:
+          SEMGREP_LOG_FILE: /tmp/aegis-semgrep.log
+          SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+        run: |
+          semgrep scan \
+            --metrics off \
+            --disable-version-check \
+            --config rules/semgrep_rules.yaml \
+            --validate
+
       - name: Validate package metadata
         run: |
           node -e "const p=require('./package.json'); if (p.bin.aegis !== './bin/cli.js') process.exit(1)"

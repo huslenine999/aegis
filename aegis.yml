@@ -25,3 +25,7 @@ scan:
       rule: S310
       path: policy_engine.py
       reason: OSV vulnerability queries call a fixed HTTPS endpoint assembled by the scanner.
+    - tool: Secrets
+      rule: Hex High Entropy String
+      path: .github/workflows/security-pipeline.yml
+      reason: Reviewed immutable Git commit SHA for the trusted Aegis scanner revision.

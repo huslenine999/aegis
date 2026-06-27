@@ -202,6 +202,23 @@ Run the dashboard with Redis through Docker Compose:
 docker compose up --build
 ```
 
+The Compose stack runs separate dashboard, RQ worker, and Redis services. Redis
+is not published to the host, the dashboard binds to `127.0.0.1:5001`, and
+SQLite, reports, uploads, and Redis append-only data use named volumes. The
+containers run with read-only root filesystems, dropped Linux capabilities, and
+non-root application processes.
+
+Container probes:
+
+```txt
+/health = process liveness
+/ready  = SQLite and required Redis readiness
+```
+
+For remote access, terminate TLS at a trusted reverse proxy, set
+`AEGIS_ADMIN_TOKEN`, update `AEGIS_CORS_ORIGINS`, and explicitly change the
+loopback-only Compose port binding.
+
 ---
 
 ## Package Installation
@@ -467,8 +484,8 @@ Dashboard smoke checks:
 Current verification status:
 
 ```txt
-Full suite: 83 passed.
-Focused CLI, policy, and Action contract suite: 25 passed.
+Full suite: 92 passed.
+Focused CLI, policy, and Action contract suite: 29 passed.
 Critical Ruff checks and pip dependency consistency checks pass.
 ```
 

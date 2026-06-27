@@ -1,12 +1,10 @@
 rules:
   - id: python-sqli
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(..., $VAR)
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-      - pattern-not:
-          - pattern: $CURSOR.execute("...", ...)
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...")
+      - pattern: $CURSOR.execute("..." % ...)
+      - pattern: $CURSOR.execute("...".format(...))
+      - pattern: $CURSOR.execute($QUERY + ...)
     message: "Detected potential SQL injection via string formatting or interpolation in database execution."
     languages: [python]
     severity: ERROR

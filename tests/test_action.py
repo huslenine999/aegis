@@ -74,6 +74,8 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     assert "python -m pip install ./trusted-aegis" in workflow
     assert "--config trusted-aegis/aegis.yml" in workflow
     assert "aegis scan target" in workflow
+    assert "--disable-version-check" in workflow
+    assert "--validate" in workflow
 
 
 def test_security_gate_shell_script_has_valid_bash_syntax(tmp_path):

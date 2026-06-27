@@ -20,6 +20,7 @@ from policy_engine import get_ruff_severity
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import DEFAULT_IGNORED_DIRS
+from scanners import configure_semgrep_environment
 from scanners import write_semgrep_rules
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
@@ -347,7 +348,8 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                     semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
                 else:
                     semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json"]
-                os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
+                configure_semgrep_environment()
+                semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]
                 add_semgrep_excludes(semgrep_cmd)
                 semgrep_cmd.extend(["-o", str(semgrep_report_path), target_path])
                 execute_subprocess_log(semgrep_cmd, PROJECT_ROOT, job_id, "SAST:Semgrep")
