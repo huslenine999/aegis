@@ -225,6 +225,9 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
         target_path = custom_file_path if is_custom_scan else None
+        skip_external_scanners = os.environ.get(
+            "AEGIS_SKIP_EXTERNAL_SCANNERS", ""
+        ).lower() in {"1", "true", "yes", "on"}
         
         # 1. State: QUEUED -> RUNNING
         publish_job_event(job_id, "state", {"state": "running", "progress": 10})
@@ -248,10 +251,15 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                 target_path = str(PROJECT_ROOT)
                 
             # Run Safety SCA
-            publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
-            safety_cmd = [python_bin, "-m", "safety", "check", "-r", "requirements.txt", "--save-json", str(SCANS_DIR / "safety-report.json")]
-            subprocess.run(safety_cmd, cwd=PROJECT_ROOT, check=False)
-            publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
+            if skip_external_scanners:
+                with open(SCANS_DIR / "safety-report.json", "w") as f:
+                    json.dump([], f)
+                publish_job_event(job_id, "log", {"text": "[SCA] Safety skipped by scanner configuration.", "color": "var(--text-muted)"})
+            else:
+                publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
+                safety_cmd = [python_bin, "-m", "safety", "check", "-r", "requirements.txt", "--save-json", str(SCANS_DIR / "safety-report.json")]
+                subprocess.run(safety_cmd, cwd=PROJECT_ROOT, check=False)
+                publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
             
             # Ensure trivy-report.json exists
             trivy_path = SCANS_DIR / "trivy-report.json"
@@ -327,7 +335,7 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
 
         # SAST: Semgrep
         semgrep_report_path = SCANS_DIR / "semgrep-report.json"
-        if has_python:
+        if has_python and not skip_external_scanners:
             try:
                 semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
                 if not semgrep_rules_path.exists():
@@ -349,21 +357,27 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         else:
             with open(semgrep_report_path, "w") as f:
                 json.dump({"results": []}, f)
-            publish_job_event(job_id, "log", {"text": "[SAST:Semgrep] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
+            reason = "scanner configuration" if skip_external_scanners else "no Python scripts found"
+            publish_job_event(job_id, "log", {"text": f"[SAST:Semgrep] Skipped ({reason}).", "color": "var(--text-muted)"})
 
         # Secrets Scanner
         secrets_report_path = SCANS_DIR / "secrets-report.json"
         try:
-            secrets_cmd = [
-                python_bin, "-m", "detect_secrets", "scan", "--all-files",
-                "--exclude-files", EXCLUDE_FILES_PATTERN,
-                "--no-verify",
-                target_path
-            ]
-            publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
-            with open(secrets_report_path, "w") as f:
-                subprocess.run(secrets_cmd, cwd=PROJECT_ROOT, check=False, stdout=f)
-            publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
+            if skip_external_scanners:
+                with open(secrets_report_path, "w") as f:
+                    json.dump({"results": {}}, f)
+                publish_job_event(job_id, "log", {"text": "[Secrets] Skipped by scanner configuration.", "color": "var(--text-muted)"})
+            else:
+                secrets_cmd = [
+                    python_bin, "-m", "detect_secrets", "scan", "--all-files",
+                    "--exclude-files", EXCLUDE_FILES_PATTERN,
+                    "--no-verify",
+                    target_path
+                ]
+                publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
+                with open(secrets_report_path, "w") as f:
+                    subprocess.run(secrets_cmd, cwd=PROJECT_ROOT, check=False, stdout=f)
+                publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
             publish_job_event(job_id, "log", {"text": f"[Secrets Error] {e}", "color": "var(--danger)"})
             with open(secrets_report_path, "w") as f:

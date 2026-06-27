@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout pushed project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Run Aegis approval scan
         uses: ./
@@ -33,14 +33,14 @@ jobs:
 
       - name: Upload Aegis reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aegis-approval-reports
           path: aegis-reports/
 
       - name: Upload Aegis SARIF
         if: always() && hashFiles('aegis-reports/aegis.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: aegis-reports/aegis.sarif
 
@@ -50,15 +50,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 

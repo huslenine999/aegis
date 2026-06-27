@@ -47,8 +47,9 @@ class MockRedis:
         return m
 
 @pytest.fixture(autouse=True)
-def mock_rq_and_redis():
+def mock_rq_and_redis(monkeypatch):
     mock_redis = MockRedis()
+    monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "true")
     
     # Direct override to prevent real redis socket connections
     import app.main
