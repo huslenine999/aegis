@@ -330,7 +330,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: huslenine999/aegis@1048b036a04a8a6a28a212ebc5d623a2fe23f8c0
+      - uses: huslenine999/aegis@e292c60770bee621fb70ba07b71cc9f2a525ea1a
         with:
           scan-target: .
           output-dir: aegis-reports

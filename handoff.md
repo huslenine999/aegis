@@ -234,7 +234,7 @@ Do not pin a workflow to the commit currently being created; use the existing
 two-commit bootstrap pattern.
 
 Replace the old Aegis revision
-`1048b036a04a8a6a28a212ebc5d623a2fe23f8c0` with the full `COMMIT_E` SHA in:
+`e292c60770bee621fb70ba07b71cc9f2a525ea1a` with the full `COMMIT_E` SHA in:
 
 ```txt
 .github/workflows/security-pipeline.yml
@@ -247,7 +247,7 @@ tests/test_action.py
 Verify no old references remain:
 
 ```bash
-rg -n "1048b036a04a8a6a28a212ebc5d623a2fe23f8c0" \
+rg -n "e292c60770bee621fb70ba07b71cc9f2a525ea1a" \
   .github README.md handoff.md tests
 ./venv/bin/pytest -q tests/test_action.py
 git diff --check
