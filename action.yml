@@ -98,6 +98,8 @@ runs:
           echo "[Aegis] Project approved."
         else
           echo "decision=declined" >> "$GITHUB_OUTPUT"
+          DETAILS="$(python -c 'import json, sys; data = json.load(open(sys.argv[1])); blocking = [{"tool": item.get("tool"), "count": item.get("blocking_issues"), "examples": item.get("examples", [])[:2]} for item in data.get("results", []) if item.get("blocking_issues")]; print(json.dumps({"reason": data.get("reason"), "blocking": blocking}, separators=(",", ":")))' "$OUTPUT_DIR/summary.json")"
+          echo "::error title=Aegis policy declined::$DETAILS"
           echo "[Aegis] Project declined."
         fi
         echo "summary-json=$OUTPUT_DIR/summary.json" >> "$GITHUB_OUTPUT"
