@@ -2,6 +2,21 @@
 
 All notable changes to the Aegis project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Strict CLI mode with a distinct operational-error exit code.
+- Atomic JSON report writes and an auditable `scan-manifest.json`.
+- Stable GitHub Action `decision`, `summary-json`, and `exit-code` outputs.
+- Composite Action contract and Bash syntax tests.
+
+### Changed
+- GitHub Action arguments are passed through environment variables and Bash
+  arrays instead of interpolated shell fragments.
+- GitHub Action scans run through the installed Python entry point.
+- CI now validates package installation, dependency consistency, critical lint
+  rules, wheel construction, and Action syntax.
+
 ## [2.1.0] - 2026-06-26
 
 ### Added

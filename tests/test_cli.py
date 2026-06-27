@@ -98,6 +98,12 @@ def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
     assert summary["scan_dir"] == str(output_dir.resolve())
     assert (output_dir / "report.md").exists()
     assert (output_dir / "report.html").exists()
+    manifest = json.loads((output_dir / "scan-manifest.json").read_text())
+    assert manifest["status"] == "allowed"
+    assert manifest["exit_code"] == 0
+    assert any(tool["name"] == "Ruff" for tool in manifest["tools"])
+    semgrep_result = next(result for result in summary["results"] if result["tool"] == "Semgrep")
+    assert semgrep_result["status"] == "ERROR"
     assert any(timing["name"] == "Ruff" for timing in summary["timings"])
     assert any(timing["name"] == "Total" for timing in summary["timings"])
 
@@ -276,6 +282,62 @@ def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, 
     assert payload["target"] == str(target_file.resolve())
     assert any(timing["name"] == "Total" for timing in payload["timings"])
 
+
+def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    def failing_ruff(command, *, stdout=None, timeout=120, label="Scanner"):
+        if label == "Secrets" and stdout is not None:
+            stdout.write('{"results": {}}')
+            return 0
+        return 127 if label == "Ruff" else 0
+
+    monkeypatch.chdir(tmp_path)
+    with patch("app.cli.run_scanner_command", side_effect=failing_ruff):
+        summary = execute_scan(
+            str(target_file),
+            use_docker=False,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            fast=True,
+            strict=True,
+            quiet=True,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 2
+    assert summary["status"] == "error"
+    assert summary["policy_status"] == "ERROR"
+    assert summary["operational_failures"] == ["Ruff"]
+    skipped_tools = {
+        result["tool"]
+        for result in summary["results"]
+        if result["status"] == "SKIPPED"
+    }
+    assert {"Semgrep", "Safety", "OSV Dependency Audit", "Trivy", "ClamAV", "OWASP ZAP DAST"} <= skipped_tools
+    manifest = json.loads((output_dir / "scan-manifest.json").read_text())
+    assert manifest["status"] == "error"
+    assert next(tool for tool in manifest["tools"] if tool["name"] == "Ruff")["status"] == "failed"
+
+
+def test_main_json_reports_configuration_errors_without_traceback(tmp_path, monkeypatch, capsys):
+    target_file = tmp_path / "safe.py"
+    target_file.write_text("print('safe')\n")
+    missing_config = tmp_path / "missing.yml"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aegis", "scan", str(target_file), "--config", str(missing_config), "--json"],
+    )
+
+    assert main() == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Config file does not exist" in payload["error"]
+
 def test_report_command_prints_and_opens_report(tmp_path, capsys):
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
@@ -328,3 +390,6 @@ def test_print_ascii_report(capsys):
     assert "Secrets Scanner" in captured.out
     assert "VERDICT:" in captured.out and "DEPLOYMENT BLOCKED" in captured.out
     assert "REASON:" in captured.out and "Blocking issues found by: Secrets Scanner" in captured.out
+
+    print_ascii_report([], "ERROR", "Semgrep failed", 0.0)
+    assert "SCAN INCOMPLETE" in capsys.readouterr().out

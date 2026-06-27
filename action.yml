@@ -34,13 +34,20 @@ inputs:
     description: 'Write SARIF output in the report directory'
     required: false
     default: 'false'
+  strict:
+    description: 'Fail when a requested scanner cannot complete reliably'
+    required: false
+    default: 'true'
 outputs:
   decision:
-    description: 'Aegis policy decision: approved or declined'
+    description: 'Aegis decision: approved, declined, or error'
     value: ${{ steps.aegis.outputs.decision }}
   summary-json:
     description: 'Path to the machine-readable Aegis summary JSON'
     value: ${{ steps.aegis.outputs.summary-json }}
+  exit-code:
+    description: 'Aegis exit code: 0 allowed, 1 policy blocked, 2 operational error'
+    value: ${{ steps.aegis.outputs.exit-code }}
 
 runs:
   using: 'composite'
@@ -52,55 +59,131 @@ runs:
 
     - name: Install Aegis scanner dependencies
       shell: bash
+      env:
+        AEGIS_ACTION_PATH: ${{ github.action_path }}
       run: |
+        set -euo pipefail
         python -m pip install --upgrade pip
-        pip install -r "${{ github.action_path }}/requirements.txt"
-
-    - name: Create report directory
-      shell: bash
-      run: mkdir -p "${{ inputs.output-dir }}"
+        python -m pip install "$AEGIS_ACTION_PATH"
 
     - name: Run Aegis project approval gate
       id: aegis
       shell: bash
+      env:
+        INPUT_TARGET: ${{ inputs.scan-target }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        INPUT_NO_DOCKER: ${{ inputs.no-docker }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+        INPUT_STRICT: ${{ inputs.strict }}
       run: |
+        set -uo pipefail
         set +e
-        TARGET="${{ inputs.scan-target }}"
-        OUTPUT_DIR="${{ inputs.output-dir }}"
-        DOCKER_FLAG=""
-        if [ "${{ inputs.no-docker }}" = "true" ]; then
-          DOCKER_FLAG="--no-docker"
+
+        fail_input() {
+          local message="$1"
+          local summary_path="${RUNNER_TEMP:-.}/aegis-input-error.json"
+          python - "$summary_path" "$message" <<'PY'
+        import json
+        import pathlib
+        import sys
+
+        pathlib.Path(sys.argv[1]).write_text(json.dumps({
+            "status": "error",
+            "exit_code": 2,
+            "error": sys.argv[2],
+        }, indent=2) + "\n")
+        PY
+          echo "decision=error" >> "$GITHUB_OUTPUT"
+          echo "summary-json=$summary_path" >> "$GITHUB_OUTPUT"
+          echo "exit-code=2" >> "$GITHUB_OUTPUT"
+          echo "::error title=Aegis input error::$message"
+          exit 2
+        }
+
+        case "$INPUT_NO_DOCKER" in
+          true|false) ;;
+          *) fail_input "no-docker must be true or false" ;;
+        esac
+        case "$INPUT_SARIF" in
+          true|false) ;;
+          *) fail_input "sarif must be true or false" ;;
+        esac
+        case "$INPUT_STRICT" in
+          true|false) ;;
+          *) fail_input "strict must be true or false" ;;
+        esac
+        if ! [[ "$INPUT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+          fail_input "timeout must be a positive integer"
         fi
-        CONFIG_FLAG=""
-        if [ -n "${{ inputs.config }}" ]; then
-          CONFIG_FLAG="--config ${{ inputs.config }}"
+        if [[ "$INPUT_OUTPUT_DIR" == *$'\n'* || "$INPUT_OUTPUT_DIR" == *$'\r'* ]]; then
+          fail_input "output-dir cannot contain newlines"
         fi
-        SARIF_FLAG=""
-        if [ "${{ inputs.sarif }}" = "true" ]; then
-          SARIF_FLAG="--sarif"
+
+        if ! mkdir -p "$INPUT_OUTPUT_DIR"; then
+          fail_input "output-dir could not be created"
         fi
-        echo "[Aegis] Scanning pushed project: $TARGET"
-        python "${{ github.action_path }}/app/cli.py" scan "$TARGET" \
-          $DOCKER_FLAG \
-          $CONFIG_FLAG \
-          $SARIF_FLAG \
-          --timeout "${{ inputs.timeout }}" \
-          --output "$OUTPUT_DIR" \
-          --fail-on "${{ inputs.fail-on }}" \
-          --json > "$OUTPUT_DIR/summary.json"
+        SUMMARY_PATH="$INPUT_OUTPUT_DIR/summary.json"
+        ARGS=(
+          scan "$INPUT_TARGET"
+          --timeout "$INPUT_TIMEOUT"
+          --output "$INPUT_OUTPUT_DIR"
+          --fail-on "$INPUT_FAIL_ON"
+          --json
+        )
+        if [ "$INPUT_NO_DOCKER" = "true" ]; then
+          ARGS+=(--no-docker)
+        fi
+        if [ -n "$INPUT_CONFIG" ]; then
+          ARGS+=(--config "$INPUT_CONFIG")
+        fi
+        if [ "$INPUT_SARIF" = "true" ]; then
+          ARGS+=(--sarif)
+        fi
+        if [ "$INPUT_STRICT" = "true" ]; then
+          ARGS+=(--strict)
+        fi
+
+        echo "[Aegis] Scanning pushed project: $INPUT_TARGET"
+        aegis "${ARGS[@]}" > "$SUMMARY_PATH"
         STATUS=$?
-        cat "$OUTPUT_DIR/summary.json"
-        if [ -f "$OUTPUT_DIR/report.md" ]; then
-          cat "$OUTPUT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+        if ! python -m json.tool "$SUMMARY_PATH" >/dev/null 2>&1; then
+          python - "$SUMMARY_PATH" "$STATUS" <<'PY'
+        import json
+        import pathlib
+        import sys
+
+        path = pathlib.Path(sys.argv[1])
+        status = int(sys.argv[2])
+        path.write_text(json.dumps({
+            "status": "error",
+            "exit_code": status if status else 2,
+            "error": "Aegis did not produce a valid JSON summary.",
+        }, indent=2) + "\n")
+        PY
+          STATUS=2
         fi
+        cat "$SUMMARY_PATH"
+        if [ -f "$INPUT_OUTPUT_DIR/report.md" ]; then
+          cat "$INPUT_OUTPUT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
         if [ "$STATUS" -eq 0 ]; then
           echo "decision=approved" >> "$GITHUB_OUTPUT"
           echo "[Aegis] Project approved."
-        else
+        elif [ "$STATUS" -eq 1 ]; then
           echo "decision=declined" >> "$GITHUB_OUTPUT"
-          DETAILS="$(python -c 'import json, sys; data = json.load(open(sys.argv[1])); blocking = [{"tool": item.get("tool"), "count": item.get("blocking_issues"), "examples": item.get("examples", [])[:2]} for item in data.get("results", []) if item.get("blocking_issues")]; print(json.dumps({"reason": data.get("reason"), "blocking": blocking}, separators=(",", ":")))' "$OUTPUT_DIR/summary.json")"
+          DETAILS="$(python -c 'import json, sys; data = json.load(open(sys.argv[1])); blocking = [{"tool": item.get("tool"), "count": item.get("blocking_issues"), "examples": item.get("examples", [])[:2]} for item in data.get("results", []) if item.get("blocking_issues")]; print(json.dumps({"reason": data.get("reason"), "blocking": blocking}, separators=(",", ":")))' "$SUMMARY_PATH")"
           echo "::error title=Aegis policy declined::$DETAILS"
           echo "[Aegis] Project declined."
+        else
+          echo "decision=error" >> "$GITHUB_OUTPUT"
+          DETAILS="$(python -c 'import json, sys; data = json.load(open(sys.argv[1])); print(json.dumps({"reason": data.get("reason") or data.get("error"), "failures": data.get("operational_failures", [])}, separators=(",", ":")))' "$SUMMARY_PATH")"
+          echo "::error title=Aegis operational error::$DETAILS"
+          echo "[Aegis] Scan could not complete reliably."
         fi
-        echo "summary-json=$OUTPUT_DIR/summary.json" >> "$GITHUB_OUTPUT"
+        echo "summary-json=$SUMMARY_PATH" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$STATUS" >> "$GITHUB_OUTPUT"
         exit "$STATUS"

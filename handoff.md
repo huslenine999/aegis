@@ -23,8 +23,8 @@ Developer pushes to GitHub
 -> GitHub Actions checks out the repo
 -> Aegis scans the full project
 -> policy_engine.py evaluates all reports
--> Aegis writes Markdown, HTML, JSON, and SBOM reports
--> workflow passes when approved and fails when declined
+-> Aegis writes Markdown, HTML, JSON, SARIF, SBOM, and scan-manifest reports
+-> workflow approves, declines on policy findings, or fails closed on scanner errors
 ```
 
 The public product/command name is `aegis`. The Python distribution name is `aegis-security-console`. The npm package metadata also exposes the `aegis` command, but the public npm name `aegis` is already taken by another package, so public npm publishing still requires a transfer or a scoped package name.
@@ -67,6 +67,8 @@ aegis scan . --fast
 aegis scan . --no-docker
 aegis scan . --output ./aegis-reports
 aegis scan . --json
+aegis scan . --strict --json
+aegis scan . --sarif
 aegis scan . --fail-on medium,high,critical
 aegis report --path
 aegis report --open
@@ -79,7 +81,8 @@ Expected exit codes:
 
 ```txt
 0 = project approved / deployment allowed
-1 = project declined / security gate blocked or command failed
+1 = project declined / security policy blocked
+2 = operational or configuration error
 ```
 
 ## CLI Performance and Reports
@@ -102,6 +105,11 @@ Fast mode still runs:
 
 The CLI now records scanner timings. Normal terminal output prints a `Scanner timings:` block, and JSON summaries include a `timings` array.
 
+For CI, `--strict` makes requested scanner failures fail closed with exit code
+`2`. Every completed scan writes `scan-manifest.json` with UTC timestamps,
+version, requested modes, policy/final exit codes, and per-scanner
+`completed`, `skipped`, or `failed` states. JSON reports are written atomically.
+
 The report command locates generated reports:
 
 ```bash
@@ -117,11 +125,14 @@ aegis report --dir ./aegis-reports
 The reusable action is defined in `action.yml`. It:
 
 - Sets up Python.
-- Installs Aegis Python dependencies from `requirements.txt`.
-- Runs `app/cli.py scan` on the target checkout.
+- Installs the Aegis Python package and runs its installed `aegis` entry point.
+- Passes inputs through environment variables and a Bash argument array.
+- Validates boolean, timeout, and output-directory inputs.
+- Enables strict fail-closed behavior by default.
 - Writes reports to `aegis-reports` by default.
 - Appends `report.md` to the GitHub job summary.
-- Exposes `decision` as `approved` or `declined`.
+- Exposes `decision` as `approved`, `declined`, or `error`.
+- Exposes `summary-json` and `exit-code`.
 - Exits with the Aegis policy result so branch protection can block bad code.
 
 Current action inputs:
@@ -132,6 +143,9 @@ output-dir: aegis-reports
 no-docker: "true"
 timeout: "120"
 fail-on: medium,high,critical
+config: ""
+sarif: "false"
+strict: "true"
 ```
 
 Use from another repository:
@@ -155,13 +169,17 @@ jobs:
           scan-target: .
           output-dir: aegis-reports
           no-docker: "true"
+          strict: "true"
           fail-on: medium,high,critical
 ```
 
 This repo's workflow, `.github/workflows/security-pipeline.yml`, has:
 
 - `security-gate`: runs the reusable Aegis approval scan on every push/PR.
-- `validate`: runs syntax, CLI, package metadata, and focused policy tests.
+- `validate`: runs dependency consistency, compile, critical lint, wheel,
+  installed-command, Action contract, CLI/policy, full suite, and SARIF checks.
+- Workflow/job timeouts, pip caching, concurrency cancellation, and
+  least-privilege job permissions are configured.
 
 ## Local Git Hook
 
@@ -238,7 +256,9 @@ The active scanner path includes:
 - DAST-style probes against sandboxed endpoints.
 - Policy decisions through `policy_engine.py`.
 
-The CLI creates placeholder reports for skipped tools so policy decisions stay deterministic. Docker-dependent checks are skipped cleanly when Docker is unavailable, `--no-docker` is used, or `--fast` is used.
+The CLI records skipped and failed tools separately. Strict mode returns exit
+code `2` for requested scanner failures, while checks explicitly disabled with
+`--no-docker` or `--fast` remain auditable `SKIPPED` results.
 
 Recent implementation notes:
 
@@ -271,22 +291,27 @@ Recent implementation notes:
 - `rules/aegis_rules.yar`: Aegis YARA signatures.
 - `tests/test_cli.py`: CLI regression tests.
 - `tests/test_policy.py`: policy analyzer tests.
+- `tests/test_action.py`: composite Action contract, Bash syntax, and invalid-input tests.
 
 ## Verification Performed
 
 Recent passing checks:
 
 ```bash
-./venv/bin/python -m py_compile app/main.py app/cli.py app/worker.py
-./venv/bin/python -m py_compile app/scanners.py app/cli.py app/worker.py
-node --check app/static/enhanced-dashboard.js
-./venv/bin/python -m pytest tests/test_cli.py
+./venv/bin/pytest -q --timeout=60 --timeout-method=thread
+./venv/bin/pytest -q tests/test_action.py tests/test_cli.py tests/test_policy.py
+./venv/bin/ruff check app/cli.py app/config.py policy_engine.py --select E9,F63,F7,F82
+./venv/bin/python -m compileall -q app policy_engine.py tests
+./venv/bin/pip check
 ```
 
 Result:
 
 ```txt
-11 passed, 46 warnings
+Full suite: 83 passed, 194 upstream deprecation warnings.
+Final focused suite: 25 passed.
+Critical Ruff checks: passed.
+Dependency consistency: no broken requirements.
 ```
 
 Static/dashboard endpoint smoke checks passed through FastAPI `TestClient`:
@@ -298,7 +323,8 @@ Static/dashboard endpoint smoke checks passed through FastAPI `TestClient`:
 /get-scan-results 200
 ```
 
-Python packaging checks passed:
+Python packaging checks passed, including a `2.1.0` wheel and installed entry
+point:
 
 ```bash
 python3 -m pip wheel . --no-deps -w /private/tmp/aegis-wheel-test
@@ -316,12 +342,19 @@ Browser verification performed with the in-app browser:
 - Desktop screenshot had no console errors.
 - Mobile viewport had no horizontal overflow.
 
-Known test caveat:
+## Next Production Priorities
 
-- A broader web test subset was interrupted after `tests/test_cli.py` completed because an existing upload/WAF integration path hung. This appears consistent with the previous handoff note about slow WAF/DAST integration tests and was not introduced by the dashboard static asset checks.
+- Do not treat `uses: ./` as a trusted PR security boundary: a pull request can
+  change the scanner and policy it is running. Consume a reviewed release by
+  immutable commit SHA and source policy from a protected location.
+- Pin third-party Actions to reviewed immutable SHAs.
+- Add a real runner-level end-to-end test for the published Action.
+- Resolve the 194 FastAPI/Starlette deprecation warnings before upgrading the
+  supported Python runtime.
 
 ## Current Git/Workspace Notes
 
-- Generated reports under `scans/` changed during local verification and should generally stay out of commits unless intentionally refreshing committed sample output.
+- Generated reports under `scans/` were restored after verification and are not
+  part of this production-hardening change.
 - The new dashboard assets are under `app/static/`.
 - `scanner-venv/`, `.aegis/`, cache folders, build outputs, and egg metadata are ignored in `.gitignore`.

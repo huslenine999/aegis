@@ -9,6 +9,7 @@ import contextlib
 import importlib.metadata
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add project root to sys.path
@@ -48,6 +49,10 @@ IGNORED_DIRS = {
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(IGNORED_DIRS))})(/|$)"
 FAST_MODE_SKIPPED_SCANNERS = "Safety/OSV, Semgrep, ClamAV, Docker sandbox, Trivy, and DAST"
 DEFAULT_SCAN_DIR = Path(".aegis") / "scans"
+EXIT_ALLOWED = 0
+EXIT_BLOCKED = 1
+EXIT_OPERATIONAL_ERROR = 2
+VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
 def should_skip_path(path: Path) -> bool:
@@ -299,7 +304,42 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
 
 def write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(f"{json.dumps(data, indent=2)}\n")
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def read_json(path: Path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def validate_fail_on(value: str | None) -> str | None:
+    if value is None:
+        return None
+    severities = {
+        severity.strip().upper()
+        for severity in str(value).split(",")
+        if severity.strip()
+    }
+    invalid = sorted(severities - VALID_SEVERITIES)
+    if invalid:
+        raise ValueError(
+            f"Unsupported --fail-on severity: {', '.join(invalid)}. "
+            f"Expected a comma-separated subset of: {', '.join(sorted(VALID_SEVERITIES))}."
+        )
+    if not severities:
+        raise ValueError("--fail-on must contain at least one severity.")
+    return ",".join(sorted(severities))
 
 
 def format_duration(seconds: float) -> str:
@@ -364,13 +404,19 @@ def set_fail_on_env(severities: str):
 
 
 def build_scan_summary(target_path: Path, scan_dir: Path, exit_code: int, policy_summary: dict, timings: list[dict] | None = None) -> dict:
+    status = {
+        EXIT_ALLOWED: "allowed",
+        EXIT_BLOCKED: "blocked",
+        EXIT_OPERATIONAL_ERROR: "error",
+    }.get(exit_code, "error")
     return {
         "target": str(target_path),
         "scan_dir": str(scan_dir),
         "html_report": str(scan_dir / "report.html"),
         "markdown_report": str(scan_dir / "report.md"),
+        "manifest": str(scan_dir / "scan-manifest.json"),
         "exit_code": exit_code,
-        "status": "allowed" if exit_code == 0 else "blocked",
+        "status": status,
         "timings": timings or [],
         **policy_summary,
     }
@@ -583,8 +629,15 @@ def print_ascii_report(results: list, final_status: str, reason: str, exploitabi
     
     print(f"  {cyan}║{reset}{' ' * 74}{cyan}║{reset}")
     
-    verdict_label = "[✔] DEPLOYMENT ALLOWED" if final_status == "ALLOWED" else "[✘] DEPLOYMENT BLOCKED"
-    verdict_color = green + bold if final_status == "ALLOWED" else red + bold
+    if final_status == "ALLOWED":
+        verdict_label = "[✔] DEPLOYMENT ALLOWED"
+        verdict_color = green + bold
+    elif final_status == "ERROR":
+        verdict_label = "[!] SCAN INCOMPLETE"
+        verdict_color = yellow + bold
+    else:
+        verdict_label = "[✘] DEPLOYMENT BLOCKED"
+        verdict_color = red + bold
     
     visible_verdict = f"  VERDICT: {verdict_label}"
     padded_verdict = visible_verdict.ljust(74)
@@ -611,19 +664,42 @@ def execute_scan(
     fast: bool = False,
     config_path: str = None,
     sarif: str | bool | None = None,
+    strict: bool | None = None,
     return_summary: bool = False,
 ):
     timings = []
     total_start = time.perf_counter()
+    started_at = utc_timestamp()
+    tool_statuses = []
+
+    def mark_tool(name: str, status: str, *, detail: str | None = None, return_code: int | None = None):
+        record = next((item for item in tool_statuses if item["name"] == name), None)
+        if record is None:
+            record = {"name": name}
+            tool_statuses.append(record)
+        record["status"] = status
+        if detail:
+            record["detail"] = detail
+        if return_code is not None:
+            record["return_code"] = return_code
 
     target_path = Path(target_path_str).resolve()
     if not target_path.exists():
         print(f"❌ Error: Path '{target_path}' does not exist.")
         if return_summary:
-            return {"target": str(target_path), "exit_code": 1, "status": "error", "error": "target_not_found"}
-        return 1
+            return {
+                "target": str(target_path),
+                "exit_code": EXIT_OPERATIONAL_ERROR,
+                "status": "error",
+                "error": "target_not_found",
+            }
+        return EXIT_OPERATIONAL_ERROR
 
+    if config_path and not Path(config_path).expanduser().is_file():
+        raise ValueError(f"Config file does not exist: {Path(config_path).expanduser()}")
     config = load_config(target_path, config_path)
+    if "scan" in config and not isinstance(config["scan"], dict):
+        raise ValueError("Aegis config key 'scan' must be a mapping.")
     if config:
         if fail_on is None:
             fail_on = config_value(config, "fail_on")
@@ -633,11 +709,17 @@ def execute_scan(
             sarif = config_value(config, "sarif", None)
         if tool_timeout is None:
             tool_timeout = int(config_value(config, "timeout", DEFAULT_TOOL_TIMEOUT))
+        if strict is None:
+            strict = config_bool(get_config_section(config), "strict", config_bool(config, "strict", False))
         fast = fast or config_bool(get_config_section(config), "fast", config_bool(config, "fast", False))
         use_docker = use_docker and not config_bool(get_config_section(config), "no_docker", config_bool(config, "no_docker", False))
 
     if tool_timeout is None:
         tool_timeout = DEFAULT_TOOL_TIMEOUT
+    if tool_timeout <= 0:
+        raise ValueError("--timeout must be greater than zero.")
+    strict = bool(strict)
+    fail_on = validate_fail_on(fail_on)
     if fail_on:
         set_fail_on_env(str(fail_on))
     if fast:
@@ -680,6 +762,8 @@ def execute_scan(
     if fast:
         print(f"ℹ️  [Fast Mode] Skipping slower checks: {FAST_MODE_SKIPPED_SCANNERS}.")
         record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
+        mark_tool("Safety", "skipped", detail="fast mode")
+        mark_tool("OSV", "skipped", detail="fast mode")
     elif req_file.exists():
         with timed_step(timings, "Safety/OSV"):
             print("🔍 [SCA] requirements.txt detected. Running Safety and OSV audits...")
@@ -687,19 +771,35 @@ def execute_scan(
             # Safety Scan
             safety_report_path = scan_dir / "safety-report.json"
             safety_cmd = [sys.executable, "-m", "safety", "check", "-r", str(req_file), "--save-json", str(safety_report_path)]
-            run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
+            safety_report_path.unlink(missing_ok=True)
+            safety_return_code = run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
+            safety_report = read_json(safety_report_path)
+            if isinstance(safety_report, (dict, list)):
+                mark_tool("Safety", "completed", return_code=safety_return_code)
+            else:
+                write_json(safety_report_path, [])
+                mark_tool(
+                    "Safety",
+                    "failed",
+                    detail="scanner did not produce a valid JSON report",
+                    return_code=safety_return_code,
+                )
             
             # OSV Scan
             osv_report_path = scan_dir / "osv-report.json"
             try:
-                osv_findings = query_osv_vulnerabilities(req_file)
+                osv_findings = query_osv_vulnerabilities(req_file, raise_on_error=strict)
                 write_json(osv_report_path, osv_findings)
                 print("  [SCA] OSV API checks completed.")
+                mark_tool("OSV", "completed")
             except Exception as e:
                 print(f"  [SCA Warn] OSV query failed: {e}")
+                mark_tool("OSV", "failed", detail=str(e))
     else:
         print("ℹ️  [SCA] No requirements.txt found, skipping dependency scan.")
         record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
+        mark_tool("Safety", "skipped", detail="requirements.txt not found")
+        mark_tool("OSV", "skipped", detail="requirements.txt not found")
 
     # 2. Python SAST (Ruff)
     with timed_step(timings, "Ruff"):
@@ -708,7 +808,19 @@ def execute_scan(
         ruff_cmd = [sys.executable, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
         ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
-        run_scanner_command(ruff_cmd, timeout=tool_timeout, label="Ruff")
+        ruff_report_path.unlink(missing_ok=True)
+        ruff_return_code = run_scanner_command(ruff_cmd, timeout=tool_timeout, label="Ruff")
+        ruff_report = read_json(ruff_report_path)
+        if ruff_return_code in {0, 1} and isinstance(ruff_report, list):
+            mark_tool("Ruff", "completed", return_code=ruff_return_code)
+        else:
+            write_json(ruff_report_path, [])
+            mark_tool(
+                "Ruff",
+                "failed",
+                detail="scanner did not produce a valid report",
+                return_code=ruff_return_code,
+            )
 
 
     # 3. Python SAST (Semgrep)
@@ -725,6 +837,7 @@ def execute_scan(
     if fast:
         print("ℹ️  [SAST:Semgrep] Fast mode enabled, skipping Semgrep rule check.")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
+        mark_tool("Semgrep", "skipped", detail="fast mode")
     elif semgrep_bin:
         with timed_step(timings, "Semgrep"):
             os.environ.setdefault("SEMGREP_SEND_METRICS", "off")
@@ -733,10 +846,23 @@ def execute_scan(
             for excluded_path in sorted(excluded_paths):
                 semgrep_cmd.extend(["--exclude", excluded_path])
             semgrep_cmd.extend(["-o", str(semgrep_report_path), str(target_path)])
-            run_scanner_command(semgrep_cmd, timeout=tool_timeout, label="Semgrep")
+            semgrep_report_path.unlink(missing_ok=True)
+            semgrep_return_code = run_scanner_command(semgrep_cmd, timeout=tool_timeout, label="Semgrep")
+            semgrep_report = read_json(semgrep_report_path)
+            if semgrep_return_code == 0 and isinstance(semgrep_report, dict):
+                mark_tool("Semgrep", "completed", return_code=semgrep_return_code)
+            else:
+                write_json(semgrep_report_path, {"results": []})
+                mark_tool(
+                    "Semgrep",
+                    "failed",
+                    detail="scanner did not produce a valid report",
+                    return_code=semgrep_return_code,
+                )
     else:
         print("  [SAST Warn] semgrep executable not found, skipping rule check.")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
+        mark_tool("Semgrep", "failed", detail="executable not found")
 
     # 4. Secret Auditing (detect-secrets)
     print("🔍 [Secrets] Scanning codebase for hardcoded keys and credentials...")
@@ -763,27 +889,52 @@ def execute_scan(
         str(target_path),
     ]
     with timed_step(timings, "Secrets"):
+        secrets_raw_path = secrets_report_path.with_suffix(".raw.json")
         try:
-            with open(secrets_report_path, "w") as f:
-                run_scanner_command(secrets_cmd, stdout=f, timeout=tool_timeout, label="Secrets")
+            with open(secrets_raw_path, "w") as f:
+                secrets_return_code = run_scanner_command(
+                    secrets_cmd,
+                    stdout=f,
+                    timeout=tool_timeout,
+                    label="Secrets",
+                )
+            secrets_report = read_json(secrets_raw_path)
+            if secrets_return_code == 0 and isinstance(secrets_report, dict):
+                write_json(secrets_report_path, secrets_report)
+                mark_tool("Secrets", "completed", return_code=secrets_return_code)
+            else:
+                write_json(secrets_report_path, {"results": {}})
+                mark_tool(
+                    "Secrets",
+                    "failed",
+                    detail="scanner did not produce a valid report",
+                    return_code=secrets_return_code,
+                )
         except Exception as e:
             print(f"  [Secrets Error] Failed to run detect-secrets: {e}")
+            write_json(secrets_report_path, {"results": {}})
+            mark_tool("Secrets", "failed", detail=str(e))
+        finally:
+            secrets_raw_path.unlink(missing_ok=True)
 
     # 5. YARA Pattern Audits
     with timed_step(timings, "YARA"):
         print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
         yara_findings = shared_run_yara_scan(target_path, ignored_paths=excluded_paths, log=log_scanner_event)
         write_json(scan_dir / "yara-report.json", yara_findings)
+        mark_tool("YARA", "completed")
 
     # 6. ClamAV Malware Scan
     if fast:
         print("ℹ️  [ClamAV] Fast mode enabled, skipping ClamAV malware check.")
         record_timing(timings, "ClamAV", time.perf_counter(), "skipped")
+        mark_tool("ClamAV", "skipped", detail="fast mode")
     else:
         with timed_step(timings, "ClamAV"):
             print("🔍 [ClamAV] Searching files for virus signatures...")
             clamav_findings = shared_run_clamav_scan(target_path, ignored_paths=excluded_paths, timeout=tool_timeout, log=log_scanner_event)
             write_json(scan_dir / "clamav-report.json", clamav_findings)
+            mark_tool("ClamAV", "completed")
 
     # 7. Sandbox Execution (Trivy & DAST) via Docker
     has_python = False
@@ -801,6 +952,9 @@ def execute_scan(
     if fast:
         print("ℹ️  [Docker Sandbox] Fast mode enabled, skipping Docker, Trivy, and DAST checks.")
         record_timing(timings, "Docker/Trivy/DAST", time.perf_counter(), "skipped")
+        mark_tool("Docker Sandbox", "skipped", detail="fast mode")
+        mark_tool("Trivy", "skipped", detail="fast mode")
+        mark_tool("DAST", "skipped", detail="fast mode")
     elif use_docker and is_docker_available() and has_python:
         with timed_step(timings, "Docker/Trivy/DAST"):
             print("🔍 [Docker Sandbox] Docker daemon detected. Building sandbox server and executing Trivy and DAST scans...")
@@ -824,23 +978,32 @@ def execute_scan(
 
                 if not wait_for_container(target_url, timeout=6.0):
                     raise RuntimeError("sandbox container did not become healthy")
+                mark_tool("Docker Sandbox", "completed")
 
                 # 7a. Trivy layer audits
                 trivy_report_path = scan_dir / "trivy-report.json"
                 print("  [Trivy] Inspecting image layer packages for CVEs...")
                 try:
                     run_trivy_scan(sandbox_image, trivy_report_path)
+                    mark_tool("Trivy", "completed")
                 except Exception as e:
                     print(f"  [Trivy Error] Image scan failed: {e}")
+                    mark_tool("Trivy", "failed", detail=str(e))
 
                 # 7b. ZAP DAST active scanning
                 zap_report_path = scan_dir / "zap-report.json"
                 print("  [DAST] Running active crawler against endpoints...")
                 zap_findings = run_dast_scan(target_url)
                 write_json(zap_report_path, zap_findings)
+                mark_tool("DAST", "completed")
 
             except Exception as e:
                 print(f"  \033[91m[Sandbox Error] Docker execution pipeline encountered an error: {e}\033[0m")
+                mark_tool("Docker Sandbox", "failed", detail=str(e))
+                if not any(item["name"] == "Trivy" for item in tool_statuses):
+                    mark_tool("Trivy", "skipped", detail="sandbox unavailable")
+                if not any(item["name"] == "DAST" for item in tool_statuses):
+                    mark_tool("DAST", "skipped", detail="sandbox unavailable")
             finally:
                 print("  [Docker Sandbox] Cleaning up sandbox containers...")
                 try:
@@ -852,6 +1015,15 @@ def execute_scan(
     else:
         print("ℹ️  [Docker Sandbox] Docker is disabled, unavailable, or no Python target found. Skipping Trivy & DAST scans.")
         record_timing(timings, "Docker/Trivy/DAST", time.perf_counter(), "skipped")
+        if use_docker and has_python:
+            mark_tool("Docker Sandbox", "failed", detail="Docker is unavailable")
+            mark_tool("Trivy", "skipped", detail="Docker is unavailable")
+            mark_tool("DAST", "skipped", detail="Docker is unavailable")
+        else:
+            reason = "disabled" if not use_docker else "no Python target found"
+            mark_tool("Docker Sandbox", "skipped", detail=reason)
+            mark_tool("Trivy", "skipped", detail=reason)
+            mark_tool("DAST", "skipped", detail=reason)
 
     # 8. Run Policy Engine
     print("\nEvaluating all reports against Aegis Security Gate rules...")
@@ -871,15 +1043,19 @@ def execute_scan(
             print_ascii_report(results, final_status, reason, exploitability_score)
     
     # Run the policy engine
+    pre_policy_failures = [item["name"] for item in tool_statuses if item["status"] == "failed"]
     with timed_step(timings, "Policy Engine"):
-        exit_code = run_policy_engine(
+        policy_exit_code = run_policy_engine(
             scan_dir=scan_dir,
             html_path=html_report,
             md_path=md_report,
             req_path=req_file if req_file.exists() else None,
-            reporter_callback=capture_policy_summary
+            reporter_callback=capture_policy_summary,
+            operational_failures=pre_policy_failures if strict else None,
+            tool_states={item["name"]: item["status"] for item in tool_statuses},
         )
     record_timing(timings, "Total", total_start)
+    mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
 
     sarif_path = None
     if sarif:
@@ -891,6 +1067,33 @@ def execute_scan(
         sarif_base = target_path if target_path.is_dir() else target_path.parent
         write_sarif_report(sarif_path, policy_summary.get("results", []), base_path=sarif_base)
         policy_summary["sarif_report"] = str(sarif_path)
+
+    failed_tools = [item["name"] for item in tool_statuses if item["status"] == "failed"]
+    exit_code = policy_exit_code
+    if strict and failed_tools:
+        exit_code = EXIT_OPERATIONAL_ERROR
+        policy_summary["operational_failures"] = failed_tools
+
+    manifest = {
+        "schema_version": 1,
+        "aegis_version": get_package_version(),
+        "target": str(target_path),
+        "started_at": started_at,
+        "completed_at": utc_timestamp(),
+        "strict": strict,
+        "fast": fast,
+        "docker_requested": use_docker,
+        "policy_exit_code": policy_exit_code,
+        "exit_code": exit_code,
+        "status": {
+            EXIT_ALLOWED: "allowed",
+            EXIT_BLOCKED: "blocked",
+            EXIT_OPERATIONAL_ERROR: "error",
+        }.get(exit_code, "error"),
+        "tools": tool_statuses,
+    }
+    write_json(scan_dir / "scan-manifest.json", manifest)
+    policy_summary["tools"] = tool_statuses
 
     print(f"\nScan complete. Dossier report available at: {html_report}")
     if not json_output and not quiet:
@@ -1049,6 +1252,12 @@ def main():
     scan_parser.add_argument("--config", help="Path to aegis.yml config file")
     scan_parser.add_argument("--sarif", nargs="?", const="aegis.sarif", help="Write SARIF output, optionally to the given filename")
     scan_parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=None,
+        help="Fail with exit code 2 when a requested scanner cannot complete reliably",
+    )
+    scan_parser.add_argument(
         "--fast",
         action="store_true",
         help=f"Run a quicker local scan by skipping {FAST_MODE_SKIPPED_SCANNERS}",
@@ -1068,37 +1277,54 @@ def main():
     args = parser.parse_args()
 
     if args.command == "scan":
-        if args.json or args.quiet:
-            sink = sys.stderr if args.json else open(os.devnull, "w")
-            with contextlib.redirect_stdout(sink):
-                summary = execute_scan(
-                    args.path,
-                    use_docker=not args.no_docker,
-                    tool_timeout=args.timeout,
-                    output_dir=args.output,
-                    json_output=args.json,
-                    quiet=args.quiet,
-                    fail_on=args.fail_on,
-                    fast=args.fast,
-                    config_path=args.config,
-                    sarif=args.sarif,
-                    return_summary=True,
-                )
-            if not args.json:
-                sink.close()
+        try:
+            if args.json or args.quiet:
+                sink = sys.stderr if args.json else open(os.devnull, "w")
+                try:
+                    with contextlib.redirect_stdout(sink):
+                        summary = execute_scan(
+                            args.path,
+                            use_docker=not args.no_docker,
+                            tool_timeout=args.timeout,
+                            output_dir=args.output,
+                            json_output=args.json,
+                            quiet=args.quiet,
+                            fail_on=args.fail_on,
+                            fast=args.fast,
+                            config_path=args.config,
+                            sarif=args.sarif,
+                            strict=args.strict,
+                            return_summary=True,
+                        )
+                finally:
+                    if not args.json:
+                        sink.close()
+                if args.json:
+                    print(json.dumps(summary, indent=2))
+                return summary.get("exit_code", EXIT_OPERATIONAL_ERROR)
+            return execute_scan(
+                args.path,
+                use_docker=not args.no_docker,
+                tool_timeout=args.timeout,
+                output_dir=args.output,
+                fail_on=args.fail_on,
+                fast=args.fast,
+                config_path=args.config,
+                sarif=args.sarif,
+                strict=args.strict,
+            )
+        except Exception as exc:
+            error_summary = {
+                "target": str(Path(args.path).expanduser().resolve()),
+                "status": "error",
+                "exit_code": EXIT_OPERATIONAL_ERROR,
+                "error": str(exc),
+            }
             if args.json:
-                print(json.dumps(summary, indent=2))
-            return summary.get("exit_code", 1)
-        return execute_scan(
-            args.path,
-            use_docker=not args.no_docker,
-            tool_timeout=args.timeout,
-            output_dir=args.output,
-            fail_on=args.fail_on,
-            fast=args.fast,
-            config_path=args.config,
-            sarif=args.sarif,
-        )
+                print(json.dumps(error_summary, indent=2))
+            else:
+                print(f"Aegis operational error: {exc}", file=sys.stderr)
+            return EXIT_OPERATIONAL_ERROR
     elif args.command == "install-hook":
         return install_hook()
     elif args.command == "uninstall-hook":

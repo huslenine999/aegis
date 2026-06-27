@@ -2,7 +2,10 @@ name: Aegis CI
 
 permissions:
   contents: read
-  security-events: write
+
+concurrency:
+  group: aegis-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
   push:
@@ -15,6 +18,10 @@ jobs:
   security-gate:
     name: Aegis Project Approval Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout pushed project
@@ -47,6 +54,7 @@ jobs:
   validate:
     name: Validate CLI and Policy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -56,6 +64,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-dev.txt
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -65,16 +78,26 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          python -m pip install ".[dev]"
+          python -m pip check
 
       - name: Python syntax check
         run: |
-          python -m py_compile app/cli.py policy_engine.py tests/test_cli.py
+          python -m compileall -q app policy_engine.py tests
+
+      - name: Critical lint checks
+        run: |
+          ruff check app/cli.py app/config.py policy_engine.py --select E9,F63,F7,F82
 
       - name: Validate package metadata
         run: |
           node -e "const p=require('./package.json'); if (p.bin.aegis !== './bin/cli.js') process.exit(1)"
+          python -m pip wheel . --no-deps --wheel-dir dist
+          aegis version
+
+      - name: Validate composite Action contract
+        run: |
+          pytest -q tests/test_action.py
 
       - name: CLI help checks
         run: |

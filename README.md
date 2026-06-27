@@ -129,8 +129,20 @@ Exit codes:
 
 ```txt
 0 = deployment allowed
-1 = security gate blocked or command failed
+1 = security policy blocked
+2 = operational or configuration error
 ```
+
+For CI, use strict mode so a requested scanner failure cannot be interpreted as
+a clean report:
+
+```bash
+aegis scan . --no-docker --strict --json
+```
+
+Every completed scan writes `scan-manifest.json` beside the reports. It records
+the Aegis version, timestamps, requested modes, policy result, final exit code,
+and the completion state of each scanner.
 
 ---
 
@@ -268,15 +280,18 @@ graph LR
     Policy --> Decision{Decision}
     Decision -->|Allowed| Approved[Project approved]
     Decision -->|Blocked| Declined[Project declined]
+    Decision -->|Operational error| Error[Scan failed closed]
 ```
 
 This repository wires that flow in `.github/workflows/security-pipeline.yml`. The `security-gate` job uses the local GitHub Action and runs:
 
 ```bash
-aegis scan . --no-docker --output aegis-reports --json --fail-on medium,high,critical
+aegis scan . --no-docker --strict --output aegis-reports --json --fail-on medium,high,critical
 ```
 
-When Aegis returns exit code `0`, the project is approved and downstream jobs can continue. When it returns exit code `1`, the project is declined, the workflow fails, and the generated report explains which scanner blocked the project.
+Exit code `0` approves the project, `1` means the security policy found blocking
+issues, and `2` means the scan could not complete reliably. The Action exposes
+the corresponding `decision` output as `approved`, `declined`, or `error`.
 
 Generated cloud reports are available in the GitHub Actions run summary and in the `aegis-approval-reports` artifact.
 
@@ -301,8 +316,14 @@ jobs:
           scan-target: .
           output-dir: aegis-reports
           no-docker: "true"
+          strict: "true"
           fail-on: medium,high,critical
 ```
+
+For a protected production workflow, replace `@main` with a reviewed immutable
+commit SHA. Also keep the policy configuration in a protected location; a pull
+request that can modify both the scanner and its policy is not an independent
+security gate.
 
 ---
 
@@ -322,7 +343,9 @@ Aegis coordinates these scanner paths:
 10. DAST-style endpoint probes against active sandbox containers.
 11. WAF-aware risk reduction in the web console flow.
 
-The CLI initializes placeholder reports for skipped tools so policy decisions stay deterministic. Docker-dependent checks are skipped cleanly when Docker is disabled or unavailable.
+The CLI records intentional skips and operational failures separately in
+`scan-manifest.json`. In strict mode, failed requested scanners return exit code
+`2`; explicitly disabled checks remain auditable skips.
 
 Shared scanner implementations for Semgrep rule generation, YARA fallback matching, and ClamAV fallback matching live in `app/scanners.py`. The CLI and web worker call that shared module with different log adapters, so report shapes stay consistent across terminal and dashboard scans.
 
@@ -442,12 +465,17 @@ Dashboard smoke checks:
 Current verification status:
 
 ```txt
-Focused CLI/policy tests pass locally. CI now also runs the full non-Docker suite with per-test timeouts.
+Full suite: 83 passed.
+Focused CLI, policy, and Action contract suite: 25 passed.
+Critical Ruff checks and pip dependency consistency checks pass.
 ```
 
 If a Docker, WAF, or DAST integration path stalls, `pytest-timeout` fails the specific test instead of hanging the whole validation job.
 
-The GitHub Actions workflow in `.github/workflows/security-pipeline.yml` runs the cloud approval gate, focused CLI/policy validation, the full timeout-protected suite, and a SARIF smoke scan on pushes and pull requests.
+The GitHub Actions workflow in `.github/workflows/security-pipeline.yml` runs
+the cloud approval gate, package/wheel checks, Action contract validation,
+focused CLI/policy tests, the full timeout-protected suite, and a SARIF smoke
+scan on pushes and pull requests.
 
 ---
 

@@ -537,8 +537,13 @@ def parse_cvss_vector(vector_str: str) -> float:
 
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
 
-def query_osv_vulnerabilities(requirements_path: Path) -> List[Dict[str, Any]]:
+def query_osv_vulnerabilities(
+    requirements_path: Path,
+    *,
+    raise_on_error: bool = False,
+) -> List[Dict[str, Any]]:
     findings = []
+    failed_queries = []
     if not requirements_path.exists():
         print(f"[WARN] requirements.txt not found at {requirements_path}")
         return findings
@@ -638,12 +643,20 @@ def query_osv_vulnerabilities(requirements_path: Path) -> List[Dict[str, Any]]:
             print(f"[WARN] Failed to query OSV API for {cache_key}: {e}")
             if cache_key in cache:
                 findings.extend(cache[cache_key].get("vulns", []))
+            else:
+                failed_queries.append(cache_key)
 
     if cache_dirty:
         try:
             OSV_CACHE_FILE.write_text(json.dumps(cache, indent=2))
         except Exception as e:
             print(f"[WARN] Failed to write OSV Cache: {e}")
+
+    if raise_on_error and failed_queries:
+        raise RuntimeError(
+            "OSV queries failed without cached results for: "
+            + ", ".join(failed_queries)
+        )
 
     return findings
 
@@ -783,7 +796,9 @@ def run_policy_engine(
     html_path: Path = None,
     md_path: Path = None,
     req_path: Path = None,
-    reporter_callback = None
+    reporter_callback = None,
+    operational_failures: List[str] | None = None,
+    tool_states: Dict[str, str] | None = None,
 ) -> int:
     if not req_path:
         req_path = Path("requirements.txt")
@@ -831,13 +846,34 @@ def run_policy_engine(
         analyze_zap(zap_report),
     ]
 
+    state_aliases = {
+        "Ruff (SAST)": "Ruff",
+        "Semgrep": "Semgrep",
+        "Safety": "Safety",
+        "OSV Dependency Audit": "OSV",
+        "Trivy": "Trivy",
+        "Secrets Scanner": "Secrets",
+        "YARA Scanner": "YARA",
+        "ClamAV": "ClamAV",
+        "OWASP ZAP DAST": "DAST",
+    }
+    for result in results:
+        scanner_state = (tool_states or {}).get(state_aliases[result["tool"]])
+        if scanner_state == "skipped":
+            result["status"] = "SKIPPED"
+        elif scanner_state == "failed":
+            result["status"] = "ERROR"
+
     failed_tools = [result["tool"] for result in results if result["status"] == "FAIL"]
     missing_tools = [result["tool"] for result in results if result["status"] == "MISSING"]
 
     final_status = "ALLOWED"
     reason = "No blocking security issues found."
 
-    if failed_tools or missing_tools:
+    if operational_failures:
+        final_status = "ERROR"
+        reason = f"Operational scanner failure(s): {', '.join(operational_failures)}"
+    elif failed_tools or missing_tools:
         final_status = "BLOCKED"
         reasons = []
         if failed_tools:
@@ -862,6 +898,8 @@ def run_policy_engine(
 
     generate_reports(results, final_status, reason, exploitability_score, html_path=html_path, md_path=md_path)
 
+    if final_status == "ERROR":
+        return 2
     return 1 if final_status == "BLOCKED" else 0
 
 

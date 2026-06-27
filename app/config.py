@@ -25,7 +25,10 @@ def load_config(start_path: str | Path, explicit_path: str | Path | None = None)
     if not config_path or not config_path.exists():
         return {}
 
-    data = yaml.safe_load(config_path.read_text()) or {}
+    try:
+        data = yaml.safe_load(config_path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid Aegis YAML config {config_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Aegis config must be a mapping: {config_path}")
     data["_config_path"] = str(config_path)
