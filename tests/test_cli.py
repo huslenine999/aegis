@@ -140,6 +140,8 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
     assert (output_dir / "results.sarif").exists()
     ruff_command = next(command for command in commands if "ruff" in command)
     assert "ignored_lab.py" in " ".join(ruff_command)
+    secrets_command = next(command for command in commands if "detect_secrets" in command)
+    assert "configured\\-reports" in secrets_command[secrets_command.index("--exclude-files") + 1]
 
 
 def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):

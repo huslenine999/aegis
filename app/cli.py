@@ -741,6 +741,16 @@ def execute_scan(
     # 4. Secret Auditing (detect-secrets)
     print("🔍 [Secrets] Scanning codebase for hardcoded keys and credentials...")
     secrets_report_path = scan_dir / "secrets-report.json"
+    secrets_excludes = [
+        EXCLUDE_FILES_PATTERN,
+        *[re.escape(path) for path in sorted(excluded_paths)],
+    ]
+    scan_root = target_path if target_path.is_dir() else target_path.parent
+    try:
+        output_relative_path = scan_dir.relative_to(scan_root).as_posix()
+        secrets_excludes.append(re.escape(output_relative_path))
+    except ValueError:
+        pass
     secrets_cmd = [
         sys.executable,
         "-m",
@@ -748,7 +758,7 @@ def execute_scan(
         "scan",
         "--all-files",
         "--exclude-files",
-        "|".join([EXCLUDE_FILES_PATTERN, *[re.escape(path) for path in sorted(excluded_paths)]]),
+        "|".join(secrets_excludes),
         "--no-verify",
         str(target_path),
     ]
