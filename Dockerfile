@@ -13,7 +13,10 @@ ENV AEGIS_CORS_ORIGINS=http://127.0.0.1:5001,http://localhost:5001 \
     PYTHONUNBUFFERED=1
 
 COPY requirements.txt .
-RUN python -m pip install -r requirements.txt \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install -r requirements.txt \
     && groupadd --system aegis \
     && useradd --system --gid aegis --create-home --home-dir /home/aegis aegis \
     && mkdir -p /data \

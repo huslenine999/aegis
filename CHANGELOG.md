@@ -4,6 +4,8 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-30
+
 ### Added
 - Strict CLI mode with a distinct operational-error exit code.
 - Atomic JSON report writes and an auditable `scan-manifest.json`.
@@ -12,6 +14,13 @@ All notable changes to the Aegis project will be documented in this file.
 - Scheduled runner-level verification of the published GitHub Action.
 - Dependabot tracking for pinned GitHub Action revisions.
 - CODEOWNERS coverage for security-sensitive workflow, policy, and package files.
+- Production-mode configuration validation, browser support for protected
+  dashboard actions, security response headers, bounded uploads, and RQ worker
+  readiness checks.
+- A container smoke job that builds the production Compose stack and verifies a
+  dashboard-to-worker scan.
+- A tag-gated release build that rejects Python/npm version mismatches and
+  validates wheel contents before artifact publication.
 
 ### Changed
 - GitHub Action arguments are passed through environment variables and Bash
@@ -29,6 +38,9 @@ All notable changes to the Aegis project will be documented in this file.
   and liveness/readiness probes.
 - Docker Compose now runs a dedicated RQ worker and keeps Redis off the host
   network.
+- Database initialization now preserves existing WAF rules across restarts.
+- Production Compose deployments require an explicit strong admin token and
+  host/CORS allowlists.
 
 ### Fixed
 - Updated the custom Semgrep SQL-injection rule to the current schema and
@@ -43,6 +55,12 @@ All notable changes to the Aegis project will be documented in this file.
   platform-specific binaries and thousands of vendored dependency files.
 - Separated the immutable application source root from `AEGIS_DATA_DIR` so
   persistent container data no longer redirects worker scans away from source.
+- Removed unconditional third-party browser analytics from the dashboard and
+  generated reports.
+- Updated dashboard template rendering for the current Starlette API.
+- Enabled HTML autoescaping for untrusted scanner findings in generated reports.
+- Restricted the npm package manifest so local databases, bytecode, and scan
+  artifacts cannot be published.
 
 ## [2.1.0] - 2026-06-26
 

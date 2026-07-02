@@ -1,13 +1,16 @@
 {
   "name": "aegis",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Aegis retro CRT DevSecOps console for static code scanning and threat simulation",
   "main": "bin/cli.js",
   "bin": {
     "aegis": "./bin/cli.js"
   },
   "files": [
-    "app/",
+    "app/*.py",
+    "app/downloads/",
+    "app/static/",
+    "app/templates/",
     "bin/",
     "scripts/",
     "aegis.yml",
@@ -39,5 +42,12 @@
   "bugs": {
     "url": "https://github.com/huslenine999/aegis/issues"
   },
-  "homepage": "https://github.com/huslenine999/aegis#readme"
+  "homepage": "https://github.com/huslenine999/aegis#readme",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@playwright/test": "^1.53.1"
+  }
 }

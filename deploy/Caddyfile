@@ -1,0 +1,15 @@
+{
+	admin off
+	log {
+		format json
+	}
+}
+
+{$AEGIS_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-X-Powered-By
+	}
+	reverse_proxy dashboard:5001
+}

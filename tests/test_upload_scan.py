@@ -10,7 +10,7 @@ from app.main import SCANS_DIR
 def client():
     from app.database import initialize_database
     import shutil
-    initialize_database()
+    initialize_database(reset=True)
     app_main.WAF_ENABLED = False
     
     # Clean up scans/uploads directory to avoid pollution from prior runs
@@ -122,3 +122,21 @@ def test_run_scan_non_python_rejected(client):
     response = client.post('/run-scan', files=files)
     assert response.status_code == 400
     assert "Invalid file type" in response.json()['detail']
+
+
+def test_run_scan_rejects_unknown_target(client):
+    response = client.post("/run-scan", json={"target": "../../etc"})
+
+    assert response.status_code == 400
+    assert "Invalid scan target" in response.json()["detail"]
+
+
+def test_run_scan_rejects_oversized_upload(client, monkeypatch):
+    monkeypatch.setattr(app_main, "MAX_UPLOAD_BYTES", 8)
+    response = client.post(
+        "/run-scan",
+        files={"file": ("large.py", b"print('too large')\n")},
+    )
+
+    assert response.status_code == 413
+    assert "byte limit" in response.json()["detail"]

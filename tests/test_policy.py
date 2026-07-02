@@ -4,6 +4,7 @@ from policy_engine import (
     analyze_ruff,
     analyze_safety,
     analyze_trivy,
+    generate_reports,
     run_policy_engine,
 )
 
@@ -83,3 +84,36 @@ def test_policy_engine_reports_operational_error(tmp_path):
     assert exit_code == 2
     assert "DEPLOYMENT ERROR" in markdown_report.read_text()
     assert "Operational scanner failure(s): Semgrep" in markdown_report.read_text()
+
+
+def test_html_report_escapes_untrusted_finding_content(tmp_path):
+    html_report = tmp_path / "report.html"
+    markdown_report = tmp_path / "report.md"
+    payload = "<script>window.reportCompromised=true</script>"
+    generate_reports(
+        [
+            {
+                "tool": "Semgrep",
+                "status": "FAIL",
+                "total_issues": 1,
+                "blocking_issues": 1,
+                "examples": [
+                    {
+                        "severity": "HIGH",
+                        "test_id": "test-rule",
+                        "issue_text": payload,
+                        "filename": payload,
+                        "line_number": 1,
+                    }
+                ],
+            }
+        ],
+        "BLOCKED",
+        payload,
+        html_path=html_report,
+        md_path=markdown_report,
+    )
+
+    rendered = html_report.read_text()
+    assert payload not in rendered
+    assert "&lt;script&gt;window.reportCompromised=true&lt;/script&gt;" in rendered

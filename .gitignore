@@ -12,4 +12,9 @@ build/
 dist/
 *.egg-info/
 .env
+.env.aegis
+.e2e-data/
 .DS_Store
+node_modules/
+test-results/
+playwright-report/

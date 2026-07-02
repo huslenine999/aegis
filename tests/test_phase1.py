@@ -7,11 +7,7 @@ from policy_engine import (
     generate_cyclonedx_sbom,
 )
 from app.main import app
-from app.worker import run_yara_scan, publish_job_event
-
-# Mock publish_job_event to avoid errors
-import app.worker as worker_module
-worker_module.publish_job_event = lambda *args, **kwargs: None
+from app.worker import run_yara_scan
 
 def test_analyze_secrets_pass():
     report = {"results": {}}

@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aegis
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis -d aegis"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
   redis:
     image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     command: ["redis-server", "--appendonly", "yes", "--loglevel", "warning"]
@@ -8,6 +25,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 128
     expose:
       - "6379"
     volumes:
@@ -22,6 +40,7 @@ services:
       start_period: 5s
 
   dashboard:
+    image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
     restart: unless-stopped
     read_only: true
@@ -31,24 +50,50 @@ services:
       - ALL
     pids_limit: 512
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
+      AEGIS_ENV: ${AEGIS_ENV:-production}
+      AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?Set AEGIS_ADMIN_TOKEN to at least 32 characters}
+      AEGIS_SESSION_SECRET: ${AEGIS_SESSION_SECRET:?Set AEGIS_SESSION_SECRET to at least 32 characters}
+      AEGIS_BOOTSTRAP_ADMIN_USERNAME: ${AEGIS_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      AEGIS_BOOTSTRAP_ADMIN_PASSWORD: ${AEGIS_BOOTSTRAP_ADMIN_PASSWORD:?Set the initial administrator password}
+      AEGIS_SETUP_TOKEN: ${AEGIS_SETUP_TOKEN:-}
+      AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
+      AEGIS_SMTP_HOST: ${AEGIS_SMTP_HOST:-}
+      AEGIS_SMTP_PORT: ${AEGIS_SMTP_PORT:-587}
+      AEGIS_SMTP_USERNAME: ${AEGIS_SMTP_USERNAME:-}
+      AEGIS_SMTP_PASSWORD: ${AEGIS_SMTP_PASSWORD:-}
+      AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
+      AEGIS_GITHUB_CLIENT_ID: ${AEGIS_GITHUB_CLIENT_ID:-}
+      AEGIS_GITHUB_CLIENT_SECRET: ${AEGIS_GITHUB_CLIENT_SECRET:-}
+      AEGIS_GITHUB_CALLBACK_URL: ${AEGIS_GITHUB_CALLBACK_URL:-}
+      AEGIS_REQUIRE_AUTH: "true"
+      AEGIS_METRICS_TOKEN: ${AEGIS_METRICS_TOKEN:?Set a metrics bearer token}
+      AEGIS_ALLOWED_HOSTS: ${AEGIS_ALLOWED_HOSTS:?Set the public host allowlist}
+      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:?Set the HTTPS origin allowlist}
       AEGIS_DATA_DIR: /data
       AEGIS_REQUIRE_REDIS: "true"
+      AEGIS_REQUIRE_WORKER: "true"
+      AEGIS_MAX_UPLOAD_BYTES: ${AEGIS_MAX_UPLOAD_BYTES:-1048576}
       REDIS_HOST: redis
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
       AEGIS_ENABLE_DEMO_LAB: "false"
-      AEGIS_CORS_ORIGINS: "http://127.0.0.1:5001,http://localhost:5001"
-    ports:
-      - "127.0.0.1:5001:5001"
+      FORWARDED_ALLOW_IPS: "*"
+    expose:
+      - "5001"
     volumes:
       - aegis-data:/data
     tmpfs:
       - /tmp:size=512m,mode=1777
 
   worker:
+    image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
-    command: ["rq", "worker", "--url", "redis://redis:6379", "--path", "/app/app"]
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--path", "/app/app"]
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -57,18 +102,61 @@ services:
       - ALL
     pids_limit: 512
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
+      AEGIS_ENV: production
+      AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?Set AEGIS_ADMIN_TOKEN to at least 32 characters}
+      AEGIS_SESSION_SECRET: ${AEGIS_SESSION_SECRET:?Set AEGIS_SESSION_SECRET to at least 32 characters}
+      AEGIS_BOOTSTRAP_ADMIN_PASSWORD: ${AEGIS_BOOTSTRAP_ADMIN_PASSWORD:?Set the initial administrator password}
+      AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
+      AEGIS_SMTP_HOST: ${AEGIS_SMTP_HOST:-}
+      AEGIS_SMTP_PORT: ${AEGIS_SMTP_PORT:-587}
+      AEGIS_SMTP_USERNAME: ${AEGIS_SMTP_USERNAME:-}
+      AEGIS_SMTP_PASSWORD: ${AEGIS_SMTP_PASSWORD:-}
+      AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
+      AEGIS_REQUIRE_AUTH: "true"
+      AEGIS_ALLOWED_HOSTS: ${AEGIS_ALLOWED_HOSTS:?Set the public host allowlist}
+      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:?Set the HTTPS origin allowlist}
       AEGIS_DATA_DIR: /data
       AEGIS_REQUIRE_REDIS: "true"
+      AEGIS_REQUIRE_WORKER: "true"
+      AEGIS_SKIP_EXTERNAL_SCANNERS: ${AEGIS_SKIP_EXTERNAL_SCANNERS:-false}
       REDIS_HOST: redis
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
       AEGIS_ENABLE_DEMO_LAB: "false"
     volumes:
       - aegis-data:/data
     tmpfs:
       - /tmp:size=512m,mode=1777
+    healthcheck:
+      disable: true
+
+  proxy:
+    image: caddy:2.10.0-alpine
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    environment:
+      AEGIS_DOMAIN: ${AEGIS_DOMAIN:?Set the public DNS name}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   aegis-data:
   redis-data:
+  postgres-data:
+  caddy-data:
+  caddy-config:

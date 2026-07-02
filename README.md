@@ -1,8 +1,20 @@
 # Aegis: DevSecOps Security Console and CLI Scanner
 
-Aegis is a Python security scanner and retro CRT-style DevSecOps dashboard. It can be used as a terminal gate with `aegis scan <filename>` or as a FastAPI web console with Redis Queue workers, WebSocket log streaming, WAF controls, Docker sandbox execution, and generated HTML/Markdown security reports.
+Aegis is a Python security scanner and DevSecOps workbench. It can be used as a
+terminal gate with `aegis scan <filename>` or as a FastAPI web console with
+Redis Queue workers, WebSocket log streaming, WAF controls, Docker sandbox
+execution, and generated HTML/Markdown security reports.
 
 The current scanner stack focuses on Python source, dependency risk, secrets, suspicious payload signatures, container image checks, and dynamic endpoint probes when Docker is available.
+
+## Documentation
+
+- [Five-minute quick start](docs/QUICKSTART.md)
+- [Production deployment](docs/PRODUCTION.md)
+- [GitHub integration](docs/GITHUB.md)
+- [Operations, notifications, and backups](docs/OPERATIONS.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
 
 ---
 
@@ -172,23 +184,37 @@ aegis scan app/main.py
 Start the web console:
 
 ```bash
+aegis start
+```
+
+This checks Docker and ports, generates a private `.env.aegis`, starts
+PostgreSQL, Redis, the worker, dashboard, and local reverse proxy, waits for
+health, then opens the one-time setup wizard. To avoid opening a browser:
+
+```bash
+aegis start --no-open
+```
+
+The generated local stack is available at `http://localhost`. The setup token
+is carried in the URL fragment and is not sent in request URLs or access logs.
+The wizard rotates the temporary administrator password and stores the initial
+workspace, repository reference, and scan preset. It permanently disables
+itself after successful completion.
+
+For the older Python-only development server:
+
+```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-Open:
-
-```txt
-http://127.0.0.1:5001
-```
-
-The web console starts in scanner-console mode by default. Intentionally vulnerable training routes are disabled unless you opt in:
+Intentionally vulnerable training routes are disabled unless you opt in:
 
 ```bash
 AEGIS_ENABLE_DEMO_LAB=true ./setup.sh
 ```
 
-For shared or remote deployments, protect state-changing dashboard actions with an admin token:
+For local automation, state-changing dashboard actions can still use a service token:
 
 ```bash
 AEGIS_ADMIN_TOKEN="$(openssl rand -hex 24)" ./setup.sh
@@ -196,28 +222,115 @@ AEGIS_ADMIN_TOKEN="$(openssl rand -hex 24)" ./setup.sh
 
 Requests to `/run-scan`, `/toggle-waf`, and `/save-waf-rules` must then include `X-Aegis-Token: <token>`. CORS defaults to localhost origins; set `AEGIS_CORS_ORIGINS` to a comma-separated allowlist when deploying elsewhere.
 
-Run the dashboard with Redis through Docker Compose:
+The production Compose stack runs Caddy, the dashboard, an RQ worker, Redis, and
+PostgreSQL. Only Caddy publishes ports. Caddy obtains and renews TLS certificates,
+proxies HTTP/WebSocket traffic, and emits JSON access logs. PostgreSQL stores
+users, API tokens, WAF rules, and application state; Redis stores bounded job
+state and rate-limit counters.
+
+Create a production environment file before starting it:
 
 ```bash
-docker compose up --build
+cp .env.production.example .env
+# Replace every placeholder, point AEGIS_DOMAIN DNS at this host, then:
+docker compose up --build -d
 ```
 
-The Compose stack runs separate dashboard, RQ worker, and Redis services. Redis
-is not published to the host, the dashboard binds to `127.0.0.1:5001`, and
-SQLite, reports, uploads, and Redis append-only data use named volumes. The
-containers run with read-only root filesystems, dropped Linux capabilities, and
-non-root application processes.
+Production startup fails closed unless authentication, PostgreSQL, Redis, an RQ
+worker, explicit host/origin allowlists, and strong secrets are configured.
+The initial administrator is created once from the bootstrap variables. Remove
+the bootstrap password from the runtime environment after the first successful
+deployment. When `AEGIS_SETUP_TOKEN` is configured, open
+`https://<AEGIS_DOMAIN>/setup#<AEGIS_SETUP_TOKEN>` to claim the administrator
+through the first-run wizard.
+
+Access roles:
+
+- `viewer`: read reports, SBOMs, dependency data, and scan streams.
+- `operator`: viewer permissions plus starting scans and viewing owned jobs.
+- `admin`: all permissions plus WAF controls, user creation, and API-token issue.
+
+### Projects and scan workflow
+
+Open `/projects` to create project-scoped workspaces. Each project has members,
+a default branch and scan preset, independent scan history, retry/cancel controls,
+live progress, and a count of findings not present in its previous completed scan.
+
+Presets:
+
+- `quick`: fast local SAST/signature checks with slow external scanners skipped.
+- `standard`: static analysis, dependency, secret, and malware checks.
+- `deep`: standard checks plus sandbox execution, DAST, and container scanning.
+
+Project administrators can grant `viewer`, `operator`, or `admin` membership
+through `PUT /api/projects/{project_id}/members`.
+
+### GitHub connection
+
+Register a GitHub OAuth app with callback URL:
+
+```txt
+https://your-aegis-domain/api/github/callback
+```
+
+Then configure:
+
+```bash
+AEGIS_GITHUB_CLIENT_ID=...
+AEGIS_GITHUB_CLIENT_SECRET=...
+AEGIS_GITHUB_CALLBACK_URL=https://your-aegis-domain/api/github/callback
+AEGIS_ENCRYPTION_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+```
+
+Users can connect GitHub from `/projects`, browse repositories available to
+their GitHub account, import one as an Aegis project, and scan its default
+branch. OAuth uses authorization-code flow with PKCE and expiring state.
+Access tokens are encrypted in PostgreSQL. Private-clone credentials are passed
+to Git through process environment configuration rather than command arguments.
+
+### Notifications and operations
+
+Project administrators can configure Slack, Teams Workflow, signed HTTPS
+webhook, and SMTP email notifications for completed, blocked, failed, and
+cancelled scans. Notification destinations are encrypted in PostgreSQL.
+
+The `/admin` operations console provides user management, API-token issuance
+and revocation, service diagnostics, durable audit events, and recent structured
+request logs.
+
+```bash
+aegis logs --follow
+aegis backup --output backups/aegis.zip
+aegis restore backups/aegis.zip --yes
+aegis upgrade
+aegis stop
+```
+
+Sessions are signed, HTTP-only, `SameSite=Strict`, secure cookies with CSRF
+validation on mutations. Automation can use `Authorization: Bearer <token>`.
+Create users with `POST /api/users` and issue a token once with
+`POST /api/users/{id}/tokens`; both operations require an administrator session.
 
 Container probes:
 
 ```txt
 /health = process liveness
-/ready  = SQLite and required Redis readiness
+/ready  = PostgreSQL, required Redis, and RQ worker readiness
+/metrics = Prometheus metrics (AEGIS_METRICS_TOKEN bearer authentication)
 ```
 
-For remote access, terminate TLS at a trusted reverse proxy, set
-`AEGIS_ADMIN_TOKEN`, update `AEGIS_CORS_ORIGINS`, and explicitly change the
-loopback-only Compose port binding.
+Request logs are JSON and include a generated/request-provided request ID,
+status, duration, route, and client address without query strings or bodies.
+Uploaded Python files are limited to 1 MiB by default; change
+`AEGIS_MAX_UPLOAD_BYTES` if the deployment needs a different limit.
+
+Run the browser authentication and accessibility suite with:
+
+```bash
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
 
 ---
 
@@ -263,7 +376,10 @@ The npm package also exposes the command:
 aegis
 ```
 
-The public npm name `aegis` is already taken by another package. If that registry name becomes available or transferred, the install command can become `npm install -g aegis`. Homebrew formula support is also present in `Formula/` for local tap-based installation.
+The public npm name `aegis` is already taken by another package. If that registry
+name becomes available or transferred, the install command can become
+`npm install -g aegis`. Homebrew distribution is intentionally not advertised
+until a versioned tap with complete Python dependency resources is published.
 
 ---
 
@@ -392,20 +508,48 @@ graph TD
     WS --> UI[Simple Dashboard and Tactical Console]
 ```
 
-The dashboard defaults to Simple view, a cleaner security workbench for daily use:
+The dashboard defaults to Workbench view, a focused interface for daily
+security decisions:
 
 - Overview cards for verdict, exploitability, WAF status, and latest scan.
-- Scan and upload actions.
+- Primary scan, upload, report, and dossier actions.
 - Stepper-style scan progress.
 - Findings tab with severity filters and fix guidance.
 - Reports tab with HTML, Markdown dossier, SBOM, and copy-path actions.
 - WAF tab with status/toggle and a route to the advanced editor.
 - Logs tab with live scan events and browser-local scan history.
-- Settings tab with reduced-motion and default-view controls.
+- Settings tab with reduced-motion, theme, and default-view controls.
+
+The detailed assessment remains a separate report page instead of being folded
+into the dashboard. This keeps the workbench optimized for triage while the
+report provides scanner-by-scanner evidence, a deployment decision, SBOM and
+dossier downloads, responsive review, and print/save-to-PDF output.
 
 Tactical view preserves the original CRT-style console with live scan state updates, EventSource telemetry, WAF rule controls, dependency graph visualization, threat simulation, and generated compliance reports.
 
 The intentionally vulnerable lab endpoints (`/user`, `/ping`, `/calculate`, `/load-profile`, `/download`, `/hash`, `/xss`, `/ssrf`, and `/debug-info`) live in `app/demo_lab.py` and are disabled in the default console process. Enable them only for local training or sandboxed demonstrations with `AEGIS_ENABLE_DEMO_LAB=true`.
+
+---
+
+## Production Readiness
+
+The current release is suitable for a controlled internal production pilot
+after a Docker deployment rehearsal and backup/restore drill. It includes
+session authentication, global/project RBAC, protected report and WebSocket
+access, Redis rate limits, PostgreSQL state, structured logs, Prometheus
+metrics, Caddy TLS, and real-browser accessibility coverage.
+
+Before operating Aegis as a public multi-tenant SaaS:
+
+- introduce versioned database migrations;
+- move generated artifacts to project/run-scoped object storage;
+- add MFA, password reset, account disablement, and session revocation;
+- replace broad GitHub OAuth scope with a fine-grained GitHub App;
+- add automated pull-request checks and review comments;
+- run load, failover, penetration, and disaster-recovery testing;
+- connect logs, metrics, and errors to production alerting systems.
+
+See [the delivery handoff](handoff.md) for the complete current-state assessment.
 
 ---
 
@@ -416,10 +560,16 @@ aegis/
 ├── app/
 │   ├── cli.py                  # CLI scanner entrypoint for aegis scan
 │   ├── main.py                 # FastAPI app, WAF middleware, routes, WebSockets
+│   ├── auth.py                 # Sessions, passwords, API tokens, and RBAC
+│   ├── projects.py             # Projects, memberships, and scan history
+│   ├── github_integration.py   # OAuth PKCE and encrypted GitHub credentials
+│   ├── notifications.py        # Slack, Teams, webhook, and email delivery
+│   ├── audit.py                # Durable security audit events
+│   ├── observability.py        # Structured request logs and metrics
 │   ├── demo_lab.py             # Opt-in intentionally vulnerable training routes
 │   ├── worker.py               # Redis Queue worker for async scans
 │   ├── secure_main.py          # Hardened demo target
-│   ├── database.py             # SQLite setup and WAF rule seed data
+│   ├── database.py             # PostgreSQL/SQLite schema and Redis client
 │   ├── sandbox.py              # Docker sandbox lifecycle and telemetry
 │   ├── scanners.py             # Shared Semgrep, YARA, and ClamAV scanner helpers
 │   ├── static/
@@ -427,7 +577,12 @@ aegis/
 │   │   └── enhanced-dashboard.js
 │   └── templates/
 │       ├── index.html          # Simple dashboard shell and tactical UI
+│       ├── projects.html       # Project and scan workflow
+│       ├── admin.html          # Operations console
+│       ├── setup.html          # First-run setup wizard
 │       └── report_template.html
+├── deploy/                     # Caddy, Prometheus, and Grafana examples
+├── docs/                       # Task-focused operational documentation
 ├── bin/
 │   ├── aegis                   # Local shell wrapper
 │   └── cli.js                  # npm executable wrapper
@@ -484,9 +639,11 @@ Dashboard smoke checks:
 Current verification status:
 
 ```txt
-Full suite: 92 passed.
-Focused CLI, policy, and Action contract suite: 29 passed.
+Python suite: 120 passed.
+Playwright/axe suite: 6 passed.
 Critical Ruff checks and pip dependency consistency checks pass.
+Dashboard, projects, operations, login, setup, and report contracts cover
+responsive, accessibility, print, RBAC, and reduced-motion behavior.
 ```
 
 If a Docker, WAF, or DAST integration path stalls, `pytest-timeout` fails the specific test instead of hanging the whole validation job.

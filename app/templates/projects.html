@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Projects | Aegis</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; --bg:#090c0a; --panel:#121713; --line:#344037; --ink:#edf5ee; --muted:#a5b0a6; --accent:#c7ff3d; --danger:#ff736c; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); }
+    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.5rem; border-bottom:1px solid var(--line); }
+    header a { color:var(--accent); text-decoration:none; font-weight:700; }
+    main { max-width:1200px; margin:auto; padding:1.5rem; }
+    .heading { display:flex; justify-content:space-between; align-items:end; gap:1rem; margin-bottom:1.5rem; }
+    h1,h2,h3 { margin:.2rem 0 .6rem; }
+    p { color:var(--muted); }
+    .layout { display:grid; grid-template-columns:minmax(17rem, .8fr) minmax(0, 1.5fr); gap:1rem; }
+    .panel { border:1px solid var(--line); background:var(--panel); padding:1rem; border-radius:10px; }
+    .stack { display:grid; gap:.75rem; }
+    label { display:grid; gap:.35rem; color:var(--muted); font-size:.9rem; }
+    input,select,button { font:inherit; }
+    input,select { width:100%; padding:.7rem; background:#080b09; color:var(--ink); border:1px solid #59655b; border-radius:6px; }
+    button,.button { border:1px solid var(--line); background:#202820; color:var(--ink); padding:.65rem .85rem; border-radius:6px; cursor:pointer; text-decoration:none; }
+    button.primary,.button.primary { background:var(--accent); color:#101408; border-color:var(--accent); font-weight:700; }
+    button.danger { color:var(--danger); }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .project { width:100%; text-align:left; display:grid; gap:.25rem; }
+    .project.active { border-color:var(--accent); }
+    .project small,.muted { color:var(--muted); }
+    .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+    .spread { justify-content:space-between; }
+    .badge { display:inline-block; padding:.2rem .45rem; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:.75rem; }
+    .scan { border-top:1px solid var(--line); padding:.8rem 0; display:grid; gap:.4rem; }
+    .progress { height:6px; background:#252c26; overflow:hidden; border-radius:6px; }
+    .progress span { display:block; height:100%; background:var(--accent); }
+    #notice { min-height:1.4rem; color:var(--accent); }
+    #error { min-height:1.4rem; color:var(--danger); }
+    dialog { width:min(34rem,calc(100% - 2rem)); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:10px; }
+    @media(max-width:760px){ .layout{grid-template-columns:1fr} .heading{align-items:start;flex-direction:column} }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">Aegis Security Workbench</a>
+    <div class="row">
+      <span id="identity" class="muted"></span>
+      <a class="button" href="/">Dashboard</a>
+    </div>
+  </header>
+  <main>
+    <div class="heading">
+      <div><span class="badge">Project workspace</span><h1>Projects</h1><p>Keep repositories, scan history, and findings separated.</p></div>
+      <div class="row">
+        <a id="github-connect" class="button" href="/api/github/connect">Connect GitHub</a>
+        <button id="new-project" class="primary">New project</button>
+      </div>
+    </div>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <p id="error" role="alert" aria-live="assertive"></p>
+    <div class="layout">
+      <section class="panel">
+        <div class="row spread"><h2>Your projects</h2><span id="project-count" class="badge">0</span></div>
+        <div id="projects" class="stack"><p>No projects yet.</p></div>
+        <section id="github-repositories" hidden>
+          <hr>
+          <h3>Import from GitHub</h3>
+          <div id="repositories" class="stack"></div>
+        </section>
+      </section>
+      <section class="panel" aria-live="polite">
+        <div id="empty-project"><h2>Select a project</h2><p>Choose a project to review history or start a scan.</p></div>
+        <div id="project-detail" hidden>
+          <div class="row spread">
+            <div><h2 id="project-name"></h2><p id="project-repository"></p></div>
+            <span id="project-role" class="badge"></span>
+          </div>
+          <div class="row">
+            <label>Scan preset
+              <select id="scan-preset">
+                <option value="quick">Quick</option>
+                <option value="standard">Standard</option>
+                <option value="deep">Deep</option>
+              </select>
+            </label>
+            <button id="start-scan" class="primary">Start scan</button>
+          </div>
+          <h3>Scan history</h3>
+          <div id="scan-history"><p>No scans yet.</p></div>
+          <h3>Notifications</h3>
+          <form id="notification-form" class="row">
+            <input id="notification-name" aria-label="Notification name" placeholder="Security alerts" required>
+            <select id="notification-type" aria-label="Notification type"><option>slack</option><option>teams</option><option>webhook</option><option>email</option></select>
+            <input id="notification-destination" aria-label="Webhook URL or email" placeholder="HTTPS webhook URL" required>
+            <button>Add</button>
+          </form>
+          <div id="notifications"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="project-dialog">
+    <form id="project-form" class="stack">
+      <h2>Create project</h2>
+      <label>Project name<input id="create-name" maxlength="128" required></label>
+      <label>GitHub HTTPS URL<input id="create-repository" type="url" placeholder="https://github.com/org/repository.git"></label>
+      <label>Default branch<input id="create-branch" value="main" required></label>
+      <label>Scan preset<select id="create-preset"><option>quick</option><option selected>standard</option><option>deep</option></select></label>
+      <div class="row"><button class="primary" type="submit">Create</button><button id="close-dialog" type="button">Cancel</button></div>
+    </form>
+  </dialog>
+
+  <script>
+    let csrf = "";
+    let projects = [];
+    let selected = null;
+    const byId = (id) => document.getElementById(id);
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char]));
+    async function api(url, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const method = String(options.method || "GET").toUpperCase();
+      if (!["GET","HEAD","OPTIONS"].includes(method)) headers.set("X-CSRF-Token", csrf);
+      if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
+      const response = await fetch(url, {...options, headers, credentials:"same-origin"});
+      if (response.status === 401) location.assign("/login");
+      return response;
+    }
+    function message(text, error = false) {
+      byId(error ? "error" : "notice").textContent = text;
+      if (!error) byId("error").textContent = "";
+    }
+    async function loadIdentity() {
+      const response = await api("/api/auth/me");
+      const identity = await response.json();
+      csrf = identity.csrf_token || "";
+      byId("identity").textContent = `${identity.username} · ${identity.role}`;
+    }
+    async function loadProjects() {
+      const response = await api("/api/projects");
+      projects = (await response.json()).projects || [];
+      byId("project-count").textContent = projects.length;
+      byId("projects").innerHTML = projects.length ? projects.map((project) => `
+        <button class="project ${selected?.id === project.id ? "active" : ""}" data-project="${project.id}">
+          <strong>${escapeHtml(project.name)}</strong>
+          <small>${escapeHtml(project.github_full_name || project.repository_url || "Local project")} · ${escapeHtml(project.scan_preset)}</small>
+        </button>`).join("") : "<p>No projects yet.</p>";
+      document.querySelectorAll("[data-project]").forEach((button) => button.onclick = () => selectProject(Number(button.dataset.project)));
+    }
+    async function selectProject(id) {
+      selected = projects.find((project) => project.id === id);
+      if (!selected) return;
+      byId("empty-project").hidden = true;
+      byId("project-detail").hidden = false;
+      byId("project-name").textContent = selected.name;
+      byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Local project";
+      byId("project-role").textContent = selected.role;
+      byId("scan-preset").value = selected.scan_preset;
+      await loadProjects();
+      await Promise.all([loadScans(), loadNotifications()]);
+    }
+    async function loadScans() {
+      const response = await api(`/api/projects/${selected.id}/scans`);
+      const scans = (await response.json()).scans || [];
+      byId("scan-history").innerHTML = scans.length ? scans.map((scan) => `
+        <article class="scan">
+          <div class="row spread"><strong>${escapeHtml(scan.preset)} scan</strong><span class="badge">${escapeHtml(scan.state)}</span></div>
+          <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
+          <small class="muted">${escapeHtml(scan.created_at)} · ${scan.new_findings} new findings</small>
+          <div class="row">
+            ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
+            ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
+          </div>
+        </article>`).join("") : "<p>No scans yet.</p>";
+      document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
+      document.querySelectorAll("[data-retry]").forEach((button) => button.onclick = () => scanAction(button.dataset.retry, "retry"));
+    }
+    async function scanAction(id, action) {
+      const response = await api(`/api/scans/${id}/${action}`, {method:"POST"});
+      if (!response.ok) return message((await response.json()).detail || "Scan action failed.", true);
+      message(action === "retry" ? "Retry queued." : "Cancellation requested.");
+      await loadScans();
+    }
+    async function loadNotifications() {
+      if (!selected || selected.role !== "admin") {
+        byId("notification-form").hidden = true;
+        byId("notifications").innerHTML = "<p class='muted'>Project administrator access is required.</p>";
+        return;
+      }
+      byId("notification-form").hidden = false;
+      const response = await api(`/api/projects/${selected.id}/notifications`);
+      if (!response.ok) return;
+      const channels = (await response.json()).channels || [];
+      byId("notifications").innerHTML = channels.map(channel => `<div class="scan row spread"><span>${escapeHtml(channel.name)} <small>${escapeHtml(channel.channel_type)} · ${escapeHtml(channel.events.join(", "))}</small></span><span class="row"><button data-test-channel="${channel.id}">Test</button><button class="danger" data-delete-channel="${channel.id}">Delete</button></span></div>`).join("") || "<p class='muted'>No channels configured.</p>";
+      document.querySelectorAll("[data-test-channel]").forEach(button => button.onclick = () => channelAction(button.dataset.testChannel, "test"));
+      document.querySelectorAll("[data-delete-channel]").forEach(button => button.onclick = () => channelAction(button.dataset.deleteChannel, "delete"));
+    }
+    async function channelAction(id, action) {
+      const response = await api(`/api/projects/${selected.id}/notifications/${id}${action === "test" ? "/test" : ""}`, {method: action === "test" ? "POST" : "DELETE"});
+      if (!response.ok) return message((await response.json()).detail || "Notification action failed.", true);
+      message(action === "test" ? "Test notification delivered." : "Notification deleted.");
+      await loadNotifications();
+    }
+    async function loadGitHub() {
+      const status = await (await api("/api/github/status")).json();
+      if (!status.enabled) {
+        byId("github-connect").textContent = "Configure GitHub OAuth";
+        byId("github-connect").setAttribute("aria-disabled", "true");
+        byId("github-connect").onclick = (event) => { event.preventDefault(); message("Set the GitHub OAuth environment variables first.", true); };
+        return;
+      }
+      if (!status.connection) return;
+      byId("github-connect").textContent = `GitHub: ${status.connection.login}`;
+      const response = await api("/api/github/repositories");
+      if (!response.ok) return;
+      const repositories = (await response.json()).repositories || [];
+      byId("github-repositories").hidden = false;
+      byId("repositories").innerHTML = repositories.map((repo) => `
+        <div class="row spread"><span>${escapeHtml(repo.full_name)} ${repo.private ? '<span class="badge">private</span>' : ""}</span>
+        <button data-import="${escapeHtml(repo.full_name)}">Import</button></div>`).join("");
+      document.querySelectorAll("[data-import]").forEach((button) => button.onclick = () => importRepository(button.dataset.import));
+    }
+    async function importRepository(fullName) {
+      const response = await api("/api/github/import", {method:"POST", body:JSON.stringify({full_name:fullName, scan_preset:"standard"})});
+      if (!response.ok) return message((await response.json()).detail || "Import failed.", true);
+      message("Repository imported.");
+      await loadProjects();
+    }
+    byId("new-project").onclick = () => byId("project-dialog").showModal();
+    byId("close-dialog").onclick = () => byId("project-dialog").close();
+    byId("project-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const response = await api("/api/projects", {method:"POST", body:JSON.stringify({
+        name:byId("create-name").value, repository_url:byId("create-repository").value,
+        default_branch:byId("create-branch").value, scan_preset:byId("create-preset").value
+      })});
+      if (!response.ok) return message((await response.json()).detail || "Project creation failed.", true);
+      byId("project-dialog").close(); message("Project created."); await loadProjects();
+    };
+    byId("notification-type").onchange = () => {
+      byId("notification-destination").placeholder = byId("notification-type").value === "email" ? "security@example.com" : "HTTPS webhook URL";
+    };
+    byId("notification-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const type = byId("notification-type").value;
+      const destination = byId("notification-destination").value;
+      const response = await api(`/api/projects/${selected.id}/notifications`, {method:"POST", body:JSON.stringify({
+        name:byId("notification-name").value, channel_type:type,
+        config:type === "email" ? {to:destination} : {url:destination},
+        events:["completed","blocked","failed","cancelled"]
+      })});
+      if (!response.ok) return message((await response.json()).detail || "Notification creation failed.", true);
+      event.target.reset(); message("Notification channel added."); await loadNotifications();
+    };
+    byId("start-scan").onclick = async () => {
+      if (!selected) return;
+      const response = await api(`/api/projects/${selected.id}/scans`, {method:"POST", body:JSON.stringify({preset:byId("scan-preset").value})});
+      if (!response.ok) return message((await response.json()).detail || "Could not start scan.", true);
+      const scan = await response.json();
+      message(`Scan ${scan.job_id.slice(0,8)} queued.`);
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/ws/scan/${scan.job_id}`);
+      socket.onmessage = async (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.type === "state") await loadScans();
+      };
+      await loadScans();
+    };
+    (async () => {
+      await loadIdentity();
+      await Promise.all([loadProjects(), loadGitHub()]);
+      const status = new URLSearchParams(location.search).get("github");
+      if (status) message(status === "connected" ? "GitHub connected." : `GitHub connection ${status}.`, status !== "connected");
+    })();
+  </script>
+</body>
+</html>

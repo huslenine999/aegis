@@ -166,6 +166,97 @@ jobs:
         run: |
           pytest -q --timeout=60 --timeout-method=thread
 
+      - name: Install browser test dependencies
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Browser authentication and accessibility tests
+        run: npm run test:e2e
+
       - name: SARIF smoke scan
         run: |
           python app/cli.py scan . --config aegis.yml --fast --sarif --json
+
+  container-smoke:
+    name: Production Container Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Configure production smoke environment
+        shell: bash
+        run: |
+          echo "AEGIS_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AEGIS_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AEGIS_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "AEGIS_METRICS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "AEGIS_DOMAIN=localhost" >> "$GITHUB_ENV"
+          echo "AEGIS_ALLOWED_HOSTS=localhost,127.0.0.1" >> "$GITHUB_ENV"
+          echo "AEGIS_CORS_ORIGINS=https://localhost" >> "$GITHUB_ENV"
+          echo "AEGIS_SKIP_EXTERNAL_SCANNERS=true" >> "$GITHUB_ENV"
+
+      - name: Validate and build Compose stack
+        run: |
+          docker compose config --quiet
+          docker compose build
+
+      - name: Start production stack
+        run: docker compose up -d
+
+      - name: Verify readiness and worker scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl --insecure --fail --silent https://localhost/ready > /tmp/aegis-ready.json; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "Aegis did not become ready."
+              exit 1
+            fi
+            sleep 2
+          done
+          cat /tmp/aegis-ready.json
+          curl --insecure --fail --silent https://localhost/health
+          curl --insecure --fail --silent \
+            -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
+            https://localhost/metrics
+
+          job_id="$(
+            curl --insecure --fail --silent \
+              -H "X-Aegis-Token: $AEGIS_ADMIN_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"target":"secure"}' \
+              https://localhost/run-scan |
+            python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
+          )"
+          for attempt in $(seq 1 60); do
+            state="$(docker compose exec -T redis redis-cli HGET "job:$job_id" state)"
+            if [ "$state" = "completed" ]; then
+              break
+            fi
+            if [ "$state" = "failed" ] || [ "$attempt" -eq 60 ]; then
+              echo "Worker scan ended in state: ${state:-missing}"
+              exit 1
+            fi
+            sleep 2
+          done
+          docker compose exec -T dashboard test -f /data/scans/report.html
+          docker compose exec -T dashboard test -f /data/scans/report.md
+          docker compose ps
+
+      - name: Show container logs
+        if: always()
+        run: docker compose logs --no-color proxy dashboard worker postgres redis
+
+      - name: Stop production stack
+        if: always()
+        run: docker compose down --volumes

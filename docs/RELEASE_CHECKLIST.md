@@ -8,9 +8,18 @@ Use this checklist before tagging a public release.
 4. Run `python app/cli.py scan . --config aegis.yml --sarif --json`.
 5. Build the Python wheel with `python -m pip wheel . --no-deps -w dist`.
 6. Smoke-test editable install with `pip install -e ".[dev]"` and `aegis doctor --json`.
-7. Build the container image and verify `/health` reports liveness and `/ready`
-   reports SQLite/Redis readiness.
-8. Run `docker compose up --build` and verify the dashboard reaches `http://127.0.0.1:5001`.
-9. Update the immutable Aegis SHA in the approval and published-Action E2E
+7. Run `npm run test:e2e` and confirm the real-browser authentication and axe
+   accessibility checks pass, including first-run setup and role enforcement.
+8. Populate `.env` from `.env.production.example`, build the container image,
+   and verify `/health`, `/ready`, and authenticated `/metrics`.
+9. Run `docker compose up --build`, verify Caddy serves a valid TLS chain, trigger
+   an operator scan, and confirm another non-admin user cannot access its WebSocket.
+10. Connect a test GitHub account, import public and private repositories, and
+    verify quick, standard, deep, cancel, retry, and new-finding behavior.
+11. Restart dashboard and worker containers and verify PostgreSQL users/WAF state,
+    Redis job state, and generated reports remain available.
+12. Update the immutable Aegis SHA in the approval and published-Action E2E
    workflows, then run the E2E workflow manually.
-10. Tag the release and publish artifacts only after CI is green.
+13. Tag the release only after CI is green, then verify the `Release Build`
+    workflow accepts the tag/version match and produces the reviewed wheel.
+14. Verify backup and restore procedures for PostgreSQL, Redis, report, and Caddy volumes.

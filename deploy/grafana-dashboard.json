@@ -1,0 +1,31 @@
+{
+  "title": "Aegis Operations",
+  "uid": "aegis-operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "targets": [
+        {
+          "expr": "sum(rate(aegis_http_requests_total[5m])) by (status_class)",
+          "legendFormat": "{{status_class}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP request duration",
+      "targets": [
+        {
+          "expr": "sum(rate(aegis_http_request_duration_seconds_sum[5m])) by (path)",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    }
+  ]
+}

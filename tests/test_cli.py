@@ -2,6 +2,7 @@ import os
 import sys
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 # Ensure we can import app.cli
@@ -9,6 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "app"))
 
 from app.cli import install_hook, uninstall_hook, execute_scan, main, run_doctor, run_report
+import app.cli as cli
 
 
 def fake_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
@@ -48,6 +50,39 @@ def test_install_uninstall_hook(tmp_path, monkeypatch):
     # Uninstall the hook
     assert uninstall_hook() == 0
     assert not pre_push_hook.exists()
+
+
+def test_start_generates_private_config_and_launches_complete_stack(tmp_path, monkeypatch):
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    env_file = tmp_path / ".env.aegis"
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cli, "LOCAL_ENV_FILE", env_file)
+    monkeypatch.setattr(cli.shutil, "which", lambda command: "/usr/local/bin/docker")
+    monkeypatch.setattr(cli, "_port_is_available", lambda port: True)
+    monkeypatch.setattr(cli, "_wait_for_dashboard", lambda url: True)
+    opened = []
+    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["docker", "compose", "version"]:
+            return SimpleNamespace(returncode=0, stdout="Docker Compose version v2", stderr="")
+        if "ps" in command:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert "up" in command
+        assert "--build" in command
+        assert "-d" in command
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    assert cli.run_start() == 0
+    values = cli._read_environment_file(env_file)
+    assert values["AEGIS_ENV"] == "development"
+    assert len(values["AEGIS_SESSION_SECRET"]) >= 32
+    assert len(values["AEGIS_SETUP_TOKEN"]) >= 32
+    assert len(values["AEGIS_ENCRYPTION_KEY"]) >= 32
+    assert env_file.stat().st_mode & 0o777 == 0o600
+    assert opened == [f"http://localhost/setup#{values['AEGIS_SETUP_TOKEN']}"]
 
 def test_execute_scan_safe_target(tmp_path, monkeypatch):
     # Setup a safe python target file

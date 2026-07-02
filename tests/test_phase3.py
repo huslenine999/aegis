@@ -9,7 +9,7 @@ from policy_engine import analyze_clamav, analyze_zap
 @pytest.fixture
 def client():
     from app.database import initialize_database
-    initialize_database()
+    initialize_database(reset=True)
     app_main.WAF_ENABLED = False
     yield TestClient(app)
 

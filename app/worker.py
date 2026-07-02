@@ -6,8 +6,8 @@ import shutil
 import socket
 import subprocess
 import time
-import sqlite3
 import re
+import base64
 from pathlib import Path
 import redis
 
@@ -15,13 +15,17 @@ import redis
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from database import DB_PATH, BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, redis_client
+from database import BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, get_connection, redis_client
+from config import environment_positive_int
 from policy_engine import get_ruff_severity
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import DEFAULT_IGNORED_DIRS
 from scanners import configure_semgrep_environment
 from scanners import write_semgrep_rules
+from projects import get_project, update_scan_run
+from github_integration import github_token
+from notifications import send_project_notification
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
@@ -29,6 +33,8 @@ from sandbox import (
 )
 
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
+JOB_LOG_LIMIT = environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
+JOB_RETENTION_SECONDS = environment_positive_int("AEGIS_JOB_RETENTION_SECONDS", 86400)
 
 
 def add_semgrep_excludes(command: list[str]) -> list[str]:
@@ -48,12 +54,19 @@ def publish_job_event(job_id: str, event_type: str, data: dict):
         redis_client.hset(f"job:{job_id}", "result", json.dumps(data.get("result", {})))
         
     if event_type == "log":
-        redis_client.rpush(f"job_logs:{job_id}", json.dumps(data))
+        log_key = f"job_logs:{job_id}"
+        redis_client.rpush(log_key, json.dumps(data))
+        if hasattr(redis_client, "ltrim"):
+            redis_client.ltrim(log_key, -JOB_LOG_LIMIT, -1)
         
     redis_client.publish(channel, json.dumps(payload))
+    if event_type == "state" and data.get("state") in {"completed", "failed", "cancelled"}:
+        for key in (f"job:{job_id}", f"job_logs:{job_id}"):
+            if hasattr(redis_client, "expire"):
+                redis_client.expire(key, JOB_RETENTION_SECONDS)
 
 def load_waf_rules_from_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT pattern, description, enabled FROM waf_rules")
@@ -66,7 +79,7 @@ def load_waf_rules_from_db():
                 "enabled": bool(row[2])
             })
         return rules
-    except sqlite3.OperationalError:
+    except Exception:
         return []
     finally:
         conn.close()
@@ -221,17 +234,94 @@ def execute_subprocess_log(cmd, cwd, job_id, tool_name):
         publish_job_event(job_id, "log", {"text": f"[{tool_name} Error] Failed to run command: {e}", "color": "var(--danger)"})
         return -1
 
-def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_enabled: bool = False):
+class ScanCancelled(Exception):
+    pass
+
+
+def _check_cancelled(job_id: str) -> None:
+    value = redis_client.hget(f"job:{job_id}", "cancel_requested")
+    if value and str(value.decode() if isinstance(value, bytes) else value) == "1":
+        raise ScanCancelled()
+
+
+def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tuple[str, Path]:
+    destination = SCANS_DIR / "workspaces" / job_id
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    token = github_token(requested_by)
+    environment = os.environ.copy()
+    if token:
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        environment.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+                "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+            }
+        )
+    result = subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--single-branch",
+            "--branch",
+            project["default_branch"],
+            "--",
+            project["repository_url"],
+            str(destination),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise RuntimeError(f"Repository clone failed: {result.stderr[-500:]}")
+    return str(destination), destination
+
+
+def async_scan_task(
+    job_id: str,
+    target: str,
+    custom_file_path: str = None,
+    waf_enabled: bool = False,
+    scan_run_id: int = None,
+    project_id: int = None,
+    requested_by: int = None,
+    preset: str = "standard",
+):
+    external_project_dir = None
     try:
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
         target_path = custom_file_path if is_custom_scan else None
         skip_external_scanners = os.environ.get(
             "AEGIS_SKIP_EXTERNAL_SCANNERS", ""
-        ).lower() in {"1", "true", "yes", "on"}
+        ).lower() in {"1", "true", "yes", "on"} or preset == "quick"
+        enable_dynamic_scanners = scan_run_id is None or preset == "deep"
+
+        if project_id:
+            project = get_project(project_id)
+            if not project:
+                raise RuntimeError("Project no longer exists.")
+            if project["repository_url"]:
+                publish_job_event(job_id, "log", {
+                    "text": f"[SOURCE] Cloning {project['github_full_name'] or project['repository_url']} at {project['default_branch']}.",
+                    "color": "var(--text-muted)",
+                })
+                target_path, external_project_dir = _clone_github_project(
+                    project, project["created_by"], job_id
+                )
+                target = "project"
         
         # 1. State: QUEUED -> RUNNING
         publish_job_event(job_id, "state", {"state": "running", "progress": 10})
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="running", progress=10)
+        _check_cancelled(job_id)
         publish_job_event(job_id, "log", {"text": f"[SYSTEM] Job claimed by worker. Job ID: {job_id}", "color": "var(--primary)"})
         
         if is_custom_scan:
@@ -248,7 +338,7 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                 target_path = str(BASE_DIR / "secure_main.py")
             elif target == "vulnerable":
                 target_path = str(BASE_DIR / "demo_lab.py")
-            else:
+            elif not external_project_dir:
                 target_path = str(PROJECT_ROOT)
                 
             # Run Safety SCA
@@ -258,8 +348,11 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                 publish_job_event(job_id, "log", {"text": "[SCA] Safety skipped by scanner configuration.", "color": "var(--text-muted)"})
             else:
                 publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
-                safety_cmd = [python_bin, "-m", "safety", "check", "-r", "requirements.txt", "--save-json", str(SCANS_DIR / "safety-report.json")]
-                subprocess.run(safety_cmd, cwd=PROJECT_ROOT, check=False)
+                requirements_file = Path(target_path) / "requirements.txt"
+                if not requirements_file.exists():
+                    requirements_file = PROJECT_ROOT / "requirements.txt"
+                safety_cmd = [python_bin, "-m", "safety", "check", "-r", str(requirements_file), "--save-json", str(SCANS_DIR / "safety-report.json")]
+                subprocess.run(safety_cmd, cwd=Path(target_path) if Path(target_path).is_dir() else PROJECT_ROOT, check=False)
                 publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
             
             # Ensure trivy-report.json exists
@@ -293,7 +386,7 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
                 s.bind(('', 0))
                 return s.getsockname()[1]
 
-        if is_docker_available() and has_python:
+        if enable_dynamic_scanners and is_docker_available() and has_python:
             publish_job_event(job_id, "log", {"text": "[SANDBOX] Docker available. Scaffold target sandbox...", "color": "var(--text-muted)"})
             try:
                 host_port = find_free_port()
@@ -322,6 +415,9 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
 
         # 2. State: RUNNING -> ANALYZING
         publish_job_event(job_id, "state", {"state": "analyzing", "progress": 30})
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="analyzing", progress=30)
+        _check_cancelled(job_id)
         
         # SAST: Ruff (SAST)
         ruff_report_path = SCANS_DIR / "ruff-report.json"
@@ -415,7 +511,9 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         zap_report_path = SCANS_DIR / "zap-report.json"
         try:
             publish_job_event(job_id, "log", {"text": "[DAST] Running active crawler against endpoints...", "color": "var(--text-muted)"})
-            if sandbox_active:
+            if not enable_dynamic_scanners:
+                zap_findings = []
+            elif sandbox_active:
                 zap_findings = run_dast_scan(f"http://127.0.0.1:{host_port}", job_id)
             else:
                 if is_custom_scan or target == "secure":
@@ -441,6 +539,9 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
 
         # 3. State: ANALYZING -> CORRELATING
         publish_job_event(job_id, "state", {"state": "correlating", "progress": 70})
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="correlating", progress=70)
+        _check_cancelled(job_id)
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Evaluating scanner outputs against security gate thresholds...", "color": "var(--text-muted)"})
         
         # Run policy engine
@@ -450,6 +551,9 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
 
         # 4. State: CORRELATING -> REPORTING
         publish_job_event(job_id, "state", {"state": "reporting", "progress": 90})
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="reporting", progress=90)
+        _check_cancelled(job_id)
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Exporting static dossier reports and CycloneDX SBOM...", "color": "var(--text-muted)"})
         time.sleep(1.0) # Visual transition pause
 
@@ -520,6 +624,8 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
             "clamav": clamav,
             "zap": zap,
             "osv": osv,
+            "ruff": ruff_rep,
+            "semgrep": semgrep_rep,
             "exploitability_score": score,
             "waf_enabled": waf_enabled,
             "has_run": True,
@@ -529,12 +635,52 @@ def async_scan_task(job_id: str, target: str, custom_file_path: str = None, waf_
         }
 
         # 5. State: REPORTING -> COMPLETED
+        if scan_run_id:
+            update_scan_run(
+                scan_run_id, state="completed", progress=100, result=result_payload
+            )
+        if project_id:
+            project = get_project(project_id)
+            send_project_notification(
+                project_id,
+                "blocked" if is_blocked else "completed",
+                {
+                    "project_name": project["name"] if project else "Project",
+                    "job_id": job_id,
+                    "new_findings": result_payload.get("new_findings", 0),
+                    "is_blocked": is_blocked,
+                    "blocked_by": reasons,
+                },
+            )
         publish_job_event(job_id, "result", {"result": result_payload})
         publish_job_event(job_id, "state", {"state": "completed", "progress": 100})
         publish_job_event(job_id, "log", {"text": "[OK] GATE VERDICT READY: Scan execution completed successfully.", "color": "var(--primary)"})
         
+    except ScanCancelled:
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="cancelled", progress=100)
+        publish_job_event(job_id, "state", {"state": "cancelled", "progress": 100})
+        publish_job_event(job_id, "log", {"text": "[SYSTEM] Scan cancelled by user.", "color": "var(--secondary)"})
+        if project_id:
+            project = get_project(project_id)
+            send_project_notification(project_id, "cancelled", {
+                "project_name": project["name"] if project else "Project",
+                "job_id": job_id,
+            })
     except Exception as e:
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="failed", progress=100)
         publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
         publish_job_event(job_id, "log", {"text": f"[FATAL] Scan job execution failed: {e}", "color": "var(--danger)"})
         redis_client.hset(f"job:{job_id}", "error", str(e))
+        if project_id:
+            project = get_project(project_id)
+            send_project_notification(project_id, "failed", {
+                "project_name": project["name"] if project else "Project",
+                "job_id": job_id,
+                "error": str(e)[:500],
+            })
         raise e
+    finally:
+        if external_project_dir:
+            shutil.rmtree(external_project_dir, ignore_errors=True)

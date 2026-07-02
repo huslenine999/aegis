@@ -1,10 +1,15 @@
 (function () {
     const HISTORY_KEY = "aegis.scanHistory.v1";
     const SETTINGS_KEY = "aegis.dashboardSettings.v1";
+    const ADMIN_TOKEN_KEY = "aegis.adminToken.v1";
     const stateOrder = ["queued", "running", "analyzing", "correlating", "reporting", "completed"];
     let currentFilter = "all";
+    let currentScanner = "all";
+    let currentQuery = "";
     let latestResults = null;
     let currentJob = null;
+    let csrfToken = "";
+    let identityPromise = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -18,6 +23,80 @@
 
     function writeJson(key, value) {
         localStorage.setItem(key, JSON.stringify(value));
+    }
+
+    function readAdminToken() {
+        try {
+            return sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
+        } catch (_) {
+            return "";
+        }
+    }
+
+    function writeAdminToken(token) {
+        try {
+            if (token) {
+                sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+            } else {
+                sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+            }
+        } catch (_) {
+            // Browsers with disabled session storage can still enter a token per prompt.
+        }
+    }
+
+    async function loadIdentity() {
+        if (!identityPromise) {
+            identityPromise = window.fetch("/api/auth/me", { credentials: "same-origin" })
+                .then(async (response) => {
+                    if (response.status === 401) {
+                        window.location.assign("/login");
+                        throw new Error("Authentication required");
+                    }
+                    if (!response.ok) throw new Error("Unable to load identity");
+                    const identity = await response.json();
+                    csrfToken = identity.csrf_token || "";
+                    return identity;
+                })
+                .catch((error) => {
+                    identityPromise = null;
+                    throw error;
+                });
+        }
+        return identityPromise;
+    }
+
+    async function authenticatedFetch(input, init) {
+        const options = { ...(init || {}) };
+        const headers = new Headers(options.headers || {});
+        const token = readAdminToken();
+        if (token) headers.set("X-Aegis-Token", token);
+        const method = String(options.method || "GET").toUpperCase();
+        if (!["GET", "HEAD", "OPTIONS"].includes(method) && !token) {
+            if (!csrfToken) await loadIdentity();
+            headers.set("X-CSRF-Token", csrfToken);
+        }
+        options.headers = headers;
+        options.credentials = "same-origin";
+
+        const response = await window.fetch(input, options);
+        if (response.status === 401) window.location.assign("/login");
+        return response;
+    }
+
+    async function loadWorkspaceSettings() {
+        try {
+            const response = await window.fetch("/api/settings", { credentials: "same-origin" });
+            if (!response.ok) return;
+            const settings = await response.json();
+            setText("uxWorkspaceName", settings.workspace_name || "Aegis Core");
+            const context = settings.repository
+                ? `${settings.scan_preset || "standard"} · ${settings.repository}`
+                : `${settings.scan_preset || "standard"} scan preset`;
+            setText("uxWorkspaceContext", context);
+        } catch (_) {
+            // Keep the static workspace fallback when settings are unavailable.
+        }
     }
 
     function setText(id, text) {
@@ -42,16 +121,55 @@
         return new Date(epochSeconds * 1000).toLocaleString();
     }
 
+    function activateTab(tab) {
+        const target = tab.dataset.tab;
+        const dashboard = $("modern-dashboard");
+        if (dashboard) dashboard.dataset.activePanel = target;
+        document.querySelectorAll(".modern-tab").forEach((item) => {
+            const isActive = item === tab;
+            item.classList.toggle("active", isActive);
+            item.setAttribute("aria-selected", String(isActive));
+            item.tabIndex = isActive ? 0 : -1;
+        });
+        document.querySelectorAll(".modern-tab-panel").forEach((panel) => {
+            const isActive = panel.dataset.panel === target;
+            panel.classList.toggle("active", isActive);
+            panel.hidden = !isActive;
+        });
+        setText("uxViewTitle", tab.querySelector("span")?.textContent || target);
+    }
+
     function updateTabs() {
-        document.querySelectorAll(".modern-tab").forEach((tab) => {
-            tab.addEventListener("click", () => {
-                const target = tab.dataset.tab;
-                document.querySelectorAll(".modern-tab").forEach((item) => item.classList.toggle("active", item === tab));
-                document.querySelectorAll(".modern-tab-panel").forEach((panel) => {
-                    panel.classList.toggle("active", panel.dataset.panel === target);
-                });
+        const tabs = Array.from(document.querySelectorAll(".modern-tab"));
+        tabs.forEach((tab, index) => {
+            tab.addEventListener("click", () => activateTab(tab));
+            tab.addEventListener("keydown", (event) => {
+                const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
+                const backward = event.key === "ArrowUp" || event.key === "ArrowLeft";
+                if (!forward && !backward) return;
+                event.preventDefault();
+                const nextIndex = forward
+                    ? (index + 1) % tabs.length
+                    : (index - 1 + tabs.length) % tabs.length;
+                tabs[nextIndex].focus();
+                activateTab(tabs[nextIndex]);
             });
         });
+        document.querySelectorAll(".modern-tab-panel").forEach((panel) => {
+            panel.hidden = !panel.classList.contains("active");
+        });
+    }
+
+    function setScanBusy(isBusy) {
+        ["uxScanBtn", "uxHeaderScanBtn"].forEach((id) => {
+            const button = $(id);
+            if (!button) return;
+            button.disabled = isBusy;
+            button.setAttribute("aria-busy", String(isBusy));
+        });
+        setText("uxHeaderScanLabel", isBusy ? "Audit running" : "Run audit");
+        $("modern-dashboard")?.classList.toggle("scan-active", isBusy);
+        document.querySelector(".progress-card")?.classList.toggle("is-scanning", isBusy);
     }
 
     function setProgress(state) {
@@ -63,6 +181,8 @@
             step.classList.toggle("active", step.dataset.step === normalized);
         });
         setText("uxProgressTitle", normalized.charAt(0).toUpperCase() + normalized.slice(1));
+        const progressCard = document.querySelector(".progress-card");
+        if (progressCard) progressCard.dataset.state = normalized;
     }
 
     function appendLog(text, color) {
@@ -165,28 +285,71 @@
         const container = $("uxFindings");
         if (!container) return;
         const findings = buildFindings(data);
-        const visible = findings.filter((finding) => currentFilter === "all" || normalizeSeverity(finding.severity) === currentFilter);
+        const scannerSelect = $("uxScannerFilter");
+        if (scannerSelect) {
+            const scanners = [...new Set(findings.map((finding) => finding.scanner))].sort();
+            const existing = [...scannerSelect.options].slice(1).map((option) => option.value);
+            if (existing.join("|") !== scanners.join("|")) {
+                scannerSelect.innerHTML = '<option value="all">All scanners</option>';
+                scanners.forEach((scanner) => {
+                    const option = document.createElement("option");
+                    option.value = scanner;
+                    option.textContent = scanner;
+                    scannerSelect.appendChild(option);
+                });
+                currentScanner = scanners.includes(currentScanner) ? currentScanner : "all";
+                scannerSelect.value = currentScanner;
+            }
+        }
+
+        const counts = findings.reduce((summary, finding) => {
+            const severity = normalizeSeverity(finding.severity);
+            summary[severity] = (summary[severity] || 0) + 1;
+            return summary;
+        }, {});
+        setText("uxSummaryCritical", String(counts.critical || 0));
+        setText("uxSummaryHigh", String(counts.high || 0));
+        setText("uxSummaryMedium", String(counts.medium || 0));
+        setText("uxSummaryLow", String((counts.low || 0) + (counts.info || 0)));
+
+        const query = currentQuery.toLowerCase();
+        const visible = findings.filter((finding) => {
+            const normalizedSeverity = normalizeSeverity(finding.severity);
+            const severityMatches = currentFilter === "all"
+                || normalizedSeverity === currentFilter
+                || (currentFilter === "low" && normalizedSeverity === "info");
+            const scannerMatches = currentScanner === "all" || finding.scanner === currentScanner;
+            const queryMatches = !query || [finding.title, finding.scanner, finding.location, finding.fix]
+                .some((value) => String(value || "").toLowerCase().includes(query));
+            return severityMatches && scannerMatches && queryMatches;
+        });
+        setText("uxFindingsCount", `${visible.length} ${visible.length === 1 ? "finding" : "findings"}`);
 
         if (!visible.length) {
             container.className = "modern-findings empty-state";
-            container.textContent = findings.length ? "No findings match this filter." : "No actionable findings in the latest scan.";
+            container.innerHTML = findings.length
+                ? '<div class="findings-empty"><strong>No matching findings</strong><span>Adjust the search or filters to widen the triage queue.</span></div>'
+                : '<div class="findings-empty"><strong>No actionable findings</strong><span>The latest evidence contains no issues requiring triage.</span></div>';
             return;
         }
 
         container.className = "modern-findings";
         container.innerHTML = "";
-        visible.forEach((finding) => {
+        visible.forEach((finding, index) => {
             const item = document.createElement("div");
             item.className = "modern-finding";
             const severity = normalizeSeverity(finding.severity);
             item.innerHTML = `
-                <div class="modern-severity ${severity}">${severity.toUpperCase()}</div>
-                <div>
-                    <div class="modern-finding-title">${escapeHtml(finding.title)}</div>
-                    <div class="modern-finding-meta">${escapeHtml(finding.scanner)} - ${escapeHtml(finding.location)}</div>
+                <div class="finding-index">${String(index + 1).padStart(2, "0")}</div>
+                <div class="finding-main">
+                    <div class="finding-title-row">
+                        <div class="modern-finding-title">${escapeHtml(finding.title)}</div>
+                        <div class="modern-severity ${severity}">${severity.toUpperCase()}</div>
+                    </div>
+                    <div class="modern-finding-meta"><span>${escapeHtml(finding.scanner)}</span>${escapeHtml(finding.location)}</div>
                     <div class="modern-finding-fix">${escapeHtml(finding.fix)}</div>
                 </div>
-                <a class="modern-btn compact" href="/report">Report</a>
+                <a class="finding-evidence" href="/report">Evidence ↗</a>
             `;
             container.appendChild(item);
         });
@@ -199,6 +362,115 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#039;");
+    }
+
+    function showToast(title, message, tone = "neutral") {
+        const region = $("uxToastRegion");
+        if (!region) return;
+        const toast = document.createElement("div");
+        toast.className = `aegis-toast ${tone}`;
+        toast.innerHTML = `<i></i><div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span></div>`;
+        region.replaceChildren(toast);
+        window.setTimeout(() => toast.classList.add("visible"), 10);
+        window.setTimeout(() => {
+            toast.classList.remove("visible");
+            window.setTimeout(() => toast.remove(), 220);
+        }, 3200);
+    }
+
+    function renderTelemetry(data) {
+        const container = $("uxTelemetryScanners");
+        if (!container) return;
+        const findings = buildFindings(data);
+        const sources = [
+            ["ruff", "Ruff"], ["semgrep", "Semgrep"], ["osv", "OSV"],
+            ["secrets", "Secrets"], ["yara", "YARA"], ["clamav", "ClamAV"], ["zap", "DAST"],
+        ];
+        let alerts = 0;
+        container.innerHTML = sources.map(([key, label]) => {
+            const sourceFindings = findings.filter((finding) => finding.scanner === label);
+            const hasEvidence = data[key] !== null && data[key] !== undefined;
+            const state = sourceFindings.length ? "alert" : (hasEvidence ? "ready" : "standby");
+            if (state === "alert") alerts += 1;
+            return `<span class="telemetry-source ${state}"><i></i>${label}<small>${state === "alert" ? sourceFindings.length : state}</small></span>`;
+        }).join("");
+        setText("uxTelemetryState", alerts ? `${alerts} alert ${alerts === 1 ? "source" : "sources"}` : "Signals nominal");
+    }
+
+    async function loadTopology() {
+        const container = $("uxTopologyMap");
+        if (!container) return;
+        container.className = "topology-map loading";
+        container.setAttribute("aria-label", "Loading dependency topology");
+        try {
+            const response = await fetch("/get-dependency-graph");
+            if (!response.ok) throw new Error(`Topology request failed (${response.status})`);
+            const data = await response.json();
+            const allNodes = Array.isArray(data.nodes) ? data.nodes : [];
+            const allLinks = Array.isArray(data.links) ? data.links : [];
+            const root = allNodes.find((node) => node.isRoot || node.id === "aegis");
+            const prioritized = allNodes
+                .filter((node) => node !== root)
+                .sort((a, b) => Number(!!b.vulnerable) - Number(!!a.vulnerable));
+            const selected = [root, ...prioritized].filter(Boolean).slice(0, 18);
+            const selectedIds = new Set(selected.map((node) => node.id));
+            const links = allLinks.filter((link) => selectedIds.has(link.source) && selectedIds.has(link.target));
+
+            const depth = new Map([[root?.id || "aegis", 0]]);
+            for (let pass = 0; pass < selected.length; pass += 1) {
+                links.forEach((link) => {
+                    if (depth.has(link.source) && !depth.has(link.target)) {
+                        depth.set(link.target, depth.get(link.source) + 1);
+                    }
+                });
+            }
+            selected.forEach((node) => {
+                if (!depth.has(node.id)) depth.set(node.id, 1);
+            });
+            const maxDepth = Math.max(1, ...depth.values());
+            const groups = new Map();
+            selected.forEach((node) => {
+                const nodeDepth = depth.get(node.id);
+                if (!groups.has(nodeDepth)) groups.set(nodeDepth, []);
+                groups.get(nodeDepth).push(node);
+            });
+
+            const positions = new Map();
+            groups.forEach((nodes, nodeDepth) => {
+                nodes.forEach((node, index) => {
+                    positions.set(node.id, {
+                        x: 55 + (nodeDepth / maxDepth) * 590,
+                        y: 24 + ((index + 1) / (nodes.length + 1)) * 226,
+                    });
+                });
+            });
+
+            const lineMarkup = links.map((link) => {
+                const source = positions.get(link.source);
+                const target = positions.get(link.target);
+                const targetNode = selected.find((node) => node.id === link.target);
+                if (!source || !target) return "";
+                const mid = (source.x + target.x) / 2;
+                return `<path class="${targetNode?.vulnerable ? "exposed" : ""}" d="M${source.x},${source.y} C${mid},${source.y} ${mid},${target.y} ${target.x},${target.y}"></path>`;
+            }).join("");
+            const nodeMarkup = selected.map((node) => {
+                const point = positions.get(node.id);
+                const className = node.isRoot ? "root" : (node.vulnerable ? "exposed" : "secure");
+                const label = String(node.name || node.id).replace(" (Root)", "").slice(0, 13);
+                return `<g class="topology-node ${className}" transform="translate(${point.x} ${point.y})"><circle r="${node.isRoot ? 10 : 7}"></circle><circle class="pulse" r="${node.isRoot ? 15 : 11}"></circle><text y="22">${escapeHtml(label)}</text></g>`;
+            }).join("");
+            container.innerHTML = `<svg viewBox="0 0 700 280" aria-hidden="true"><g class="topology-links">${lineMarkup}</g><g>${nodeMarkup}</g></svg>`;
+            container.className = "topology-map ready";
+            const exposed = allNodes.filter((node) => node.vulnerable).length;
+            setText("uxTopologyExposed", String(exposed));
+            setText("uxTopologySecure", String(Math.max(0, allNodes.length - exposed)));
+            container.setAttribute("aria-label", `Dependency topology with ${allNodes.length} packages and ${exposed} exposed packages`);
+        } catch (_) {
+            container.className = "topology-map error";
+            container.innerHTML = '<div class="topology-error"><strong>Topology unavailable</strong><span>Dependency evidence could not be loaded.</span><button type="button" data-retry-topology>Retry</button></div>';
+            container.setAttribute("aria-label", "Dependency topology unavailable");
+            container.querySelector("[data-retry-topology]")?.addEventListener("click", loadTopology);
+        }
     }
 
     function updateOverview(data) {
@@ -221,9 +493,20 @@
         if (reason) {
             reason.textContent = blockedBy.length ? `Blocked by ${blockedBy.join(", ")}` : (data.has_run ? "No blocking security issues found." : "Run an audit to generate a deployment decision.");
         }
+        setText("uxVerdictSignal", !data.has_run ? "Not evaluated" : (data.is_blocked ? "Release stopped" : "Gate passed"));
+        const blockedByContainer = $("uxBlockedBy");
+        if (blockedByContainer) {
+            blockedByContainer.innerHTML = blockedBy.map((source) => `<span>${escapeHtml(source)}</span>`).join("");
+        }
 
         const risk = Math.round(data.exploitability_score || 0);
         setText("uxRiskScore", String(risk));
+        const riskOrbit = $("uxRiskOrbit");
+        if (riskOrbit) {
+            riskOrbit.style.setProperty("--risk", String(Math.min(100, Math.max(0, risk))));
+            riskOrbit.style.setProperty("--risk-color", risk >= 70 ? "var(--danger)" : (risk >= 35 ? "var(--secondary)" : "var(--primary)"));
+        }
+        setText("uxRiskLabel", !data.has_run ? "Risk not calculated" : (risk >= 70 ? "Critical exposure" : (risk >= 35 ? "Material exposure" : "Low exploitability")));
         const meter = $("uxRiskMeter");
         if (meter) {
             meter.style.width = `${Math.min(100, Math.max(0, risk))}%`;
@@ -233,13 +516,35 @@
         setText("uxWafState", data.waf_enabled ? "Armed" : "Off");
         const wafState = $("uxWafState");
         if (wafState) wafState.style.color = data.waf_enabled ? "var(--primary)" : "var(--secondary)";
+        setText("uxWafPanelState", data.waf_enabled ? "Protection armed" : "Protection inactive");
+        setText("uxWafPanelToggle", data.waf_enabled ? "Disarm firewall" : "Arm firewall");
+        setText("uxWafPanelCopy", data.waf_enabled
+            ? "Known attack patterns are being evaluated before requests reach application routes."
+            : "Application routes are exposed directly. Arm the firewall before testing hostile payloads.");
+        const firewallPosture = document.querySelector(".firewall-posture");
+        if (firewallPosture) firewallPosture.classList.toggle("armed", !!data.waf_enabled);
         setText("uxLatestScan", formatDate(data.latest_scan_time));
-        setText("uxSandboxStatus", `Sandbox: ${data.sandbox_status || "unknown"}`);
+        setText("uxSandboxStatus", `Sandbox · ${String(data.sandbox_status || "unknown").replaceAll("_", " ")}`);
+        setText("uxEvidenceFreshness", data.latest_scan_time ? `Updated ${formatDate(data.latest_scan_time)}` : "Awaiting evidence");
+
+        const findings = buildFindings(data);
+        const criticalCount = findings.filter((finding) => normalizeSeverity(finding.severity) === "critical").length;
+        const scannerKeys = ["ruff", "semgrep", "osv", "secrets", "yara", "clamav", "zap"];
+        const scannerCount = scannerKeys.filter((key) => data[key] !== null && data[key] !== undefined).length;
+        setText("uxFindingTotal", String(findings.length));
+        setText("uxCriticalTotal", String(criticalCount));
+        setText("uxScannerTotal", String(scannerCount));
 
         const reportPath = $("uxReportPath");
         if (reportPath) {
             reportPath.textContent = data.report_url ? `${window.location.origin}${data.report_url}` : "Report path appears after a scan.";
         }
+        setText("uxReportAvailability", data.report_url ? "Evidence package ready" : "No report generated");
+        setText("uxReportVerdict", !data.has_run ? "No deployment verdict" : (data.is_blocked ? "Deployment blocked" : "Deployment allowed"));
+        setText("uxReportSummary", !data.has_run
+            ? "Run an audit to compile a complete evidence package."
+            : `${findings.length} actionable ${findings.length === 1 ? "finding" : "findings"} across ${scannerCount} reporting scanners.`);
+        setText("uxReportStamp", data.latest_scan_time ? new Date(data.latest_scan_time * 1000).toLocaleDateString() : "AWAITING SCAN");
     }
 
     function renderHistory() {
@@ -289,12 +594,28 @@
                 if (latestResults) renderFindings(latestResults);
             });
         });
+        $("uxScannerFilter")?.addEventListener("change", (event) => {
+            currentScanner = event.target.value;
+            if (latestResults) renderFindings(latestResults);
+        });
+        $("uxFindingsSearch")?.addEventListener("input", (event) => {
+            currentQuery = event.target.value.trim();
+            if (latestResults) renderFindings(latestResults);
+        });
     }
 
     function setupProxyControls() {
+        document.querySelector(".skip-link")?.addEventListener("click", () => {
+            window.setTimeout(() => $("workbench-main")?.focus(), 0);
+        });
         $("uxScanBtn")?.addEventListener("click", () => $("scanBtn")?.click());
+        $("uxHeaderScanBtn")?.addEventListener("click", () => $("uxScanBtn")?.click());
         $("uxUploadBtn")?.addEventListener("click", () => $("uploadBtn")?.click());
-        $("uxWafToggle")?.addEventListener("click", () => $("wafToggle")?.click());
+        $("uxWafToggle")?.addEventListener("click", () => {
+            $("wafToggle")?.click();
+            setTimeout(refreshResults, 100);
+        });
+        $("uxWafPanelToggle")?.addEventListener("click", () => $("uxWafToggle")?.click());
         $("uxShowWafEditor")?.addEventListener("click", () => {
             const select = $("viewSelect");
             if (select) {
@@ -302,6 +623,12 @@
                 select.dispatchEvent(new Event("change"));
             }
             setTimeout(() => $("waf-editor-card")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        });
+        $("uxThreatLabBtn")?.addEventListener("click", () => {
+            const select = $("viewSelect");
+            if (!select) return;
+            select.value = "tactical";
+            select.dispatchEvent(new Event("change"));
         });
         $("uxScanTarget")?.addEventListener("change", (event) => {
             const scanTarget = $("scanTarget");
@@ -314,15 +641,39 @@
             const text = $("uxReportPath")?.textContent || `${window.location.origin}/report`;
             try {
                 await navigator.clipboard.writeText(text);
-                setText("uxCopyReport", "Copied");
-                setTimeout(() => setText("uxCopyReport", "Copy Report Path"), 1200);
+                setText("uxCopyReportLabel", "Copied");
+                setTimeout(() => setText("uxCopyReportLabel", "Copy link"), 1200);
             } catch (_) {
-                setText("uxCopyReport", "Copy Failed");
+                setText("uxCopyReportLabel", "Copy failed");
+                setTimeout(() => setText("uxCopyReportLabel", "Copy link"), 1200);
             }
         });
         $("uxClearLogs")?.addEventListener("click", () => {
             const log = $("uxLogStream");
-            if (log) log.textContent = "No live scan events yet.";
+            if (log) {
+                log.textContent = "No live scan events yet.";
+                log.classList.add("empty-state");
+            }
+        });
+        document.querySelectorAll("[data-go-tab]").forEach((button) => {
+            button.addEventListener("click", () => {
+                document.querySelector(`.modern-tab[data-tab="${button.dataset.goTab}"]`)?.click();
+            });
+        });
+        document.querySelectorAll("[data-open-topology]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const select = $("viewSelect");
+                if (!select) return;
+                select.value = "tactical";
+                select.dispatchEvent(new Event("change"));
+                setTimeout(() => $("dependency-graph-card")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+            });
+        });
+        document.addEventListener("keydown", (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && document.body.classList.contains("view-simple")) {
+                event.preventDefault();
+                $("uxHeaderScanBtn")?.click();
+            }
         });
     }
 
@@ -330,8 +681,11 @@
         const settings = readJson(SETTINGS_KEY, { reduceMotion: false, defaultSimple: true });
         const reduce = $("uxReduceMotion");
         const simple = $("uxDefaultSimple");
+        const adminToken = $("uxAdminToken");
+        const saveAdminToken = $("uxSaveAdminToken");
         if (reduce) reduce.checked = !!settings.reduceMotion;
         if (simple) simple.checked = settings.defaultSimple !== false;
+        if (adminToken) adminToken.value = readAdminToken();
         document.body.classList.toggle("ux-reduce-motion", !!settings.reduceMotion);
 
         reduce?.addEventListener("change", () => {
@@ -341,7 +695,17 @@
         });
         simple?.addEventListener("change", () => {
             settings.defaultSimple = simple.checked;
+            localStorage.setItem("view", simple.checked ? "simple" : "tactical");
             writeJson(SETTINGS_KEY, settings);
+        });
+        saveAdminToken?.addEventListener("click", () => {
+            writeAdminToken(adminToken?.value.trim() || "");
+            setText("uxSaveAdminToken", adminToken?.value.trim() ? "Token Saved" : "Token Cleared");
+            setTimeout(() => setText("uxSaveAdminToken", "Save Admin Token"), 1200);
+        });
+        $("uxSignOut")?.addEventListener("click", async () => {
+            const response = await authenticatedFetch("/api/auth/logout", { method: "POST" });
+            if (response.ok) window.location.assign("/login");
         });
     }
 
@@ -349,13 +713,16 @@
         latestResults = data || {};
         updateOverview(latestResults);
         renderFindings(latestResults);
+        renderTelemetry(latestResults);
     }
 
     function startScan(jobId, meta) {
         currentJob = { id: jobId, ...(meta || {}) };
+        setScanBusy(true);
         setText("uxJobId", jobId ? `Job ${jobId.slice(0, 8)}` : "Queued");
         setProgress("queued");
         appendLog(`Scan queued${meta?.target ? ` for ${meta.target}` : ""}.`, "var(--secondary)");
+        showToast("Audit queued", meta?.target ? `Evidence collection started for ${meta.target}.` : "Evidence collection has started.");
     }
 
     function handleScanMessage(data) {
@@ -366,6 +733,7 @@
             appendLog(data.text, data.color);
         } else if (data.type === "result") {
             setProgress("completed");
+            showToast("Evidence compiled", "The deployment decision is ready for review.", "success");
         }
     }
 
@@ -377,6 +745,8 @@
             appendLog("Could not refresh dashboard results.", "var(--danger)");
         }
         saveHistory(result || {});
+        setScanBusy(false);
+        loadTopology();
     }
 
     async function refreshResults() {
@@ -385,6 +755,7 @@
             updateResults(await response.json());
         } catch (_) {
             appendLog("Dashboard results endpoint unavailable.", "var(--danger)");
+            showToast("Evidence unavailable", "The latest scan results could not be loaded.", "danger");
         }
     }
 
@@ -400,7 +771,10 @@
         setupProxyControls();
         setupSettings();
         renderHistory();
+        setScanBusy(false);
         refreshResults();
+        loadTopology();
+        loadWorkspaceSettings();
     }
 
     window.AegisUX = {
@@ -410,10 +784,15 @@
         recordScanComplete,
         handleViewChange,
     };
+    window.AegisAPI = {
+        fetch: authenticatedFetch,
+        loadIdentity,
+    };
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);
     } else {
         init();
     }
+    loadIdentity().catch(() => {});
 })();

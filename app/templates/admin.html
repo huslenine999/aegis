@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Operations | Aegis</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;--bg:#090c0a;--panel:#121713;--line:#344037;--ink:#edf5ee;--muted:#a5b0a6;--accent:#c7ff3d;--danger:#ff736c}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}header{display:flex;justify-content:space-between;padding:1rem 1.5rem;border-bottom:1px solid var(--line)}a{color:var(--accent);text-decoration:none}main{max-width:1200px;margin:auto;padding:1.5rem}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel{border:1px solid var(--line);background:var(--panel);padding:1rem;border-radius:10px}.wide{grid-column:1/-1}.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}.spread{justify-content:space-between}input,select,button{font:inherit;padding:.6rem;border:1px solid var(--line);border-radius:5px;background:#080b09;color:var(--ink)}button{cursor:pointer}button.primary{background:var(--accent);color:#101408;font-weight:700}.item{padding:.7rem 0;border-top:1px solid var(--line)}.muted,small{color:var(--muted)}.status{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem}.metric{padding:.7rem;background:#090c0a;border-radius:6px}.metric strong{display:block;color:var(--accent)}pre{max-height:25rem;overflow:auto;white-space:pre-wrap;color:#bdc9be}#error{color:var(--danger)}#notice{color:var(--accent)}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.status{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header><a href="/">Aegis Operations</a><nav class="row"><a href="/projects">Projects</a><a href="/">Dashboard</a></nav></header>
+  <main>
+    <h1>Administration and operations</h1>
+    <p class="muted">Manage access, inspect health, and review security-sensitive activity.</p>
+    <p id="notice" role="status" aria-live="polite"></p><p id="error" role="alert"></p>
+    <div class="grid">
+      <section class="panel wide"><div class="row spread"><h2>Diagnostics</h2><button id="refresh">Refresh</button></div><div id="diagnostics" class="status"></div></section>
+      <section class="panel">
+        <h2>Users</h2>
+        <form id="user-form" class="row">
+          <input id="username" aria-label="New username" placeholder="username" required>
+          <input id="password" aria-label="Temporary password" type="password" placeholder="12+ character password" required>
+          <select id="role" aria-label="Role"><option>viewer</option><option>operator</option><option>admin</option></select>
+          <button class="primary">Create</button>
+        </form>
+        <div id="users"></div>
+      </section>
+      <section class="panel">
+        <h2>API tokens</h2>
+        <p class="muted">Tokens are displayed once when issued.</p>
+        <div id="tokens"></div>
+      </section>
+      <section class="panel wide"><h2>Audit events</h2><div id="audit"></div></section>
+      <section class="panel wide"><h2>Recent HTTP requests</h2><pre id="requests" tabindex="0" aria-label="Recent HTTP request log"></pre></section>
+    </div>
+  </main>
+  <script>
+    let csrf="";const el=(id)=>document.getElementById(id);const esc=(v)=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+    async function api(url,options={}){const headers=new Headers(options.headers||{});if(!["GET","HEAD","OPTIONS"].includes(String(options.method||"GET").toUpperCase()))headers.set("X-CSRF-Token",csrf);if(options.body)headers.set("Content-Type","application/json");const response=await fetch(url,{...options,headers,credentials:"same-origin"});if(response.status===401)location.assign("/login");return response}
+    function message(text,error=false){el(error?"error":"notice").textContent=text;if(!error)el("error").textContent=""}
+    async function load(){
+      const me=await(await api("/api/auth/me")).json();csrf=me.csrf_token||"";
+      const [diagnostics,users,tokens,audit,requests]=await Promise.all([
+        api("/api/admin/diagnostics").then(r=>r.json()),api("/api/users").then(r=>r.json()),api("/api/tokens").then(r=>r.json()),api("/api/admin/audit").then(r=>r.json()),api("/api/admin/requests").then(r=>r.json())
+      ]);
+      el("diagnostics").innerHTML=Object.entries(diagnostics).map(([key,value])=>`<div class="metric"><small>${esc(key)}</small><strong>${esc(value)}</strong></div>`).join("");
+      el("users").innerHTML=(users.users||[]).map(user=>`<div class="item row spread"><span>${esc(user.username)} <small>${esc(user.role)}</small></span><button data-token-user="${user.id}">Issue token</button></div>`).join("");
+      el("tokens").innerHTML=(tokens.tokens||[]).map(token=>`<div class="item row spread"><span>${esc(token.name)} <small>${esc(token.username)}</small></span><button data-revoke="${token.id}">Revoke</button></div>`).join("")||"<p>No active tokens.</p>";
+      el("audit").innerHTML=(audit.events||[]).map(event=>`<div class="item"><strong>${esc(event.action)}</strong> <small>${esc(event.resource_type)} ${esc(event.resource_id||"")} · ${esc(event.created_at)}</small></div>`).join("")||"<p>No audit events.</p>";
+      el("requests").textContent=(requests.requests||[]).map(item=>`${item.status} ${item.method} ${item.path} ${item.duration_ms}ms ${item.request_id}`).join("\\n");
+      document.querySelectorAll("[data-token-user]").forEach(button=>button.onclick=()=>issueToken(button.dataset.tokenUser));
+      document.querySelectorAll("[data-revoke]").forEach(button=>button.onclick=()=>revokeToken(button.dataset.revoke));
+    }
+    async function issueToken(userId){const name=prompt("Token name","automation");if(!name)return;const response=await api(`/api/users/${userId}/tokens`,{method:"POST",body:JSON.stringify({name})});const data=await response.json();if(!response.ok)return message(data.detail||"Token issue failed.",true);prompt("Copy this token now. It will not be shown again.",data.token);await load()}
+    async function revokeToken(id){if(!confirm("Revoke this API token?"))return;const response=await api(`/api/tokens/${id}`,{method:"DELETE"});if(!response.ok)return message("Token revocation failed.",true);message("Token revoked.");await load()}
+    el("user-form").onsubmit=async event=>{event.preventDefault();const response=await api("/api/users",{method:"POST",body:JSON.stringify({username:el("username").value,password:el("password").value,role:el("role").value})});const data=await response.json();if(!response.ok)return message(data.detail||"User creation failed.",true);event.target.reset();message("User created.");await load()};
+    el("refresh").onclick=load;load();
+  </script>
+</body>
+</html>

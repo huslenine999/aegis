@@ -5,7 +5,7 @@ import app.main as app_main
 @pytest.fixture
 def client():
     from app.database import initialize_database
-    initialize_database()
+    initialize_database(reset=True)
     app_main.WAF_ENABLED = False
     app_main.DEMO_LAB_ENABLED = True
     yield TestClient(app_main.app)

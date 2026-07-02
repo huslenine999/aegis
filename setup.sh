@@ -40,7 +40,15 @@ if [ $REDIS_RUNNING -eq 0 ]; then
     if command -v docker >/dev/null; then
         echo "🐳  Docker detected. Spawning redis container..."
         docker rm -f aegis-redis 2>/dev/null || true
-        docker run -d -p 6379:6379 --name aegis-redis redis:alpine
+        docker run -d \
+            -p 127.0.0.1:6379:6379 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:size=64m,mode=1777 \
+            -v aegis-redis-data:/data \
+            --name aegis-redis \
+            redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         echo "Waiting for Redis to start..."
         sleep 2
         REDIS_RUNNING=1
@@ -67,4 +75,4 @@ fi
 # 4. Run the application
 echo "[4/4] Setup complete! Starting Aegis..."
 echo "Access the dashboard at http://127.0.0.1:5001"
-exec venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 5001 --reload
+exec venv/bin/uvicorn app.main:app --host "${AEGIS_HOST:-127.0.0.1}" --port 5001 --reload

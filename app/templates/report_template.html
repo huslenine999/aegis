@@ -3,12 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Aegis - Automated Security Report">
-    <title>Aegis | Security Diagnostics</title>
-    <!-- Retro Monospace Fonts -->
+    <meta name="description" content="Aegis security assessment — deployment evidence, scanner findings, and remediation details.">
+    <meta name="theme-color" content="#0b0d0c">
+    <meta name="color-scheme" content="dark">
+    <title>Aegis | Security Assessment</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0d0c'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23c7ff3d' stroke-width='3'/%3E%3Cpath d='M18 32h28M32 18v28' stroke='%23c7ff3d' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23c7ff3d'/%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=Share+Tech+Mono&family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
             /* Retro Green Phosphor Theme */
@@ -800,24 +802,714 @@
                 animation: none !important;
             }
         }
+
+        /* Professional workbench-aligned report */
+        :root {
+            --bg-base: #0b0d0c;
+            --bg-surface: #111411;
+            --bg-console: #090b09;
+            --primary: #c7ff3d;
+            --primary-glow: rgba(199, 255, 61, 0.14);
+            --secondary: #ffb547;
+            --secondary-glow: rgba(255, 181, 71, 0.14);
+            --danger: #ff665e;
+            --danger-glow: rgba(255, 102, 94, 0.14);
+            --text-main: #f2f1e9;
+            --text-muted: #969d94;
+            --report-line: #292e29;
+            --report-line-strong: #3a423a;
+            --report-display: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+            --report-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+        }
+
+        html {
+            color-scheme: dark;
+            scroll-behavior: smooth;
+        }
+
+        body.report-page {
+            --bg-base: #0b0d0c;
+            --bg-surface: #111411;
+            --bg-console: #090b09;
+            --primary: #c7ff3d;
+            --primary-glow: rgba(199, 255, 61, 0.14);
+            --secondary: #ffb547;
+            --secondary-glow: rgba(255, 181, 71, 0.14);
+            --danger: #ff665e;
+            --danger-glow: rgba(255, 102, 94, 0.14);
+            --text-main: #f2f1e9;
+            --text-muted: #969d94;
+            background:
+                linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+                radial-gradient(circle at 78% 0%, rgba(199, 255, 61, 0.06), transparent 30rem),
+                var(--bg-base);
+            background-size: 48px 48px, 48px 48px, auto, auto;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            line-height: 1.55;
+        }
+
+        body.report-page::before,
+        body.report-page::after,
+        body.report-page #bg-canvas {
+            display: none;
+        }
+
+        .report-skip-link {
+            position: fixed;
+            z-index: 1000;
+            top: 10px;
+            left: 10px;
+            padding: 9px 12px;
+            border: 1px solid var(--primary);
+            border-radius: 7px;
+            background: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--report-mono);
+            font-size: 11px;
+            text-decoration: none;
+            transform: translateY(-160%);
+            transition: transform 160ms ease;
+        }
+
+        .report-skip-link:focus {
+            transform: translateY(0);
+        }
+
+        body.report-page .navbar {
+            min-height: 70px;
+            box-sizing: border-box;
+            padding: 0 max(24px, calc((100vw - 1280px) / 2));
+            border: 0;
+            border-bottom: 1px solid var(--report-line);
+            background: rgba(11, 13, 12, 0.9);
+            box-shadow: none;
+            backdrop-filter: blur(18px);
+        }
+
+        body.report-page .navbar-brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 11px;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            letter-spacing: 0;
+            text-decoration: none;
+            text-shadow: none;
+            text-transform: none;
+        }
+
+        .report-brand-mark {
+            position: relative;
+            display: grid;
+            width: 30px;
+            height: 30px;
+            place-items: center;
+            border: 1px solid var(--primary);
+            border-radius: 50%;
+        }
+
+        .report-brand-mark::before,
+        .report-brand-mark::after,
+        .report-brand-mark span {
+            content: "";
+            position: absolute;
+            background: var(--primary);
+        }
+
+        .report-brand-mark::before { width: 1px; height: 18px; }
+        .report-brand-mark::after { width: 18px; height: 1px; }
+        .report-brand-mark span { width: 5px; height: 5px; border-radius: 50%; }
+
+        .report-brand-copy {
+            display: grid;
+            gap: 2px;
+            line-height: 1;
+        }
+
+        .report-brand-copy strong {
+            font-size: 16px;
+            letter-spacing: -0.02em;
+        }
+
+        .report-brand-copy small {
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 8px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        body.report-page .navbar-controls {
+            gap: 10px;
+        }
+
+        .report-theme-control {
+            display: none;
+        }
+
+        body.report-page .timestamp {
+            padding-right: 12px;
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+
+        body.report-page .btn-toggle,
+        body.report-page .btn-back,
+        body.report-page .btn {
+            min-height: 38px;
+            box-sizing: border-box;
+            padding: 0 12px;
+            border: 1px solid var(--report-line-strong);
+            border-radius: 7px;
+            background: var(--bg-surface);
+            box-shadow: none;
+            color: var(--text-main);
+            font-family: var(--report-mono);
+            font-size: 9px;
+            font-weight: 500;
+            letter-spacing: 0;
+            text-shadow: none;
+            text-transform: none;
+        }
+
+        body.report-page .btn-toggle:hover,
+        body.report-page .btn-back:hover,
+        body.report-page .btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-surface);
+            box-shadow: none;
+            color: var(--primary);
+            transform: translateY(-1px);
+        }
+
+        body.report-page .btn:focus-visible,
+        body.report-page .btn-back:focus-visible,
+        body.report-page .btn-toggle:focus-visible,
+        body.report-page a:focus-visible,
+        body.report-page button:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 3px;
+        }
+
+        body.report-page .container {
+            width: min(100% - 48px, 1180px);
+            max-width: none;
+            box-sizing: border-box;
+            margin: 0 auto;
+            padding: 0 0 72px;
+        }
+
+        .report-heading {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 40px;
+            align-items: end;
+            min-height: 250px;
+            padding: 46px 0 36px;
+            border-bottom: 1px solid var(--report-line);
+        }
+
+        .report-kicker {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 9px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .report-kicker span {
+            width: 7px;
+            height: 7px;
+            background: var(--primary);
+            transform: rotate(45deg);
+        }
+
+        .report-heading h1 {
+            margin: 16px 0 10px;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            font-size: clamp(46px, 6vw, 76px);
+            font-weight: 500;
+            letter-spacing: -0.055em;
+            line-height: 0.95;
+            text-transform: none;
+        }
+
+        .report-heading p {
+            max-width: 700px;
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        .report-heading-actions {
+            display: flex;
+            gap: 8px;
+            padding-bottom: 3px;
+        }
+
+        body.report-page .decision-banner {
+            min-height: 220px;
+            box-sizing: border-box;
+            margin: 24px 0 12px;
+            padding: 30px;
+            overflow: hidden;
+            border: 1px solid var(--report-line);
+            border-radius: 12px;
+            background: linear-gradient(145deg, #171a17, var(--bg-surface));
+            box-shadow: none;
+            animation: none;
+        }
+
+        body.report-page .decision-banner::before {
+            width: 140px;
+            height: 140px;
+            top: auto;
+            right: -70px;
+            bottom: -70px;
+            left: auto;
+            border: 1px solid var(--report-line-strong);
+            transform: rotate(45deg);
+        }
+
+        body.report-page .decision-banner::after {
+            display: none;
+        }
+
+        body.report-page .decision-banner.status-passed {
+            border-color: rgba(199, 255, 61, 0.3);
+            background: linear-gradient(145deg, rgba(199, 255, 61, 0.07), var(--bg-surface));
+        }
+
+        body.report-page .decision-banner.status-blocked {
+            border-color: rgba(255, 102, 94, 0.35);
+            background: linear-gradient(145deg, rgba(255, 102, 94, 0.08), var(--bg-surface));
+        }
+
+        body.report-page .decision-title {
+            margin: 0;
+            color: var(--primary);
+            font-family: var(--report-display);
+            font-size: clamp(42px, 6vw, 72px);
+            font-weight: 500;
+            letter-spacing: -0.05em;
+            line-height: 0.95;
+            text-shadow: none;
+            text-transform: none;
+        }
+
+        body.report-page .decision-banner.status-blocked .decision-title {
+            color: var(--danger);
+            text-shadow: none;
+        }
+
+        body.report-page .decision-reason {
+            max-width: 800px;
+            margin-top: 18px;
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 10px;
+            line-height: 1.7;
+            text-transform: none;
+        }
+
+        body.report-page .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: 0;
+            margin: 12px 0 24px;
+            overflow: hidden;
+            border: 1px solid var(--report-line);
+            border-radius: 12px;
+            background: var(--bg-surface);
+        }
+
+        body.report-page .metric-card {
+            min-height: 124px;
+            box-sizing: border-box;
+            padding: 18px;
+            border: 0 !important;
+            border-right: 1px solid var(--report-line) !important;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none !important;
+            text-align: left;
+        }
+
+        body.report-page .metric-card:last-child {
+            border-right: 0 !important;
+        }
+
+        body.report-page .metric-card::before,
+        body.report-page .metric-card::after {
+            display: none;
+        }
+
+        body.report-page .metric-card:hover {
+            background: rgba(255, 255, 255, 0.015);
+            box-shadow: none;
+        }
+
+        body.report-page .metric-value {
+            margin: 12px 0 0;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            font-size: 36px;
+            font-weight: 500;
+            letter-spacing: -0.05em;
+            line-height: 1;
+            text-shadow: none;
+        }
+
+        body.report-page .metric-label {
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 8px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        body.report-page .terminal-panel,
+        body.report-page .tool-panel {
+            margin-bottom: 12px;
+            overflow: hidden;
+            border: 1px solid var(--report-line);
+            border-radius: 12px;
+            background: linear-gradient(145deg, #171a17, var(--bg-surface));
+            box-shadow: none;
+            backdrop-filter: none;
+        }
+
+        body.report-page .terminal-panel::before,
+        body.report-page .terminal-panel::after,
+        body.report-page .tool-panel::before,
+        body.report-page .tool-panel::after {
+            display: none;
+        }
+
+        body.report-page .terminal-panel:hover,
+        body.report-page .tool-panel:hover {
+            border-color: var(--report-line-strong);
+            box-shadow: none;
+        }
+
+        body.report-page .tool-header {
+            min-height: 58px;
+            box-sizing: border-box;
+            padding: 0 18px;
+            border-bottom: 1px solid var(--report-line) !important;
+            background: rgba(9, 11, 9, 0.35);
+        }
+
+        body.report-page .tool-name {
+            color: var(--text-main) !important;
+            font-family: var(--report-display);
+            font-size: 16px;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+            text-shadow: none;
+            text-transform: none;
+        }
+
+        body.report-page .tool-status {
+            padding: 4px 7px;
+            border: 1px solid rgba(199, 255, 61, 0.25);
+            border-radius: 4px;
+            background: rgba(199, 255, 61, 0.08);
+            color: var(--primary);
+            font-family: var(--report-mono);
+            font-size: 8px;
+        }
+
+        body.report-page .tool-status.status-fail {
+            border-color: rgba(255, 102, 94, 0.3);
+            background: rgba(255, 102, 94, 0.08);
+            color: var(--danger);
+        }
+
+        body.report-page .section-title {
+            margin: 44px 0 16px;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            font-size: 28px;
+            font-weight: 500;
+            letter-spacing: -0.035em;
+            text-shadow: none;
+            text-transform: none;
+        }
+
+        body.report-page .section-title::after {
+            background: var(--report-line);
+        }
+
+        body.report-page .findings-list {
+            gap: 8px;
+            padding: 12px;
+        }
+
+        body.report-page .finding-item {
+            padding: 16px 16px 16px 20px;
+            border: 1px solid var(--report-line);
+            border-radius: 7px;
+            background: rgba(7, 9, 7, 0.6);
+        }
+
+        body.report-page .finding-item::before {
+            width: 2px;
+            background: var(--primary);
+        }
+
+        body.report-page .finding-item.severity-high::before { background: var(--danger); }
+        body.report-page .finding-item.severity-medium::before { background: var(--secondary); }
+
+        body.report-page .finding-meta {
+            gap: 9px;
+        }
+
+        body.report-page .severity-badge {
+            padding: 3px 6px;
+            border: 0;
+            border-radius: 4px;
+            background: rgba(199, 255, 61, 0.1);
+            color: var(--primary);
+            font-family: var(--report-mono);
+            font-size: 8px;
+        }
+
+        body.report-page .severity-badge.badge-high {
+            background: rgba(255, 102, 94, 0.12);
+            color: var(--danger);
+        }
+
+        body.report-page .severity-badge.badge-medium {
+            background: rgba(255, 181, 71, 0.12);
+            color: var(--secondary);
+        }
+
+        body.report-page .finding-title {
+            color: var(--text-main);
+            font-family: var(--report-display);
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        body.report-page .finding-desc {
+            color: var(--text-muted);
+            font-family: var(--report-display) !important;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        body.report-page .finding-location {
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 9px;
+        }
+
+        body.report-page .explainer-box {
+            border: 1px solid rgba(255, 181, 71, 0.22) !important;
+            border-radius: 8px;
+            background: rgba(255, 181, 71, 0.04) !important;
+            box-shadow: none;
+            color: var(--text-muted);
+            animation: none;
+        }
+
+        body.report-page footer {
+            margin: 0;
+            padding: 28px;
+            border-top: 1px solid var(--report-line);
+            background: var(--bg-base);
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 9px;
+        }
+
+        @media (max-width: 900px) {
+            body.report-page .navbar {
+                min-height: 64px;
+                padding: 12px 18px;
+                flex-direction: row;
+                text-align: left;
+            }
+
+            body.report-page .navbar-controls {
+                width: auto;
+                margin-left: auto;
+                justify-content: flex-end;
+            }
+
+            body.report-page .timestamp,
+            body.report-page #explainToggleBtn,
+            body.report-page #langToggleBtn {
+                display: none;
+            }
+
+            .report-heading {
+                grid-template-columns: 1fr;
+                min-height: 0;
+                padding: 52px 0 34px;
+            }
+
+            .report-heading-actions {
+                flex-wrap: wrap;
+            }
+
+            body.report-page .metrics-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+
+            body.report-page .metric-card:nth-child(2) {
+                border-right: 0 !important;
+            }
+
+            body.report-page .metric-card:nth-child(-n+2) {
+                border-bottom: 1px solid var(--report-line) !important;
+            }
+        }
+
+        @media (max-width: 560px) {
+            body.report-page .container {
+                width: min(100% - 24px, 1180px);
+            }
+
+            .report-brand-copy small {
+                display: none;
+            }
+
+            body.report-page .btn-back {
+                min-height: 44px;
+                padding-inline: 9px;
+                font-size: 0;
+            }
+
+            body.report-page .btn-back svg {
+                width: 17px;
+                height: 17px;
+            }
+
+            .report-heading h1 {
+                font-size: 46px;
+            }
+
+            .report-heading-actions,
+            .report-heading-actions .btn {
+                width: 100%;
+            }
+
+            body.report-page .report-heading-actions .btn {
+                min-height: 44px;
+            }
+
+            body.report-page .decision-banner {
+                min-height: 250px;
+                padding: 22px;
+            }
+
+            body.report-page .decision-title {
+                font-size: 44px;
+            }
+
+            body.report-page .metrics-grid {
+                grid-template-columns: 1fr !important;
+            }
+
+            body.report-page .metric-card {
+                border-right: 0 !important;
+                border-bottom: 1px solid var(--report-line) !important;
+            }
+
+            body.report-page .metric-card:last-child {
+                border-bottom: 0 !important;
+            }
+
+            body.report-page .tool-header {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 8px;
+                padding: 14px;
+            }
+        }
+
+        @media print {
+            :root {
+                color-scheme: light;
+            }
+
+            body.report-page {
+                background: #fff;
+                color: #111;
+            }
+
+            body.report-page .navbar,
+            .report-heading-actions,
+            #uploadPanel,
+            body.report-page footer,
+            .report-skip-link {
+                display: none !important;
+            }
+
+            body.report-page .container {
+                width: 100%;
+                padding: 0;
+            }
+
+            .report-heading {
+                min-height: 0;
+                padding: 0 0 24px;
+                border-color: #bbb;
+            }
+
+            .report-heading h1,
+            body.report-page .decision-title,
+            body.report-page .section-title,
+            body.report-page .tool-name,
+            body.report-page .finding-title,
+            body.report-page .metric-value {
+                color: #111 !important;
+            }
+
+            .report-heading p,
+            body.report-page .decision-reason,
+            body.report-page .finding-desc,
+            body.report-page .finding-location,
+            body.report-page .metric-label {
+                color: #444 !important;
+            }
+
+            body.report-page .decision-banner,
+            body.report-page .metrics-grid,
+            body.report-page .terminal-panel,
+            body.report-page .tool-panel,
+            body.report-page .finding-item {
+                break-inside: avoid;
+                border-color: #bbb !important;
+                background: #fff !important;
+                box-shadow: none !important;
+            }
+        }
     </style>
-    <!-- Vercel Web Analytics -->
-    <script>
-      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-    </script>
-    <script defer src="https://cdn.vercel-insights.com/v1/script.js"></script>
 </head>
-<body class="crt-glow">
+<body class="report-page">
+    <a class="report-skip-link" href="#report-content">Skip to report content</a>
     <canvas id="bg-canvas"></canvas>
 
-    <nav class="navbar">
-        <div class="navbar-brand" data-i18n="brand">
-            [&nbsp;AEGIS_DIAGNOSTICS_REPORT&nbsp;]
-        </div>
+    <nav class="navbar" aria-label="Report navigation">
+        <a class="navbar-brand" href="/" aria-label="Aegis workbench">
+            <span class="report-brand-mark" aria-hidden="true"><span></span></span>
+            <span class="report-brand-copy"><strong>Aegis</strong><small>Security evidence</small></span>
+        </a>
         <div class="navbar-controls">
             <button id="explainToggleBtn" class="btn-toggle">[ EXPLAIN: OFF ]</button>
             <button id="langToggleBtn" class="btn-toggle">[ LANG: EN ]</button>
-            <select id="themeSelect" class="cyber-input mono" style="width: auto; padding: 0.35rem 0.5rem; font-size: 0.85rem; height: 32px; border-color: var(--primary); background: rgba(6, 15, 8, 0.85); color: var(--primary);">
+            <select id="themeSelect" class="cyber-input mono report-theme-control" aria-label="Report theme">
                 <option value="green">THEME: PHOSPHOR GREEN</option>
                 <option value="amber">THEME: AMBER MONO</option>
                 <option value="grey">THEME: CLASSIC GREY</option>
@@ -826,21 +1518,33 @@
             <div class="timestamp">
                 <span data-i18n="compiled_on">> COMPILED_ON:</span> {{ timestamp }}
             </div>
-            <a href="/" class="btn-back" data-i18n="return_btn">
+            <a href="/" class="btn-back">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M19 12H5M12 19l-7-7 7-7"/>
                 </svg>
-                RETURN_TO_BASE
+                Back to workbench
             </a>
         </div>
     </nav>
 
-    <div class="container">
+    <main id="report-content" class="container" tabindex="-1">
+        <header class="report-heading">
+            <div>
+                <div class="report-kicker"><span></span> Evidence package / Local workspace</div>
+                <h1>Security assessment</h1>
+                <p>Deployment decision, scanner evidence, and remediation detail compiled into one reviewable artifact.</p>
+            </div>
+            <div class="report-heading-actions">
+                <button id="printReportBtn" class="btn report-print-btn" type="button">Print / Save PDF</button>
+                <a href="/export-dossier" class="btn">Download dossier</a>
+            </div>
+        </header>
+
         <!-- Decision Banner -->
         <div class="decision-banner {% if final_status == 'BLOCKED' %}status-blocked{% else %}status-passed{% endif %} reveal">
             <div class="decision-content">
                 <h1 class="decision-title" id="decisionTitle" data-status="{{ final_status }}">
-                    {% if final_status == 'BLOCKED' %}DEPLOYMENT_BLOCKED{% else %}DEPLOYMENT_PASSED{% endif %}
+                    {% if final_status == 'BLOCKED' %}Deployment blocked{% else %}Deployment passed{% endif %}
                 </h1>
                 <p class="decision-reason">
                     <span data-i18n="gate_status">> CRITICAL_GATE_STATUS:</span> 
@@ -906,7 +1610,7 @@
         <!-- Upload Python Script Card -->
         <div class="terminal-panel reveal" id="uploadPanel" style="display: flex; flex-direction: column; margin-bottom: 3rem;">
             <div class="tool-header">
-                <div class="tool-name" data-i18n="upload_panel_title">> UPLOAD PYTHON SCRIPT FOR AUDIT</div>
+                <div class="tool-name" data-i18n="upload_panel_title">Upload Python script for audit</div>
                 <div class="tool-status" data-i18n="upload_panel_status">READY</div>
             </div>
             <div style="padding: 1.5rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; background: var(--bg-surface);">
@@ -929,7 +1633,7 @@
         <!-- SBOM Compliance Card -->
         <div class="terminal-panel reveal" id="sbomPanel" style="display: flex; flex-direction: column; margin-bottom: 3rem;">
             <div class="tool-header" style="border-bottom-color: var(--secondary);">
-                <div class="tool-name" style="color: var(--secondary);" data-i18n="sbom_panel_title">> SOFTWARE BILL OF MATERIALS (SBOM)</div>
+                <div class="tool-name" style="color: var(--secondary);" data-i18n="sbom_panel_title">Software bill of materials (SBOM)</div>
                 <div class="tool-status" style="border-color: var(--secondary); color: var(--secondary);" data-i18n="sbom_panel_status">CYCLONEDX_1.5</div>
             </div>
             <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; background: var(--bg-surface);">
@@ -949,7 +1653,7 @@
             </div>
         </div>
 
-        <h2 class="section-title reveal mono" data-i18n="detailed_logs">> DETAILED_ANALYSIS_LOGS</h2>
+        <h2 class="section-title reveal mono" data-i18n="detailed_logs">Scanner evidence</h2>
 
         <!-- Loop through tool results -->
         {% for result in results %}
@@ -957,7 +1661,7 @@
             <div class="tool-header">
                 <div class="tool-name">{{ result.tool }}</div>
                 <div class="tool-status {% if result.status == 'FAIL' %}status-fail{% endif %}" data-tool-status="{{ result.status }}">
-                    STATUS_{{ result.status }}
+                    {{ result.status }}
                 </div>
             </div>
             <div class="findings-list">
@@ -1078,11 +1782,11 @@
             </div>
         </div>
         {% endfor %}
-    </div>
+    </main>
 
     <footer>
         <div class="mono" style="margin-bottom: 0.5rem; color: var(--primary);" data-i18n="footer_brand">AEGIS DIAGNOSTICS CONTROL PLANE</div>
-        <div data-i18n="footer_text">v2.1.0-tactical &bull; 2026 &bull; AUTOMATED SECDEVOPS COMPLIANCE REPORT</div>
+        <div data-i18n="footer_text">v2.2.0-tactical &bull; 2026 &bull; AUTOMATED SECDEVOPS COMPLIANCE REPORT</div>
     </footer>
 
     <!-- Animated Retro Scanning Grid Canvas -->
@@ -1234,17 +1938,17 @@
         const i18n = {
             en: {
                 brand: "[ AEGIS_DIAGNOSTICS_REPORT ]",
-                compiled_on: "> COMPILED_ON:",
+                compiled_on: "Compiled:",
                 return_btn: "RETURN_TO_BASE",
-                gate_status: "> CRITICAL_GATE_STATUS:",
+                gate_status: "Decision rationale:",
                 metrics_modules: "Security Modules Run",
                 metrics_vulns: "Total Vulnerabilities",
                 metrics_blocking: "Blocking Issues",
                 metrics_exploitability: "Exploitability Score",
-                detailed_logs: "> DETAILED_ANALYSIS_LOGS",
-                no_issues: "No issues detected by this scanner daemon.",
-                footer_brand: "AEGIS DIAGNOSTICS CONTROL PLANE",
-                footer_text: "v2.1.0-tactical • 2026 • AUTOMATED SECDEVOPS COMPLIANCE REPORT",
+                detailed_logs: "Scanner evidence",
+                no_issues: "No issues detected by this scanner.",
+                footer_brand: "AEGIS SECURITY EVIDENCE",
+                footer_text: "v2.2.0 • 2026 • AUTOMATED DEVSECOPS ASSESSMENT",
                 
                 // Severity levels
                 high: "HIGH",
@@ -1253,8 +1957,8 @@
                 low: "LOW",
                 
                 // Status mapping
-                blocked: "DEPLOYMENT_BLOCKED",
-                passed: "DEPLOYMENT_PASSED",
+                blocked: "Deployment blocked",
+                passed: "Deployment passed",
                 
                 // Reasons mapping
                 reason_blocked: "Blocking security issues found by: Bandit",
@@ -1310,12 +2014,12 @@
                 target_route_label: "> TARGET_ROUTE:",
                 exp_report_clamav_desc: "⚠️ Active virus or malware signature detected in codebase. Remove the infected code or test file before staging.",
                 exp_report_zap_desc: "⚠️ Active endpoint vulnerability: ZAP crawler successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.",
-                sbom_panel_title: "> SOFTWARE BILL OF MATERIALS (SBOM)",
+                sbom_panel_title: "Software bill of materials (SBOM)",
                 sbom_panel_status: "CYCLONEDX_1.5",
                 sbom_panel_desc: "A Software Bill of Materials (SBOM) has been generated in CycloneDX v1.5 JSON format, mapping the full dependency inventory of third-party libraries used by this application.",
 
                 // Report upload titles
-                upload_panel_title: "> UPLOAD PYTHON SCRIPT FOR AUDIT",
+                upload_panel_title: "Upload Python script for audit",
                 upload_panel_status: "READY",
                 upload_panel_desc: "Select a local Python (.py) script file to run a security audit scan on it.",
                 upload_btn_report: "UPLOAD AND RUN AUDIT",
@@ -1334,7 +2038,7 @@
                 detailed_logs: "> 상세_분석_로그",
                 no_issues: "탐지된 보안 취약점이 없습니다.",
                 footer_brand: "이지스 보안 진단 제어 평면",
-                footer_text: "v2.1.0-tactical • 2026 • 자동화된 SECDEVOPS 컴플라이언스 보고서",
+                footer_text: "v2.2.0-tactical • 2026 • 자동화된 SECDEVOPS 컴플라이언스 보고서",
                 
                 // Severity levels
                 high: "높음(HIGH)",
@@ -1343,8 +2047,8 @@
                 low: "낮음(LOW)",
                 
                 // Status mapping
-                blocked: "배포_차단됨",
-                passed: "배포_승인됨",
+                blocked: "배포 차단됨",
+                passed: "배포 승인됨",
                 
                 // Reasons mapping
                 reason_blocked: "차단 보안 결함 발견됨: Bandit",
@@ -1400,12 +2104,12 @@
                 target_route_label: "> 대상_경로:",
                 exp_report_clamav_desc: "⚠️ 코드베이스에서 활성 바이러스 또는 악성코드 서명이 발견되었습니다. 배포하기 전에 감염된 코드나 테스트 파일을 제거해야 합니다.",
                 exp_report_zap_desc: "⚠️ 활성 엔드포인트 취약점: ZAP 크롤러가 성공적으로 방어를 우회하고 페이로드 실행 결과를 반사시켰습니다. 공격 벡터를 차단하려면 웹 애플리케이션 방화벽(WAF)을 활성화하십시오.",
-                sbom_panel_title: "> 소프트웨어 구성품 명세서 (SBOM)",
+                sbom_panel_title: "소프트웨어 구성품 명세서 (SBOM)",
                 sbom_panel_status: "CYCLONEDX_1.5 규격",
                 sbom_panel_desc: "이 애플리케이션에서 사용하는 모든 외부 라이브러리 종속성 정보를 CycloneDX v1.5 JSON 형식의 SBOM으로 생성했습니다.",
 
                 // Report upload titles
-                upload_panel_title: "> 보안 감사를 위한 파이썬 스크립트 업로드",
+                upload_panel_title: "보안 감사를 위한 파이썬 스크립트 업로드",
                 upload_panel_status: "준비 완료",
                 upload_panel_desc: "보안 감사 검사를 실행할 로컬 파이썬 (.py) 스크립트 파일을 선택해 주세요.",
                 upload_btn_report: "업로드 및 감사 실행",
@@ -1491,11 +2195,14 @@
             // Translate Status tags
             document.querySelectorAll('[data-tool-status]').forEach(el => {
                 const status = el.getAttribute('data-tool-status');
-                if (status === 'FAIL') {
-                    el.innerText = lang === 'ko' ? '상태_실패' : 'STATUS_FAIL';
-                } else {
-                    el.innerText = lang === 'ko' ? '상태_통과' : 'STATUS_PASS';
-                }
+                const labels = {
+                    FAIL: lang === 'ko' ? '실패' : 'Fail',
+                    ERROR: lang === 'ko' ? '오류' : 'Error',
+                    SKIPPED: lang === 'ko' ? '건너뜀' : 'Skipped',
+                    MISSING: lang === 'ko' ? '누락' : 'Missing',
+                    PASS: lang === 'ko' ? '통과' : 'Pass'
+                };
+                el.innerText = labels[status] || status;
             });
 
             // Translate Severity Badges
@@ -1618,6 +2325,12 @@
         setExplainMode(explainEnabled);
         setTheme(currentTheme);
         setTimeout(() => setTheme(currentTheme), 100);
+    </script>
+    <script>
+        document.getElementById('printReportBtn')?.addEventListener('click', () => window.print());
+        document.querySelector('.report-skip-link')?.addEventListener('click', () => {
+            window.setTimeout(() => document.getElementById('report-content')?.focus(), 0);
+        });
     </script>
 </body>
 </html>

@@ -1,0 +1,112 @@
+name: Release Build
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Verify and Build Release Artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install release dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+          python -m pip check
+
+      - name: Verify tag and package versions
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - "$RELEASE_TAG" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import tomllib
+
+          tag_version = sys.argv[1].removeprefix("v")
+          python_version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          npm_version = json.loads(pathlib.Path("package.json").read_text())["version"]
+          if tag_version != python_version or tag_version != npm_version:
+              raise SystemExit(
+                  f"Version mismatch: tag={tag_version}, python={python_version}, npm={npm_version}"
+              )
+          PY
+
+      - name: Run release tests
+        run: |
+          python -m compileall -q app policy_engine.py tests
+          pytest -q --timeout=60 --timeout-method=thread
+
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+
+      - name: Validate wheel contents
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib
+          import zipfile
+
+          wheel = next(pathlib.Path("dist").glob("*.whl"))
+          required = {
+              "app/cli.py",
+              "app/templates/index.html",
+              "app/templates/report_template.html",
+              "app/static/enhanced-dashboard.css",
+              "app/static/enhanced-dashboard.js",
+              "policy_engine.py",
+              "rules/semgrep_rules.yaml",
+          }
+          with zipfile.ZipFile(wheel) as archive:
+              missing = required - set(archive.namelist())
+          if missing:
+              raise SystemExit(f"Wheel is missing required files: {sorted(missing)}")
+          PY
+
+      - name: Upload release wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aegis-${{ github.ref_name }}-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish versioned container image
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$IMAGE:$VERSION" \
+            -t "$IMAGE:latest" .
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"

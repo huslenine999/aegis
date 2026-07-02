@@ -10,10 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from jinja2 import Template
+from jinja2 import Environment, select_autoescape
 
-# Use SCANS_DIR from environment if provided (useful for Vercel /tmp)
-SCAN_DIR = Path(os.environ.get("SCANS_DIR", "scans"))
+# Use an explicit scanner directory when provided. Otherwise keep reports in
+# the persistent Aegis data directory used by the dashboard and worker.
+_data_dir = os.environ.get("AEGIS_DATA_DIR")
+_default_scan_dir = Path(_data_dir) / "scans" if _data_dir else Path("scans")
+SCAN_DIR = Path(os.environ.get("SCANS_DIR", _default_scan_dir))
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = SCRIPT_DIR / "app" / "templates" / "report_template.html"
@@ -746,7 +749,10 @@ def generate_reports(
     
     # Generate HTML Report
     if TEMPLATE_PATH.exists():
-        template = Template(TEMPLATE_PATH.read_text())
+        environment = Environment(
+            autoescape=select_autoescape(default_for_string=True),
+        )
+        template = environment.from_string(TEMPLATE_PATH.read_text())
         html_content = template.render(
             results=results,
             final_status=final_status,

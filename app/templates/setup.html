@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Set up Aegis</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color-scheme: dark; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #060a07; color: #e8f5e9; }
+    main { width: min(34rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
+    h1 { margin-top: 0; color: #3dfb57; }
+    .steps { color: #aab8ab; }
+    label, input, select, button { display: block; width: 100%; box-sizing: border-box; }
+    label { margin: 1rem 0 .35rem; font-weight: 600; }
+    input, select { padding: .75rem; border: 1px solid #687a6b; background: #050805; color: inherit; }
+    small { display: block; margin-top: .3rem; color: #aab8ab; }
+    button { margin-top: 1.5rem; padding: .85rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    #error { min-height: 1.5rem; color: #ff7b75; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="steps">First-run setup · one step</p>
+    <h1>Configure Aegis</h1>
+    <p>Claim the administrator account and choose the initial workspace defaults.</p>
+    <form id="setup-form">
+      <label for="workspace-name">Workspace name</label>
+      <input id="workspace-name" value="My security workspace" maxlength="128" required autofocus>
+
+      <label for="repository">Repository URL or path</label>
+      <input id="repository" placeholder="https://github.com/organization/project">
+      <small>This is stored as the workspace’s default scan target reference.</small>
+
+      <label for="scan-preset">Default scan depth</label>
+      <select id="scan-preset">
+        <option value="quick">Quick — local checks</option>
+        <option value="standard" selected>Standard — recommended</option>
+        <option value="deep">Deep — all available scanners</option>
+      </select>
+
+      <label for="username">Administrator username</label>
+      <input id="username" value="admin" autocomplete="username" minlength="3" maxlength="128" required>
+
+      <label for="password">Administrator password</label>
+      <input id="password" type="password" autocomplete="new-password" minlength="12" required>
+
+      <label for="confirm-password">Confirm password</label>
+      <input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required>
+
+      <button id="submit" type="submit">Finish setup</button>
+      <p id="error" role="alert" aria-live="polite"></p>
+    </form>
+  </main>
+  <script>
+    const token = window.location.hash.slice(1);
+    history.replaceState(null, "", "/setup");
+    const form = document.getElementById("setup-form");
+    const error = document.getElementById("error");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      const password = document.getElementById("password").value;
+      if (password !== document.getElementById("confirm-password").value) {
+        error.textContent = "Passwords do not match.";
+        return;
+      }
+      const button = document.getElementById("submit");
+      button.disabled = true;
+      const response = await fetch("/api/setup", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Aegis-Setup-Token": token
+        },
+        body: JSON.stringify({
+          workspace_name: document.getElementById("workspace-name").value,
+          repository: document.getElementById("repository").value,
+          scan_preset: document.getElementById("scan-preset").value,
+          username: document.getElementById("username").value,
+          password
+        })
+      });
+      if (response.ok) {
+        window.location.replace("/");
+        return;
+      }
+      const payload = await response.json().catch(() => ({}));
+      error.textContent = payload.detail || "Setup failed.";
+      button.disabled = false;
+    });
+    if (!token) error.textContent = "Open the complete setup link printed by `aegis start`.";
+  </script>
+</body>
+</html>

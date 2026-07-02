@@ -1,6 +1,8 @@
+import json
 import subprocess
 import os
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -23,6 +25,29 @@ def test_action_exposes_stable_production_outputs():
 
     assert action["inputs"]["strict"]["default"] == "true"
     assert set(action["outputs"]) >= {"decision", "summary-json", "exit-code"}
+
+
+def test_release_package_versions_match():
+    python_version = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text()
+    )["project"]["version"]
+    npm_version = json.loads(
+        (PROJECT_ROOT / "package.json").read_text()
+    )["version"]
+
+    assert python_version == npm_version
+
+
+def test_npm_manifest_excludes_runtime_state():
+    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+
+    assert "app/" not in package["files"]
+    assert set(package["files"]) >= {
+        "app/*.py",
+        "app/downloads/",
+        "app/static/",
+        "app/templates/",
+    }
 
 
 def test_all_external_actions_use_immutable_commit_shas():

@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Aegis - Retro Tactical DevSecOps Control Center">
-    <title>Aegis | Secure Console</title>
-    <!-- Retro Monospace Fonts -->
+    <meta name="description" content="Aegis — a focused security workbench for scanning, triage, and deployment decisions.">
+    <meta name="theme-color" content="#0b0d0c">
+    <meta name="color-scheme" content="dark">
+    <title>Aegis | Security Workbench</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0d0c'/%3E%3Ccircle cx='32' cy='32' r='22' fill='none' stroke='%23c7ff3d' stroke-width='3'/%3E%3Cpath d='M18 32h28M32 18v28' stroke='%23c7ff3d' stroke-width='3'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23c7ff3d'/%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enhanced-dashboard.css">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=Share+Tech+Mono&family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
             /* Retro Green Phosphor Theme (Dark) */
@@ -869,43 +870,121 @@
             }
         }
     </style>
-    <!-- Vercel Web Analytics -->
-    <script>
-      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-    </script>
-    <script defer src="https://cdn.vercel-insights.com/v1/script.js"></script>
+    <link rel="stylesheet" href="/static/enhanced-dashboard.css?v=2.5.2">
 </head>
-<body class="crt-glow">
+<body class="view-simple">
+    <a class="skip-link" href="#workbench-main">Skip to workbench content</a>
     <canvas id="bg-canvas"></canvas>
 
-    <nav class="navbar">
-        <div class="navbar-brand" data-i18n="brand">
-            [&nbsp;AEGIS_SECURE_CONSOLE_v2.0&nbsp;]
-        </div>
+    <nav class="navbar" aria-label="Global navigation">
+        <a class="navbar-brand" href="/" aria-label="Aegis dashboard">
+            <span class="brand-mark" aria-hidden="true"><span></span></span>
+            <span class="brand-copy">
+                <strong>Aegis</strong>
+                <small>Security workbench</small>
+            </span>
+        </a>
         <div class="navbar-controls">
-            <button id="explainToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ EXPLAIN: OFF ]</button>
-            <button id="langToggleBtn" class="btn btn-secondary mono" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">[ LANG: EN ]</button>
-            <select id="themeSelect" class="cyber-input mono" style="width: auto; padding: 0.35rem 0.5rem; font-size: 0.85rem; height: 32px; border-color: var(--primary); background: rgba(6, 15, 8, 0.85); color: var(--primary);">
+            <div class="tactical-only-controls">
+                <button id="explainToggleBtn" class="btn btn-secondary mono" type="button">[ EXPLAIN: OFF ]</button>
+                <button id="langToggleBtn" class="btn btn-secondary mono" type="button">[ LANG: EN ]</button>
+                <select id="themeSelect" class="cyber-input mono" aria-label="Tactical theme">
                 <option value="green">THEME: PHOSPHOR GREEN</option>
                 <option value="amber">THEME: AMBER MONO</option>
                 <option value="grey">THEME: CLASSIC GREY</option>
                 <option value="matrix">THEME: MATRIX DIGITAL RAIN</option>
+                </select>
+            </div>
+            <a href="/health" class="system-health"><span aria-hidden="true"></span> Systems nominal</a>
+            <select id="viewSelect" class="view-select" aria-label="Interface mode">
+                <option value="simple">Workbench</option>
+                <option value="tactical">Threat lab</option>
             </select>
-            <select id="viewSelect" class="cyber-input mono" style="width: auto; padding: 0.35rem 0.5rem; font-size: 0.85rem; height: 32px; border-color: var(--primary); background: rgba(6, 15, 8, 0.85); color: var(--primary);">
-                <option value="simple">VIEW: SIMPLE</option>
-                <option value="tactical">VIEW: TACTICAL</option>
-            </select>
-            <a href="/health" class="link mono" style="color: var(--primary); font-size: 0.9rem; margin-left: 0.5rem;">> TTY_HEALTH_DAEMON</a>
         </div>
     </nav>
 
     <div class="container">
-        <section id="modern-dashboard" class="modern-dashboard" aria-label="Aegis dashboard">
-            <div class="modern-hero">
+        <section id="modern-dashboard" class="modern-dashboard" data-active-panel="overview" aria-label="Aegis dashboard">
+            <aside class="workbench-sidebar" aria-label="Workbench navigation">
+                <a class="sidebar-brand" href="/" aria-label="Aegis workbench home">
+                    <span class="brand-mark" aria-hidden="true"><span></span></span>
+                    <span class="brand-copy">
+                        <strong>Aegis</strong>
+                        <small>Security workbench</small>
+                    </span>
+                </a>
+
+                <a class="sidebar-project" href="/projects" aria-label="Open projects">
+                    <span class="project-monogram" aria-hidden="true">AE</span>
+                    <span>
+                        <strong id="uxWorkspaceName">Aegis Core</strong>
+                        <small id="uxWorkspaceContext">Local environment</small>
+                    </span>
+                    <span class="project-chevron" aria-hidden="true">⌄</span>
+                </a>
+
+                <div class="sidebar-label">Workspace</div>
+                <div class="modern-tabs" role="tablist" aria-label="Dashboard sections">
+                    <button class="modern-tab active" id="uxTabOverview" type="button" role="tab" data-tab="overview" aria-controls="uxPanelOverview" aria-selected="true" tabindex="0">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>
+                        <span>Overview</span>
+                    </button>
+                    <button class="modern-tab" id="uxTabFindings" type="button" role="tab" data-tab="findings" aria-controls="uxPanelFindings" aria-selected="false" tabindex="-1">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 2.8 19h18.4L12 3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+                        <span>Findings</span>
+                    </button>
+                    <button class="modern-tab" id="uxTabReports" type="button" role="tab" data-tab="reports" aria-controls="uxPanelReports" aria-selected="false" tabindex="-1">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"></path><path d="M14 3v5h5"></path><path d="M9 13h6M9 17h6"></path></svg>
+                        <span>Reports</span>
+                    </button>
+                    <button class="modern-tab" id="uxTabWaf" type="button" role="tab" data-tab="waf" aria-controls="uxPanelWaf" aria-selected="false" tabindex="-1">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"></path><path d="m9 12 2 2 4-5"></path></svg>
+                        <span>Firewall</span>
+                    </button>
+                    <button class="modern-tab" id="uxTabLogs" type="button" role="tab" data-tab="logs" aria-controls="uxPanelLogs" aria-selected="false" tabindex="-1">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"></path></svg>
+                        <span>Activity</span>
+                    </button>
+                    <button class="modern-tab" id="uxTabSettings" type="button" role="tab" data-tab="settings" aria-controls="uxPanelSettings" aria-selected="false" tabindex="-1">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"></path></svg>
+                        <span>Settings</span>
+                    </button>
+                </div>
+
+                <div class="sidebar-footer">
+                    <a href="/health" class="sidebar-health">
+                        <span class="health-orbit" aria-hidden="true"><i></i></span>
+                        <span><strong>All systems nominal</strong><small>7 services online</small></span>
+                    </a>
+                    <button id="uxThreatLabBtn" class="sidebar-lab-button" type="button">
+                        <span aria-hidden="true">↗</span> Open threat lab
+                    </button>
+                </div>
+            </aside>
+
+            <div class="workbench-main">
+                <header class="command-header">
+                    <div class="command-context">
+                        <span class="command-eyebrow">Local workspace</span>
+                        <div><strong id="uxViewTitle">Overview</strong><span>/</span><span>main</span></div>
+                    </div>
+                    <div class="command-actions">
+                        <span class="branch-state"><i aria-hidden="true"></i> Protected branch</span>
+                        <button id="uxHeaderScanBtn" class="command-scan" type="button">
+                            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path><circle cx="12" cy="12" r="4"></circle></svg>
+                            <span id="uxHeaderScanLabel">Run audit</span>
+                            <kbd>⌘↵</kbd>
+                        </button>
+                    </div>
+                </header>
+
+                <main id="workbench-main" class="workbench-content" tabindex="-1">
+            <header class="modern-hero">
                 <div>
-                    <div class="modern-kicker">AEGIS SECURITY WORKBENCH</div>
-                    <h1>Project Security Dashboard</h1>
-                    <p>Run scans, review the active verdict, triage findings, and reopen generated reports from one focused workspace.</p>
+                    <span class="sr-only">Project Security Dashboard</span>
+                    <div class="modern-kicker"><span></span> Security intelligence / Local environment</div>
+                    <h1>Know what ships.<br><em>Stop what shouldn’t.</em></h1>
+                    <p>A focused security workbench for scanning code, resolving exposure, and making defensible deployment decisions.</p>
                 </div>
                 <div class="modern-actions">
                     <select id="uxScanTarget" class="modern-select" aria-label="Scan target">
@@ -915,130 +994,289 @@
                     <button id="uxScanBtn" class="modern-btn primary" type="button">Run Audit</button>
                     <button id="uxUploadBtn" class="modern-btn" type="button">Upload Python</button>
                 </div>
-            </div>
+            </header>
 
-            <div class="modern-tabs" role="tablist" aria-label="Dashboard sections">
-                <button class="modern-tab active" type="button" data-tab="overview">Overview</button>
-                <button class="modern-tab" type="button" data-tab="findings">Findings</button>
-                <button class="modern-tab" type="button" data-tab="reports">Reports</button>
-                <button class="modern-tab" type="button" data-tab="waf">WAF</button>
-                <button class="modern-tab" type="button" data-tab="logs">Logs</button>
-                <button class="modern-tab" type="button" data-tab="settings">Settings</button>
-            </div>
+            <div class="modern-tab-panel active" id="uxPanelOverview" role="tabpanel" aria-labelledby="uxTabOverview" data-panel="overview">
+                <div class="telemetry-rail" aria-label="Scanner telemetry">
+                    <div class="telemetry-live"><i aria-hidden="true"></i><span>Evidence telemetry</span></div>
+                    <div id="uxTelemetryScanners" class="telemetry-scanners">
+                        <span class="telemetry-placeholder">Connecting scanner signals…</span>
+                    </div>
+                    <div id="uxTelemetryState" class="telemetry-state">Synchronizing</div>
+                </div>
 
-            <div class="modern-tab-panel active" data-panel="overview">
-                <div class="modern-overview-grid">
-                    <article class="modern-card verdict-card">
-                        <div class="modern-card-label">Current Verdict</div>
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Deployment intelligence</div>
+                        <h2>Security posture</h2>
+                        <p>The evidence required to make the next release decision.</p>
+                    </div>
+                    <span id="uxEvidenceFreshness" class="evidence-freshness">Awaiting evidence</span>
+                </header>
+
+                <div class="overview-decision-grid">
+                    <article class="modern-card verdict-card decision-card">
+                        <div class="decision-topline">
+                            <span class="decision-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6z"></path><path d="m9 12 2 2 4-5"></path></svg>
+                            </span>
+                            <span>Deployment gate</span>
+                            <span id="uxVerdictSignal" class="decision-signal">Not evaluated</span>
+                        </div>
                         <div id="uxVerdict" class="modern-verdict neutral">No Scan Yet</div>
                         <div id="uxVerdictReason" class="modern-muted">Run an audit to generate a deployment decision.</div>
+                        <div id="uxBlockedBy" class="decision-reasons"></div>
+                        <div class="decision-actions">
+                            <button class="modern-btn primary" type="button" data-go-tab="findings">Review findings</button>
+                            <a class="modern-btn" href="/report">Open evidence</a>
+                        </div>
                     </article>
-                    <article class="modern-card">
-                        <div class="modern-card-label">Exploitability</div>
-                        <div class="modern-metric"><span id="uxRiskScore">0</span><small>/100</small></div>
-                        <div class="modern-meter"><span id="uxRiskMeter"></span></div>
-                    </article>
-                    <article class="modern-card">
-                        <div class="modern-card-label">WAF Status</div>
-                        <div id="uxWafState" class="modern-status muted">Unknown</div>
-                        <button id="uxWafToggle" class="modern-btn compact" type="button">Toggle WAF</button>
-                    </article>
-                    <article class="modern-card">
-                        <div class="modern-card-label">Latest Scan</div>
-                        <div id="uxLatestScan" class="modern-status muted">No report found</div>
-                        <div id="uxSandboxStatus" class="modern-muted">Sandbox status unavailable.</div>
+
+                    <article class="modern-card risk-card">
+                        <div class="modern-card-label">Exploitability index</div>
+                        <div id="uxRiskOrbit" class="risk-orbit" style="--risk: 0">
+                            <div><strong id="uxRiskScore">0</strong><small>/100</small></div>
+                        </div>
+                        <div id="uxRiskLabel" class="risk-label">Risk not calculated</div>
+                        <div class="modern-meter" aria-hidden="true"><span id="uxRiskMeter"></span></div>
                     </article>
                 </div>
 
-                <div class="modern-card progress-card">
-                    <div class="modern-card-header">
-                        <div>
-                            <div class="modern-card-label">Scan Progress</div>
-                            <h2 id="uxProgressTitle">Ready</h2>
+                <div class="posture-metrics">
+                    <article class="posture-metric">
+                        <span>Actionable issues</span>
+                        <strong id="uxFindingTotal">0</strong>
+                        <small>Across all scanners</small>
+                    </article>
+                    <article class="posture-metric">
+                        <span>Critical exposure</span>
+                        <strong id="uxCriticalTotal">0</strong>
+                        <small>Requires immediate action</small>
+                    </article>
+                    <article class="posture-metric">
+                        <span>Scanner coverage</span>
+                        <strong><span id="uxScannerTotal">0</span><small>/7</small></strong>
+                        <small>Evidence sources reporting</small>
+                    </article>
+                    <article class="posture-metric">
+                        <span>Firewall</span>
+                        <strong id="uxWafState" class="muted">Unknown</strong>
+                        <button id="uxWafToggle" class="text-action" type="button">Change posture →</button>
+                    </article>
+                    <article class="posture-metric latest-metric">
+                        <span>Latest evidence</span>
+                        <strong id="uxLatestScan" class="muted">No report found</strong>
+                        <small id="uxSandboxStatus">Sandbox status unavailable.</small>
+                    </article>
+                </div>
+
+                <div class="signal-grid">
+                    <article class="modern-card topology-card">
+                        <div class="modern-card-header">
+                            <div>
+                                <div class="modern-card-label">Exposure topology</div>
+                                <h2>Dependency signal map</h2>
+                            </div>
+                            <div class="topology-stats"><span><i class="secure"></i><b id="uxTopologySecure">0</b> secure</span><span><i class="exposed"></i><b id="uxTopologyExposed">0</b> exposed</span></div>
                         </div>
-                        <span id="uxJobId" class="modern-chip">Idle</span>
-                    </div>
-                    <div class="modern-stepper" id="uxStepper">
-                        <div class="modern-step" data-step="queued"><span></span>Queued</div>
-                        <div class="modern-step" data-step="running"><span></span>Running</div>
-                        <div class="modern-step" data-step="analyzing"><span></span>Analyzing</div>
-                        <div class="modern-step" data-step="correlating"><span></span>Correlating</div>
-                        <div class="modern-step" data-step="reporting"><span></span>Reporting</div>
-                        <div class="modern-step" data-step="completed"><span></span>Complete</div>
-                    </div>
+                        <div id="uxTopologyMap" class="topology-map" role="img" aria-label="Loading dependency topology">
+                            <div class="topology-loading"><span></span><span></span><span></span><small>Mapping dependency paths</small></div>
+                        </div>
+                        <div class="topology-caption"><span>Live package graph</span><button class="text-action" type="button" data-open-topology>Inspect in Threat Lab →</button></div>
+                    </article>
+
+                    <article class="modern-card progress-card">
+                        <div class="modern-card-header">
+                            <div>
+                                <div class="modern-card-label">Scan Progress</div>
+                                <h2 id="uxProgressTitle">Ready</h2>
+                            </div>
+                            <span id="uxJobId" class="modern-chip">Idle</span>
+                        </div>
+                        <div class="progress-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                        <div class="modern-stepper" id="uxStepper">
+                            <div class="modern-step" data-step="queued"><span></span>Queued</div>
+                            <div class="modern-step" data-step="running"><span></span>Running</div>
+                            <div class="modern-step" data-step="analyzing"><span></span>Analyzing</div>
+                            <div class="modern-step" data-step="correlating"><span></span>Correlating</div>
+                            <div class="modern-step" data-step="reporting"><span></span>Reporting</div>
+                            <div class="modern-step" data-step="completed"><span></span>Complete</div>
+                        </div>
+                    </article>
                 </div>
             </div>
 
-            <div class="modern-tab-panel" data-panel="findings">
-                <div class="modern-card">
-                    <div class="modern-card-header">
-                        <div>
-                            <div class="modern-card-label">Findings</div>
-                            <h2>Actionable Issues</h2>
-                        </div>
-                        <div class="modern-filter-group" aria-label="Finding filters">
-                            <button class="modern-filter active" type="button" data-filter="all">All</button>
-                            <button class="modern-filter" type="button" data-filter="critical">Critical</button>
-                            <button class="modern-filter" type="button" data-filter="high">High</button>
-                            <button class="modern-filter" type="button" data-filter="medium">Medium</button>
-                        </div>
+            <div class="modern-tab-panel" id="uxPanelFindings" role="tabpanel" aria-labelledby="uxTabFindings" data-panel="findings">
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Triage queue</div>
+                        <h2>Actionable findings</h2>
+                        <p>Prioritized by severity, with source evidence and remediation guidance.</p>
                     </div>
+                    <span id="uxFindingsCount" class="evidence-freshness">0 findings</span>
+                </header>
+
+                <div class="finding-summary" id="uxFindingSummary">
+                    <div><span class="summary-dot critical"></span><strong id="uxSummaryCritical">0</strong><small>Critical</small></div>
+                    <div><span class="summary-dot high"></span><strong id="uxSummaryHigh">0</strong><small>High</small></div>
+                    <div><span class="summary-dot medium"></span><strong id="uxSummaryMedium">0</strong><small>Medium</small></div>
+                    <div><span class="summary-dot low"></span><strong id="uxSummaryLow">0</strong><small>Low / info</small></div>
+                </div>
+
+                <div class="findings-toolbar">
+                    <label class="findings-search">
+                        <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 5 5"></path></svg>
+                        <span class="sr-only">Search findings</span>
+                        <input id="uxFindingsSearch" type="search" placeholder="Search issue, scanner, or file">
+                    </label>
+                    <select id="uxScannerFilter" class="modern-select findings-scanner" aria-label="Filter findings by scanner">
+                        <option value="all">All scanners</option>
+                    </select>
+                    <div class="modern-filter-group" aria-label="Finding severity filters">
+                        <button class="modern-filter active" type="button" data-filter="all">All</button>
+                        <button class="modern-filter" type="button" data-filter="critical">Critical</button>
+                        <button class="modern-filter" type="button" data-filter="high">High</button>
+                        <button class="modern-filter" type="button" data-filter="medium">Medium</button>
+                        <button class="modern-filter" type="button" data-filter="low">Low</button>
+                    </div>
+                </div>
+
+                <div class="modern-card findings-card">
                     <div id="uxFindings" class="modern-findings empty-state">Run a scan to populate security findings.</div>
                 </div>
             </div>
 
-            <div class="modern-tab-panel" data-panel="reports">
+            <div class="modern-tab-panel" id="uxPanelReports" role="tabpanel" aria-labelledby="uxTabReports" data-panel="reports">
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Evidence package</div>
+                        <h2>Reports and exports</h2>
+                        <p>Shareable evidence for engineering, compliance, and release review.</p>
+                    </div>
+                    <span id="uxReportAvailability" class="evidence-freshness">No report generated</span>
+                </header>
+
+                <div class="report-hero">
+                    <div class="report-document" aria-hidden="true">
+                        <span>AEGIS</span>
+                        <strong>Security<br>evidence</strong>
+                        <i></i><i></i><i></i>
+                        <small id="uxReportStamp">AWAITING SCAN</small>
+                    </div>
+                    <div>
+                        <div class="modern-card-label">Latest assessment</div>
+                        <h3 id="uxReportVerdict">No deployment verdict</h3>
+                        <p id="uxReportSummary">Run an audit to compile a complete evidence package.</p>
+                        <div id="uxReportPath" class="modern-path">Report path appears after a scan.</div>
+                    </div>
+                </div>
+
                 <div class="modern-report-grid">
-                    <a class="modern-report-action" href="/report">Open HTML Report</a>
-                    <a class="modern-report-action" href="/export-dossier">Download Markdown Dossier</a>
-                    <a class="modern-report-action" href="/download-sbom">Download SBOM</a>
-                    <button id="uxCopyReport" class="modern-report-action" type="button">Copy Report Path</button>
+                    <a class="modern-report-action" href="/report"><span>01</span><strong>HTML report</strong><small>Interactive assessment for review</small><b>Open ↗</b></a>
+                    <a class="modern-report-action" href="/export-dossier"><span>02</span><strong>Security dossier</strong><small>Portable plain-text evidence</small><b>Download ↓</b></a>
+                    <a class="modern-report-action" href="/download-sbom"><span>03</span><strong>Software bill of materials</strong><small>Machine-readable dependency inventory</small><b>Download ↓</b></a>
+                    <button id="uxCopyReport" class="modern-report-action" type="button"><span>04</span><strong>Report reference</strong><small>Copy the latest evidence URL</small><b id="uxCopyReportLabel">Copy link</b></button>
                 </div>
-                <div id="uxReportPath" class="modern-path">Report path appears after a scan.</div>
             </div>
 
-            <div class="modern-tab-panel" data-panel="waf">
-                <div class="modern-card">
-                    <div class="modern-card-header">
-                        <div>
-                            <div class="modern-card-label">Firewall Rules</div>
-                            <h2>Web Application Firewall</h2>
-                        </div>
-                        <button id="uxShowWafEditor" class="modern-btn compact" type="button">Open Advanced Editor</button>
+            <div class="modern-tab-panel" id="uxPanelWaf" role="tabpanel" aria-labelledby="uxTabWaf" data-panel="waf">
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Runtime defense</div>
+                        <h2>Web application firewall</h2>
+                        <p>Control the mitigation layer protecting exposed application routes.</p>
                     </div>
-                    <p class="modern-muted">The simple dashboard exposes WAF status and toggling. Tactical view contains the full custom rule editor and threat simulator.</p>
-                </div>
-            </div>
+                    <button id="uxShowWafEditor" class="modern-btn compact" type="button">Advanced rule editor ↗</button>
+                </header>
 
-            <div class="modern-tab-panel" data-panel="logs">
-                <div class="modern-card">
-                    <div class="modern-card-header">
+                <div class="firewall-grid">
+                    <article class="modern-card firewall-posture">
+                        <div class="firewall-radar" aria-hidden="true"><span></span><i></i></div>
                         <div>
-                            <div class="modern-card-label">Live Events</div>
-                            <h2>Scan Log</h2>
+                            <div class="modern-card-label">Protection state</div>
+                            <h3 id="uxWafPanelState">Evaluating firewall</h3>
+                            <p id="uxWafPanelCopy">Runtime protection status is loading.</p>
                         </div>
-                        <button id="uxClearLogs" class="modern-btn compact" type="button">Clear</button>
-                    </div>
-                    <div id="uxLogStream" class="modern-log-stream">No live scan events yet.</div>
-                </div>
-                <div class="modern-card">
-                    <div class="modern-card-label">Recent Scans</div>
-                    <div id="uxScanHistory" class="modern-history empty-state">Scan history is stored locally in this browser.</div>
+                        <button id="uxWafPanelToggle" class="modern-btn primary" type="button">Change protection state</button>
+                    </article>
+
+                    <article class="modern-card firewall-coverage">
+                        <div class="modern-card-label">Mitigation coverage</div>
+                        <div class="coverage-list">
+                            <div><span>Injection attacks</span><b>SQLi · RCE</b><i></i></div>
+                            <div><span>Browser attacks</span><b>XSS</b><i></i></div>
+                            <div><span>Path abuse</span><b>LFI · Traversal</b><i></i></div>
+                            <div><span>Network pivots</span><b>SSRF</b><i></i></div>
+                        </div>
+                        <small>Custom rules and payload testing are available in the Threat Lab.</small>
+                    </article>
                 </div>
             </div>
 
-            <div class="modern-tab-panel" data-panel="settings">
-                <div class="modern-settings-grid">
-                    <label class="modern-setting">
-                        <span>Reduce visual effects</span>
-                        <input type="checkbox" id="uxReduceMotion">
-                    </label>
-                    <label class="modern-setting">
-                        <span>Default to simple dashboard</span>
-                        <input type="checkbox" id="uxDefaultSimple">
-                    </label>
+            <div class="modern-tab-panel" id="uxPanelLogs" role="tabpanel" aria-labelledby="uxTabLogs" data-panel="logs">
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Operational trail</div>
+                        <h2>Activity and scan history</h2>
+                        <p>Live pipeline events and recent deployment decisions.</p>
+                    </div>
+                    <button id="uxClearLogs" class="modern-btn compact" type="button">Clear live events</button>
+                </header>
+
+                <div class="activity-grid">
+                    <div class="modern-card activity-console">
+                        <div class="console-bar"><span><i></i><i></i><i></i></span><strong>scan-events.log</strong><small>Live</small></div>
+                        <div id="uxLogStream" class="modern-log-stream">No live scan events yet.</div>
+                    </div>
+                    <div class="modern-card history-card">
+                        <div class="modern-card-header">
+                            <div><div class="modern-card-label">Recent decisions</div><h2>Scan history</h2></div>
+                        </div>
+                        <div id="uxScanHistory" class="modern-history empty-state">Scan history is stored locally in this browser.</div>
+                    </div>
                 </div>
             </div>
+
+            <div class="modern-tab-panel" id="uxPanelSettings" role="tabpanel" aria-labelledby="uxTabSettings" data-panel="settings">
+                <header class="screen-heading">
+                    <div>
+                        <div class="modern-card-label">Workspace preferences</div>
+                        <h2>Settings</h2>
+                        <p>Local display, access, and workbench behavior.</p>
+                    </div>
+                </header>
+
+                <div class="settings-sections">
+                    <section class="settings-section">
+                        <div><h3>Appearance</h3><p>Control visual behavior for this browser.</p></div>
+                        <div class="settings-controls">
+                            <label class="modern-setting">
+                                <span><strong>Reduce visual effects</strong><small>Disable nonessential animation and transitions.</small></span>
+                                <input type="checkbox" id="uxReduceMotion">
+                            </label>
+                            <label class="modern-setting">
+                                <span><strong>Default to workbench</strong><small>Open the professional dashboard instead of the Threat Lab.</small></span>
+                                <input type="checkbox" id="uxDefaultSimple">
+                            </label>
+                        </div>
+                    </section>
+                    <section class="settings-section">
+                        <div><h3>Protected actions</h3><p>Credentials remain in this browser tab only.</p></div>
+                        <div class="settings-controls">
+                            <label class="modern-setting token-setting">
+                                <span><strong>Administrator token</strong><small>Required for firewall and protected runtime actions.</small></span>
+                                <input type="password" id="uxAdminToken" autocomplete="off" placeholder="Enter admin token">
+                            </label>
+                            <button id="uxSaveAdminToken" class="modern-btn compact settings-save" type="button">Save admin token</button>
+                            <a class="modern-btn compact settings-save" href="/admin">Open operations console</a>
+                            <button id="uxSignOut" class="modern-btn compact settings-save" type="button">Sign out</button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+                </main>
+            </div>
+            <div id="uxToastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
         </section>
 
         <div id="legacy-experience" class="legacy-experience">
@@ -1487,9 +1725,9 @@
         </div>
     </div>
 
-    <footer>
+    <footer class="legacy-footer">
         <div class="mono" style="margin-bottom: 0.5rem; color: var(--primary);" data-i18n="daemon_info">AEGIS SECURITY GATEWAY DAEMON</div>
-        <div>v2.1.0-tactical &bull; 2026 &bull; FOR EXPERIMENTAL SIMULATION LAB USE ONLY</div>
+        <div>v2.2.0-tactical &bull; 2026 &bull; FOR EXPERIMENTAL SIMULATION LAB USE ONLY</div>
     </footer>
 
     <!-- Animated Retro Scanning Grid Canvas -->
@@ -1634,8 +1872,8 @@
                 static_audit: "> STEP 1: STATIC CODE AUDIT & SCAN",
                 threat_lab: "> STEP 2: INTERACTIVE THREAT SIMULATION LAB",
                 threat_lab_simple: "> STEP 2: RUNTIME THREAT TESTING",
-                view_simple: "VIEW: SIMPLE",
-                view_tactical: "VIEW: TACTICAL",
+                view_simple: "WORKBENCH",
+                view_tactical: "THREAT LAB",
                 waf_label: "WAF_SHIELDS_UP:",
                 listening: "LISTENING",
                 armed: "ARMED_SHIELD",
@@ -1734,8 +1972,8 @@
                 static_audit: "> 1단계: 정적 코드 감사 및 검사",
                 threat_lab: "> 2단계: 대화형 위협 시뮬레이션 랩",
                 threat_lab_simple: "> 2단계: 런타임 위협 테스트",
-                view_simple: "보기: 기본",
-                view_tactical: "보기: 전체",
+                view_simple: "워크벤치",
+                view_tactical: "위협 실험실",
                 waf_label: "WAF_방화벽_가동:",
                 listening: "대기_중",
                 armed: "보안_활성화",
@@ -1871,6 +2109,9 @@
                 document.body.classList.remove('view-simple');
                 if (typeof resizeRadar === 'function') {
                     resizeRadar();
+                }
+                if (typeof window.initializeTacticalDependencyGraph === 'function') {
+                    window.initializeTacticalDependencyGraph();
                 }
             }
             
@@ -2552,7 +2793,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
 
         async function saveWafRules() {
             try {
-                const response = await fetch('/save-waf-rules', {
+                const response = await window.AegisAPI.fetch('/save-waf-rules', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ rules: currentRules })
@@ -2745,7 +2986,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             addSyslogEntry(isChecked ? '[WAF_ARMED] Core security firewall shields raised.' : '[WAF_DISARMED] WARNING: Core security firewall disarmed.', isChecked ? 'var(--primary)' : 'var(--secondary)');
 
             try {
-                const response = await fetch('/toggle-waf', { method: 'POST' });
+                const response = await window.AegisAPI.fetch('/toggle-waf', { method: 'POST' });
                 const result = await response.json();
                 
                 const backendArmed = result.waf_enabled;
@@ -2965,7 +3206,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
 
             try {
                 const targetVal = document.getElementById('scanTarget')?.value || 'vulnerable';
-                const response = await fetch('/run-scan', {
+                const response = await window.AegisAPI.fetch('/run-scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ target: targetVal })
@@ -3032,7 +3273,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 formData.append('file', file);
 
                 try {
-                    const response = await fetch('/run-scan', {
+                    const response = await window.AegisAPI.fetch('/run-scan', {
                         method: 'POST',
                         body: formData
                     });
@@ -3706,14 +3947,22 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 if (depTooltip) depTooltip.style.display = 'none';
             });
             
-            resizeDepCanvas();
-            setTimeout(() => {
+            let depGraphStarted = false;
+            window.initializeTacticalDependencyGraph = () => {
+                if (depGraphStarted) return;
+                depGraphStarted = true;
                 resizeDepCanvas();
-                loadDependencyGraph();
-                tickDepGraph();
-            }, 500);
+                setTimeout(() => {
+                    resizeDepCanvas();
+                    loadDependencyGraph();
+                    tickDepGraph();
+                }, 120);
+            };
+            if (!document.body.classList.contains('view-simple')) {
+                window.initializeTacticalDependencyGraph();
+            }
         }
     </script>
-    <script src="/static/enhanced-dashboard.js"></script>
+    <script src="/static/enhanced-dashboard.js?v=2.5.2"></script>
 </body>
 </html>

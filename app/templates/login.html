@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in | Aegis</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color-scheme: dark; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #060a07; color: #e8f5e9; }
+    main { width: min(26rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
+    h1 { margin-top: 0; color: #3dfb57; }
+    label, input, button { display: block; width: 100%; box-sizing: border-box; }
+    label { margin: 1rem 0 .35rem; }
+    input { padding: .75rem; border: 1px solid #55715a; background: #050805; color: inherit; }
+    button { margin-top: 1.25rem; padding: .8rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; }
+    #error { min-height: 1.5rem; color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Aegis</h1>
+    <p>Sign in to the security workbench.</p>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+      <p id="error" role="alert" aria-live="polite"></p>
+    </form>
+  </main>
+  <script>
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const error = document.getElementById("error");
+      error.textContent = "";
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          username: document.getElementById("username").value,
+          password: document.getElementById("password").value
+        })
+      });
+      if (response.ok) window.location.replace("/");
+      else error.textContent = "Invalid username or password.";
+    });
+  </script>
+</body>
+</html>
