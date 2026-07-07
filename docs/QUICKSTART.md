@@ -6,7 +6,9 @@ Install the command-line scanner in an isolated environment:
 
 ```bash
 pipx install aegis-security-console
-aegis scan . --fast
+aegis demo
+aegis scan .
+aegis start
 ```
 
 ## Complete local stack

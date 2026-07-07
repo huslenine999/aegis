@@ -16,7 +16,8 @@
     h1,h2,h3 { margin:.2rem 0 .6rem; }
     p { color:var(--muted); }
     .layout { display:grid; grid-template-columns:minmax(17rem, .8fr) minmax(0, 1.5fr); gap:1rem; }
-    .panel { border:1px solid var(--line); background:var(--panel); padding:1rem; border-radius:10px; }
+    .panel { border:1px solid var(--line); background:var(--panel); padding:1rem; border-radius:8px; }
+    .onboarding { border-color:#708047; background:#151b12; margin-bottom:1rem; }
     .stack { display:grid; gap:.75rem; }
     label { display:grid; gap:.35rem; color:var(--muted); font-size:.9rem; }
     input,select,button { font:inherit; }
@@ -36,7 +37,8 @@
     .progress span { display:block; height:100%; background:var(--accent); }
     #notice { min-height:1.4rem; color:var(--accent); }
     #error { min-height:1.4rem; color:var(--danger); }
-    dialog { width:min(34rem,calc(100% - 2rem)); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:10px; }
+    .preset-note { min-width:13rem; max-width:24rem; color:var(--muted); }
+    dialog { width:min(34rem,calc(100% - 2rem)); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; }
     @media(max-width:760px){ .layout{grid-template-columns:1fr} .heading{align-items:start;flex-direction:column} }
   </style>
 </head>
@@ -58,6 +60,19 @@
     </div>
     <p id="notice" role="status" aria-live="polite"></p>
     <p id="error" role="alert" aria-live="assertive"></p>
+    <section id="onboarding" class="panel onboarding" hidden>
+      <div class="row spread">
+        <div>
+          <span class="badge">Start here</span>
+          <h2>Run the first scan</h2>
+          <p id="onboarding-copy">Create or import a project, then start a quick scan.</p>
+        </div>
+        <div class="row">
+          <button id="onboarding-create">Create project</button>
+          <button id="onboarding-scan" class="primary" disabled>Start quick scan</button>
+        </div>
+      </div>
+    </section>
     <div class="layout">
       <section class="panel">
         <div class="row spread"><h2>Your projects</h2><span id="project-count" class="badge">0</span></div>
@@ -78,11 +93,12 @@
           <div class="row">
             <label>Scan preset
               <select id="scan-preset">
-                <option value="quick">Quick</option>
-                <option value="standard">Standard</option>
-                <option value="deep">Deep</option>
+                <option value="quick">Quick — local/dev feedback</option>
+                <option value="standard">Standard — PR gate</option>
+                <option value="deep">Deep — release audit</option>
               </select>
             </label>
+            <span id="preset-note" class="preset-note">Standard checks are recommended for pull requests.</span>
             <button id="start-scan" class="primary">Start scan</button>
           </div>
           <h3>Scan history</h3>
@@ -106,7 +122,7 @@
       <label>Project name<input id="create-name" maxlength="128" required></label>
       <label>GitHub HTTPS URL<input id="create-repository" type="url" placeholder="https://github.com/org/repository.git"></label>
       <label>Default branch<input id="create-branch" value="main" required></label>
-      <label>Scan preset<select id="create-preset"><option>quick</option><option selected>standard</option><option>deep</option></select></label>
+      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — release audit</option></select></label>
       <div class="row"><button class="primary" type="submit">Create</button><button id="close-dialog" type="button">Cancel</button></div>
     </form>
   </dialog>
@@ -115,6 +131,11 @@
     let csrf = "";
     let projects = [];
     let selected = null;
+    const presetNotes = {
+      quick: "Quick is for local/dev feedback: fastest checks while coding.",
+      standard: "Standard is for PR gates: static, dependency, secret, and signature checks.",
+      deep: "Deep is for release audits: every available scanner plus sandbox checks."
+    };
     const byId = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char]));
     async function api(url, options = {}) {
@@ -129,6 +150,18 @@
     function message(text, error = false) {
       byId(error ? "error" : "notice").textContent = text;
       if (!error) byId("error").textContent = "";
+    }
+    function updatePresetNote() {
+      byId("preset-note").textContent = presetNotes[byId("scan-preset").value] || presetNotes.standard;
+    }
+    function updateOnboarding() {
+      const params = new URLSearchParams(location.search);
+      const welcome = params.has("welcome") || projects.length === 0;
+      byId("onboarding").hidden = !welcome;
+      byId("onboarding-scan").disabled = !selected;
+      byId("onboarding-copy").textContent = selected
+        ? `${selected.name} is ready for its first scan.`
+        : "Create or import a project, then start a quick scan.";
     }
     async function loadIdentity() {
       const response = await api("/api/auth/me");
@@ -146,6 +179,11 @@
           <small>${escapeHtml(project.github_full_name || project.repository_url || "Local project")} · ${escapeHtml(project.scan_preset)}</small>
         </button>`).join("") : "<p>No projects yet.</p>";
       document.querySelectorAll("[data-project]").forEach((button) => button.onclick = () => selectProject(Number(button.dataset.project)));
+      if (!selected && projects.length) {
+        await selectProject(projects[0].id);
+        return;
+      }
+      updateOnboarding();
     }
     async function selectProject(id) {
       selected = projects.find((project) => project.id === id);
@@ -156,6 +194,8 @@
       byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Local project";
       byId("project-role").textContent = selected.role;
       byId("scan-preset").value = selected.scan_preset;
+      updatePresetNote();
+      updateOnboarding();
       await loadProjects();
       await Promise.all([loadScans(), loadNotifications()]);
     }
@@ -226,7 +266,12 @@
       message("Repository imported.");
       await loadProjects();
     }
-    byId("new-project").onclick = () => byId("project-dialog").showModal();
+    function openProjectDialog() {
+      byId("project-dialog").showModal();
+      byId("create-name").focus();
+    }
+    byId("new-project").onclick = openProjectDialog;
+    byId("onboarding-create").onclick = openProjectDialog;
     byId("close-dialog").onclick = () => byId("project-dialog").close();
     byId("project-form").onsubmit = async (event) => {
       event.preventDefault();
@@ -237,6 +282,7 @@
       if (!response.ok) return message((await response.json()).detail || "Project creation failed.", true);
       byId("project-dialog").close(); message("Project created."); await loadProjects();
     };
+    byId("scan-preset").onchange = updatePresetNote;
     byId("notification-type").onchange = () => {
       byId("notification-destination").placeholder = byId("notification-type").value === "email" ? "security@example.com" : "HTTPS webhook URL";
     };
@@ -266,11 +312,19 @@
       };
       await loadScans();
     };
+    byId("onboarding-scan").onclick = async () => {
+      if (!selected) return;
+      byId("scan-preset").value = "quick";
+      updatePresetNote();
+      byId("start-scan").click();
+    };
     (async () => {
       await loadIdentity();
       await Promise.all([loadProjects(), loadGitHub()]);
       const status = new URLSearchParams(location.search).get("github");
       if (status) message(status === "connected" ? "GitHub connected." : `GitHub connection ${status}.`, status !== "connected");
+      if (new URLSearchParams(location.search).has("create") && !projects.length) openProjectDialog();
+      updateOnboarding();
     })();
   </script>
 </body>

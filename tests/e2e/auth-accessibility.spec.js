@@ -15,7 +15,9 @@ test("first-run wizard claims the administrator and configures the workspace", a
   await page.getByLabel("Administrator password", { exact: true }).fill("e2e-owner-password");
   await page.getByLabel("Confirm password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Finish setup" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects\?welcome=1$/);
+  await expect(page.locator("[data-project]").filter({ hasText: "project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start quick scan" })).toBeEnabled();
 });
 
 test("unauthenticated users sign in before accessing reports", async ({ page }) => {

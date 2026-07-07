@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent.parent / "app"))
 
-from app.cli import install_hook, uninstall_hook, execute_scan, main, run_doctor, run_report
+from app.cli import install_hook, uninstall_hook, execute_scan, main, run_demo, run_doctor, run_report
 import app.cli as cli
 
 
@@ -397,6 +397,30 @@ def test_report_command_markdown_and_missing_report(tmp_path, capsys):
 
     assert run_report(report_dir=str(tmp_path / "missing")) == 1
     assert "No Aegis report found" in capsys.readouterr().out
+
+
+def test_demo_command_creates_sample_and_reports_expected_block(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def fake_execute_scan(path, **kwargs):
+        report_dir = Path(kwargs["output_dir"])
+        report_dir.mkdir(parents=True)
+        (report_dir / "report.html").write_text("<html>blocked</html>")
+        (report_dir / "report.md").write_text("# blocked\n")
+        return {
+            "status": "blocked",
+            "html_report": str(report_dir / "report.html"),
+            "markdown_report": str(report_dir / "report.md"),
+        }
+
+    monkeypatch.setattr(cli, "execute_scan", fake_execute_scan)
+
+    assert run_demo() == 0
+    output = capsys.readouterr().out
+    assert "Demo verdict: BLOCKED" in output
+    assert (tmp_path / ".aegis" / "demo-target" / "app.py").exists()
+    assert (tmp_path / ".aegis" / "demo-target" / "requirements.txt").exists()
+
 
 def test_doctor_and_version_commands(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["aegis", "version"])

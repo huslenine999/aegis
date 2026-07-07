@@ -121,6 +121,73 @@
         return new Date(epochSeconds * 1000).toLocaleString();
     }
 
+    function guidanceFor(scanner, code, title, fallbackFix) {
+        const rule = String(code || title || "").toLowerCase();
+        const base = {
+            what: title || `${scanner} finding`,
+            why: "Security reviewers need to confirm whether this can be reached by untrusted input or shipped dependencies.",
+            fix: fallbackFix || "Review the finding, apply the scanner recommendation, and rerun the audit.",
+            status: "Pre-existing in the latest local evidence unless project baselines say otherwise.",
+            suppress: "Suppress only with a named owner, a short reason, and a follow-up review date.",
+            fixSuggestion: fallbackFix || "aegis scan .",
+        };
+
+        if (scanner === "Ruff") {
+            if (rule.includes("s307") || rule.includes("eval")) {
+                return {
+                    ...base,
+                    why: "Dynamic evaluation can execute attacker-controlled Python code.",
+                    fix: "Replace eval or exec with a parser, allowlist, or explicit operation map.",
+                    fixSuggestion: "Replace eval(user_input) with an allowlisted parser or command map.",
+                };
+            }
+            if (rule.includes("s602") || rule.includes("shell")) {
+                return {
+                    ...base,
+                    why: "Shell invocation can turn string input into command injection.",
+                    fix: "Pass arguments as a list with shell disabled and validate every user-controlled value.",
+                    fixSuggestion: "subprocess.run([\"cmd\", safe_arg], shell=False, check=True)",
+                };
+            }
+            if (rule.includes("s608") || rule.includes("sql")) {
+                return {
+                    ...base,
+                    why: "String-built SQL can let input change the query structure.",
+                    fix: "Use parameterized queries or ORM bind parameters.",
+                    fixSuggestion: "cursor.execute(\"SELECT * FROM users WHERE name = ?\", (name,))",
+                };
+            }
+            if (rule.includes("s105") || rule.includes("s106") || rule.includes("secret")) {
+                return {
+                    ...base,
+                    why: "Hardcoded credentials are easy to leak through source control and logs.",
+                    fix: "Rotate the value and load it from environment variables or a secret manager.",
+                    fixSuggestion: "export AEGIS_SECRET_NAME=\"value-from-secret-manager\"",
+                };
+            }
+        }
+
+        if (scanner === "Semgrep") {
+            return {
+                ...base,
+                why: "The rule matched a risky source-to-sink pattern that can become exploitable in production paths.",
+                fix: fallbackFix || "Follow the Semgrep rule guidance, then add a focused regression test.",
+                fixSuggestion: fallbackFix || "Apply the Semgrep rule recommendation and rerun aegis scan .",
+            };
+        }
+
+        if (scanner === "OSV") {
+            return {
+                ...base,
+                why: "Vulnerable dependencies can expose the app even when first-party code looks clean.",
+                fix: fallbackFix || "Upgrade to a patched dependency version and regenerate the lockfile.",
+                fixSuggestion: fallbackFix || "python -m pip install --upgrade <package>",
+            };
+        }
+
+        return base;
+    }
+
     function activateTab(tab) {
         const target = tab.dataset.tab;
         const dashboard = $("modern-dashboard");
@@ -210,29 +277,41 @@
             findings.push({
                 severity,
                 scanner: "Ruff",
+                code,
                 title: item.message || code,
                 location: `${item.filename || "unknown"}:${item.location?.row || "?"}`,
-                fix: "Review the flagged line and replace unsafe input handling with a safer API or validation path.",
+                ...guidanceFor("Ruff", code, item.message || code, item.remediation || item.fix_suggestion || "Review the flagged line and replace unsafe input handling with a safer API or validation path."),
+                suppress: item.suppression_guidance || "Suppress only after reviewing exploitability and documenting the accepted risk.",
+                status: item.finding_status || "Pre-existing in this local scan evidence.",
             });
         });
 
         ((data.semgrep || {}).results || []).forEach((item) => {
+            const title = item.extra?.message || item.check_id || "Semgrep finding";
+            const rule = item.check_id || title;
             findings.push({
                 severity: normalizeSeverity(item.extra?.severity || "medium"),
                 scanner: "Semgrep",
-                title: item.extra?.message || item.check_id || "Semgrep finding",
+                code: rule,
+                title,
                 location: `${item.path || "unknown"}:${item.start?.line || "?"}`,
-                fix: "Follow the rule message, then rerun the scan to confirm the issue is gone.",
+                ...guidanceFor("Semgrep", rule, title, item.extra?.fix || item.extra?.metadata?.fix || "Follow the rule message, then rerun the scan to confirm the issue is gone."),
+                suppress: item.extra?.metadata?.suppression_guidance || "Suppress with a nosemgrep comment only when the specific data path is proven safe.",
+                status: item.finding_status || "Pre-existing in this local scan evidence.",
             });
         });
 
         (data.osv || []).forEach((item) => {
+            const title = `${item.package || "dependency"} ${item.id || "vulnerability"}`;
             findings.push({
                 severity: (item.cvss || 0) >= 7 ? "high" : "medium",
                 scanner: "OSV",
-                title: `${item.package || "dependency"} ${item.id || "vulnerability"}`,
+                code: item.id || item.package || "OSV",
+                title,
                 location: "requirements.txt",
-                fix: item.fix || "Upgrade the affected dependency to a patched version.",
+                ...guidanceFor("OSV", item.id || item.package, title, item.fix || "Upgrade the affected dependency to a patched version."),
+                suppress: item.suppression_guidance || "Suppress only when the vulnerable package is unreachable or protected by a compensating control.",
+                status: item.finding_status || "Pre-existing in this local scan evidence.",
             });
         });
 
@@ -241,9 +320,13 @@
                 findings.push({
                     severity: "high",
                     scanner: "Secrets",
+                    code: secret.type || "secret",
                     title: secret.type || "Potential secret",
                     location: `${file}:${secret.line_number || "?"}`,
-                    fix: "Remove the secret from source, rotate it, and load it from a secret manager or environment variable.",
+                    ...guidanceFor("Secrets", secret.type, secret.type || "Potential secret", "Remove the secret from source, rotate it, and load it from a secret manager or environment variable."),
+                    why: "Committed credentials can be copied from history even after the line is removed.",
+                    suppress: "Suppress only for verified test fixtures or scanner false positives.",
+                    status: "Pre-existing in this local scan evidence.",
                 });
             });
         });
@@ -252,9 +335,12 @@
             findings.push({
                 severity: "high",
                 scanner: "YARA",
+                code: item.rule || "YARA",
                 title: item.rule || "Suspicious signature",
                 location: item.filename || "unknown",
-                fix: item.description || "Review the matched code and remove suspicious behavior if it is not expected.",
+                ...guidanceFor("YARA", item.rule, item.rule || "Suspicious signature", item.description || "Review the matched code and remove suspicious behavior if it is not expected."),
+                suppress: "Suppress only after confirming the matched behavior is intentional and documented.",
+                status: "Pre-existing in this local scan evidence.",
             });
         });
 
@@ -262,9 +348,13 @@
             findings.push({
                 severity: "critical",
                 scanner: "ClamAV",
+                code: item.virus || "malware",
                 title: item.virus || "Malware signature",
                 location: item.filename || "unknown",
-                fix: item.description || "Quarantine the file and verify its origin before restoring it.",
+                ...guidanceFor("ClamAV", item.virus, item.virus || "Malware signature", item.description || "Quarantine the file and verify its origin before restoring it."),
+                why: "Malware signatures indicate code or artifacts that can compromise developer and runtime systems.",
+                suppress: "Do not suppress unless the signature is a verified scanner false positive.",
+                status: "Pre-existing in this local scan evidence.",
             });
         });
 
@@ -272,9 +362,13 @@
             findings.push({
                 severity: "high",
                 scanner: "DAST",
+                code: item.vuln_type || "DAST",
                 title: item.vuln_type || "Exposed route",
                 location: item.route || "runtime endpoint",
-                fix: item.description || "Add input validation, output encoding, or WAF coverage for this route.",
+                ...guidanceFor("DAST", item.vuln_type, item.vuln_type || "Exposed route", item.description || "Add input validation, output encoding, or WAF coverage for this route."),
+                why: "The running app accepted a hostile request path during dynamic testing.",
+                suppress: "Suppress only if the route is intentionally exposed and protected by another control.",
+                status: "Pre-existing in this local scan evidence.",
             });
         });
 
@@ -348,9 +442,30 @@
                     </div>
                     <div class="modern-finding-meta"><span>${escapeHtml(finding.scanner)}</span>${escapeHtml(finding.location)}</div>
                     <div class="modern-finding-fix">${escapeHtml(finding.fix)}</div>
+                    <div class="finding-help-grid">
+                        <div><span>What failed</span><p>${escapeHtml(finding.what || finding.title)}</p></div>
+                        <div><span>Why it matters</span><p>${escapeHtml(finding.why)}</p></div>
+                        <div><span>How to fix</span><p>${escapeHtml(finding.fix)}</p></div>
+                        <div><span>Status</span><p>${escapeHtml(finding.status)}</p></div>
+                        <div><span>Safe to suppress</span><p>${escapeHtml(finding.suppress)}</p></div>
+                    </div>
                 </div>
-                <a class="finding-evidence" href="/report">Evidence ↗</a>
+                <div class="finding-actions">
+                    <button class="modern-btn compact finding-copy" type="button" data-copy-fix="${escapeHtml(finding.fixSuggestion || finding.fix)}">Copy fix</button>
+                    <a class="finding-evidence" href="/report">Evidence ↗</a>
+                </div>
             `;
+            item.querySelector(".finding-copy")?.addEventListener("click", async (event) => {
+                const button = event.currentTarget;
+                try {
+                    await navigator.clipboard.writeText(button.dataset.copyFix || finding.fix || "");
+                    button.textContent = "Copied";
+                    setTimeout(() => { button.textContent = "Copy fix"; }, 1200);
+                } catch (_) {
+                    button.textContent = "Copy failed";
+                    setTimeout(() => { button.textContent = "Copy fix"; }, 1200);
+                }
+            });
             container.appendChild(item);
         });
     }
@@ -477,6 +592,31 @@
         const verdict = $("uxVerdict");
         const reason = $("uxVerdictReason");
         const blockedBy = data.blocked_by || [];
+        const findings = buildFindings(data);
+        const criticalCount = findings.filter((finding) => normalizeSeverity(finding.severity) === "critical").length;
+        const scannerKeys = ["ruff", "semgrep", "osv", "secrets", "yara", "clamav", "zap"];
+        const scannerCount = scannerKeys.filter((key) => data[key] !== null && data[key] !== undefined).length;
+        const decision = $("uxOverviewDecision");
+        if (decision) {
+            decision.classList.remove("allowed", "blocked", "neutral");
+            if (!data.has_run) {
+                decision.textContent = "Not evaluated";
+                decision.classList.add("neutral");
+            } else if (data.is_blocked) {
+                decision.textContent = "Blocked";
+                decision.classList.add("blocked");
+            } else {
+                decision.textContent = "Allowed";
+                decision.classList.add("allowed");
+            }
+        }
+        setText("uxOverviewUpdated", data.latest_scan_time ? `Updated ${formatDate(data.latest_scan_time)}` : "No scan yet");
+        setText("uxOverviewFindings", String(findings.length));
+        setText("uxOverviewBlockers", String(blockedBy.length));
+        setText("uxOverviewScanners", String(scannerCount));
+        setText("uxOverviewNextStep", !data.has_run
+            ? "Run an audit to generate a release decision."
+            : (data.is_blocked ? "Review the top blockers, apply fixes, then rerun the audit." : "No blockers found. Share the evidence package with reviewers."));
         if (verdict) {
             verdict.classList.remove("allowed", "blocked", "neutral");
             if (!data.has_run) {
@@ -497,6 +637,25 @@
         const blockedByContainer = $("uxBlockedBy");
         if (blockedByContainer) {
             blockedByContainer.innerHTML = blockedBy.map((source) => `<span>${escapeHtml(source)}</span>`).join("");
+        }
+        const topFindings = $("uxOverviewTopFindings");
+        if (topFindings) {
+            if (!findings.length) {
+                topFindings.className = "overview-top-findings empty-state";
+                topFindings.textContent = data.has_run ? "No actionable findings in the latest scan." : "Top findings appear here after a scan.";
+            } else {
+                topFindings.className = "overview-top-findings";
+                topFindings.innerHTML = findings.slice(0, 3).map((finding) => {
+                    const severity = normalizeSeverity(finding.severity);
+                    return `
+                        <div class="overview-blocker-item">
+                            <span class="summary-dot ${severity}"></span>
+                            <div><strong>${escapeHtml(finding.title)}</strong><small>${escapeHtml(finding.scanner)} · ${escapeHtml(finding.location)}</small></div>
+                            <span class="modern-severity ${severity}">${severity.toUpperCase()}</span>
+                        </div>
+                    `;
+                }).join("");
+            }
         }
 
         const risk = Math.round(data.exploitability_score || 0);
@@ -527,10 +686,6 @@
         setText("uxSandboxStatus", `Sandbox · ${String(data.sandbox_status || "unknown").replaceAll("_", " ")}`);
         setText("uxEvidenceFreshness", data.latest_scan_time ? `Updated ${formatDate(data.latest_scan_time)}` : "Awaiting evidence");
 
-        const findings = buildFindings(data);
-        const criticalCount = findings.filter((finding) => normalizeSeverity(finding.severity) === "critical").length;
-        const scannerKeys = ["ruff", "semgrep", "osv", "secrets", "yara", "clamav", "zap"];
-        const scannerCount = scannerKeys.filter((key) => data[key] !== null && data[key] !== undefined).length;
         setText("uxFindingTotal", String(findings.length));
         setText("uxCriticalTotal", String(criticalCount));
         setText("uxScannerTotal", String(scannerCount));
@@ -545,6 +700,12 @@
             ? "Run an audit to compile a complete evidence package."
             : `${findings.length} actionable ${findings.length === 1 ? "finding" : "findings"} across ${scannerCount} reporting scanners.`);
         setText("uxReportStamp", data.latest_scan_time ? new Date(data.latest_scan_time * 1000).toLocaleDateString() : "AWAITING SCAN");
+        ["uxBundleLink", "uxReportBundleAction"].forEach((id) => {
+            const link = $(id);
+            if (!link) return;
+            link.setAttribute("aria-disabled", data.report_url ? "false" : "true");
+            link.title = data.report_url ? "Download the share bundle" : "Run a scan before downloading a share bundle";
+        });
     }
 
     function renderHistory() {
@@ -647,6 +808,14 @@
                 setText("uxCopyReportLabel", "Copy failed");
                 setTimeout(() => setText("uxCopyReportLabel", "Copy link"), 1200);
             }
+        });
+        ["uxBundleLink", "uxReportBundleAction"].forEach((id) => {
+            $(id)?.addEventListener("click", (event) => {
+                if (event.currentTarget.getAttribute("aria-disabled") === "true") {
+                    event.preventDefault();
+                    showToast("Bundle unavailable", "Run a scan before downloading a share bundle.", "neutral");
+                }
+            });
         });
         $("uxClearLogs")?.addEventListener("click", () => {
             const log = $("uxLogStream");

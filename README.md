@@ -25,12 +25,23 @@ source code to a hosted third party.
 
 ### Scan a repository from the terminal
 
-Install the CLI from GitHub with `pipx`:
+Install the CLI in an isolated environment:
 
 ```bash
-pipx install git+https://github.com/huslenine999/aegis
-aegis scan . --fast
+pipx install aegis-security-console
+aegis demo
+aegis scan .
+aegis start
 ```
+
+Try Aegis on a generated sample app without connecting a repository:
+
+```bash
+aegis demo
+```
+
+The demo writes a tiny intentionally unsafe app under `.aegis/demo-target`,
+runs a quick local scan, and prints the generated report paths.
 
 Run the standard local scan:
 
@@ -43,6 +54,11 @@ Generate SARIF for code-scanning platforms:
 ```bash
 aegis scan . --sarif
 ```
+
+Reports explain what failed, why it matters, how to fix it, whether the finding
+was classified as new, and when suppression is appropriate. The web report also
+offers a share bundle containing HTML, Markdown, SARIF when generated, SBOM,
+raw scanner JSON, suppressions, and the scan manifest.
 
 Exit codes:
 
@@ -93,9 +109,9 @@ aegis start --no-open
 
 | Preset | Intended use | Included checks |
 | --- | --- | --- |
-| Quick | Local feedback | Fast SAST and signature checks |
-| Standard | Pull requests and routine audits | Static analysis, dependencies, secrets, and malware |
-| Deep | Release and exposure review | Standard checks plus sandbox execution, DAST, and container scanning |
+| Quick | Local/dev feedback | Fast SAST and signature checks |
+| Standard | PR gate | Static analysis, dependencies, secrets, and malware |
+| Deep | Release audit | Standard checks plus sandbox execution, DAST, and container scanning |
 
 ## Scanner coverage
 
@@ -350,7 +366,7 @@ git diff --check
 
 Current baseline:
 
-- Python: **120 passing tests**
+- Python: **124 passing tests**
 - Playwright/axe: **6 passing browser and accessibility tests**
 
 The intentionally vulnerable demo routes are disabled by default. Enable them
@@ -367,7 +383,6 @@ Docker deployment rehearsal and backup/restore drill.
 
 Before operating it as a public multi-tenant SaaS:
 
-- introduce versioned database migrations;
 - move generated artifacts to project/run-scoped object storage;
 - add MFA, password reset, account disablement, and session revocation;
 - replace broad GitHub OAuth scope with a fine-grained GitHub App;

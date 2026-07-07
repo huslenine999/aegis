@@ -180,6 +180,20 @@ def test_database_initialization_preserves_existing_rules(tmp_path, monkeypatch)
     assert count == 1
 
 
+def test_database_initialization_records_schema_migration(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "aegis.db")
+
+    database.initialize_database(reset=True)
+    database.initialize_database()
+
+    with database.get_connection() as connection:
+        rows = connection.execute(
+            "SELECT version, name FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    assert rows == [(database.CURRENT_SCHEMA_VERSION, "initial_schema")]
+
+
 def test_completed_job_metadata_is_bounded_and_expires(monkeypatch):
     class RecordingRedis:
         def __init__(self):

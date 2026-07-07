@@ -1,6 +1,5 @@
 import os
 import re
-import subprocess
 import sys
 import time
 import random
@@ -88,6 +87,12 @@ from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
     get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
+)
+from reporting import (
+    build_report_bundle,
+    calculate_exploitability_score,
+    generate_fallback_tree as generate_project_fallback_tree,
+    load_dependency_tree,
 )
 
 validate_runtime_configuration()
@@ -198,147 +203,8 @@ def save_waf_rules_to_db(rules):
     finally:
         conn.close()
 
-def extract_json_values(data):
-    if isinstance(data, dict):
-        parts = []
-        for k, v in data.items():
-            parts.append(str(k))
-            parts.append(extract_json_values(v))
-        return " ".join(parts)
-    elif isinstance(data, list):
-        return " ".join(extract_json_values(item) for item in data)
-    else:
-        return str(data)
-
-def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
-    def read_json_safe(p):
-        if p.exists():
-            try:
-                return json.loads(p.read_text())
-            except Exception:
-                pass
-        return None
-
-    ruff = read_json_safe(scans_dir / "ruff-report.json")
-    semgrep = read_json_safe(scans_dir / "semgrep-report.json")
-    safety = read_json_safe(scans_dir / "safety-report.json")
-    trivy = read_json_safe(scans_dir / "trivy-report.json")
-    secrets = read_json_safe(scans_dir / "secrets-report.json")
-    yara = read_json_safe(scans_dir / "yara-report.json")
-    clamav = read_json_safe(scans_dir / "clamav-report.json")
-    zap = read_json_safe(scans_dir / "zap-report.json")
-    osv = read_json_safe(scans_dir / "osv-report.json")
-
-    findings = []
-    dast_exposed_multiplier = 1.0
-
-    if ruff and isinstance(ruff, list):
-        for r in ruff:
-            sev = get_ruff_severity(r.get("code", "UNKNOWN"))
-            cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
-            findings.append({"type": "sast", "cvss": cvss})
-
-    if semgrep and isinstance(semgrep, dict):
-        for r in semgrep.get("results", []):
-            sev = r.get("extra", {}).get("severity", "ERROR").upper()
-            cvss = 8.5 if sev == "ERROR" else (5.5 if sev == "WARNING" else 2.0)
-            findings.append({"type": "sast", "cvss": cvss})
-
-    if not osv and safety:
-        vulns = []
-        if isinstance(safety, dict):
-            vulns = safety.get("vulnerabilities", []) or safety.get("results", [])
-        elif isinstance(safety, list):
-            vulns = safety
-        for v in vulns:
-            findings.append({"type": "sca", "cvss": 6.5})
-
-    if osv and isinstance(osv, list):
-        for vuln in osv:
-            cvss = vuln.get("cvss") or 6.5
-            findings.append({"type": "sca", "cvss": cvss})
-
-    if trivy and isinstance(trivy, dict):
-        for res in trivy.get("Results", []):
-            for v in res.get("Vulnerabilities", []) or []:
-                sev = v.get("Severity", "LOW").upper()
-                cvss = 9.8 if sev == "CRITICAL" else (8.0 if sev == "HIGH" else (5.0 if sev == "MEDIUM" else 2.0))
-                findings.append({"type": "container", "cvss": cvss})
-
-    if secrets and isinstance(secrets, dict):
-        for filename, file_secrets in secrets.get("results", {}).items():
-            for secret in file_secrets:
-                findings.append({"type": "secrets", "cvss": 8.5})
-
-    if yara and isinstance(yara, list):
-        for _ in yara:
-            findings.append({"type": "malware", "cvss": 9.0})
-
-    if clamav and isinstance(clamav, list):
-        for _ in clamav:
-            findings.append({"type": "malware", "cvss": 9.0})
-
-    if zap and isinstance(zap, list):
-        exposed_count = len([z for z in zap if z.get("status") == "EXPOSED"])
-        if exposed_count > 0:
-            dast_exposed_multiplier = 1.5
-        for z in zap:
-            if z.get("status") == "EXPOSED":
-                findings.append({"type": "dast", "cvss": 8.5})
-
-    if not findings:
-        return 0.0
-
-    weighted_sum = 0.0
-    weights = {
-        "sast": 1.0,
-        "sca": 0.8,
-        "container": 0.9,
-        "secrets": 1.2,
-        "malware": 1.1,
-        "dast": 1.0
-    }
-    
-    for f in findings:
-        w = weights.get(f["type"], 1.0)
-        weighted_sum += f["cvss"] * w
-
-    base_score = min(100.0, weighted_sum * 5.0)
-    score = base_score * dast_exposed_multiplier
-    
-    if waf_enabled:
-        score *= 0.5
-        
-    return round(min(100.0, score), 1)
-
 def generate_fallback_tree():
-    import re
-    req_path = PROJECT_ROOT / "requirements.txt"
-    if not req_path.exists():
-        req_path = Path("requirements.txt")
-    
-    tree = []
-    if req_path.exists():
-        try:
-            content = req_path.read_text()
-            for line in content.splitlines():
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                match = re.match(r'^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)', line)
-                if match:
-                    pkg_name = match.group(1)
-                    pkg_ver = match.group(3)
-                    tree.append({
-                        "key": pkg_name.lower(),
-                        "package_name": pkg_name,
-                        "installed_version": pkg_ver,
-                        "required_version": f"=={pkg_ver}",
-                        "dependencies": []
-                    })
-        except Exception:
-            pass
-    return tree
+    return generate_project_fallback_tree(PROJECT_ROOT)
 
 # Use environment variables for secrets. The console does not ship fallback
 # application secrets; demo-only credentials live in app/demo_lab.py.
@@ -597,12 +463,29 @@ async def complete_setup(request: Request):
         principal = complete_initial_setup(username, password, settings)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    project_id = None
+    if repository:
+        repository_name = repository.rstrip("/").removesuffix(".git").split("/")[-1] or workspace_name
+        try:
+            project_id = create_project(
+                name=repository_name[:128],
+                repository_url=repository,
+                github_full_name="",
+                default_branch="main",
+                scan_preset=scan_preset,
+                user_id=principal.user_id,
+            )
+            record_audit(principal.user_id, "project.created", "project", project_id, {"name": repository_name, "source": "setup"})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     response = JSONResponse(
         {
             "status": "configured",
             "username": principal.username,
             "role": principal.role,
             "csrf_token": principal.csrf_token,
+            "project_id": project_id,
+            "next_url": "/projects?welcome=1" if project_id else "/projects?welcome=1&create=1",
         }
     )
     response.set_cookie(
@@ -1161,6 +1044,22 @@ def download_sbom():
         filename="cyclonedx-sbom.json"
     )
 
+
+@app.get("/download-report-bundle", dependencies=[Depends(require_role("viewer"))])
+def download_report_bundle():
+    report_path = SCANS_DIR / "report.html"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report bundle is not available until a scan has completed.")
+    bundle = build_report_bundle(SCANS_DIR)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return Response(
+        content=bundle,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename=aegis-report-bundle-{timestamp}.zip"
+        },
+    )
+
 @app.post("/toggle-waf", dependencies=[Depends(require_access("admin"))])
 def toggle_waf():
     global WAF_ENABLED
@@ -1295,7 +1194,8 @@ def get_scan_results():
         "latest_scan_time": latest_scan_time,
         "report_url": "/report" if latest_report.exists() else None,
         "markdown_url": "/export-dossier" if latest_report.exists() else None,
-        "sbom_url": "/download-sbom" if (SCANS_DIR / "sbom.json").exists() else None
+        "sbom_url": "/download-sbom" if (SCANS_DIR / "sbom.json").exists() else None,
+        "bundle_url": "/download-report-bundle" if latest_report.exists() else None
     }
 
 @app.get("/get-dependency-graph", dependencies=[Depends(require_role("viewer"))])
@@ -1341,22 +1241,7 @@ def get_dependency_graph():
         except Exception:
             pass
 
-    raw_tree = []
-    try:
-        python_bin = sys.executable
-        pipdeptree_bin = Path(python_bin).parent / "pipdeptree"
-        if not pipdeptree_bin.exists():
-            pipdeptree_cmd = [python_bin, "-m", "pipdeptree", "--json-tree"]
-        else:
-            pipdeptree_cmd = [str(pipdeptree_bin), "--json-tree"]
-        
-        result = subprocess.run(pipdeptree_cmd, capture_output=True, text=True, check=False)
-        if result.returncode == 0:
-            raw_tree = json.loads(result.stdout)
-        else:
-            raw_tree = generate_fallback_tree()
-    except Exception:
-        raw_tree = generate_fallback_tree()
+    raw_tree = load_dependency_tree(PROJECT_ROOT)
 
     nodes = {}
     links = []

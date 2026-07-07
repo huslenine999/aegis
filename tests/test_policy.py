@@ -26,6 +26,10 @@ def test_analyze_ruff_fail():
     result = analyze_ruff(report)
     assert result["status"] == "FAIL"
     assert result["blocking_issues"] == 1
+    finding = result["examples"][0]
+    assert "Why it matters" not in finding["why_it_matters"]
+    assert "exec" in finding["why_it_matters"].lower()
+    assert "suppression_example" in finding
 
 def test_analyze_safety_fail():
     # Mocking safety report format
@@ -117,3 +121,34 @@ def test_html_report_escapes_untrusted_finding_content(tmp_path):
     rendered = html_report.read_text()
     assert payload not in rendered
     assert "&lt;script&gt;window.reportCompromised=true&lt;/script&gt;" in rendered
+
+
+def test_reports_include_remediation_and_copyable_fix(tmp_path):
+    html_report = tmp_path / "report.html"
+    markdown_report = tmp_path / "report.md"
+    results = [
+        analyze_ruff([
+            {
+                "code": "S307",
+                "filename": "app.py",
+                "location": {"row": 7},
+                "message": "Use of possibly insecure function; consider using ast.literal_eval",
+            }
+        ])
+    ]
+
+    generate_reports(
+        results,
+        "BLOCKED",
+        "Blocking security issues found by: Ruff (SAST)",
+        html_path=html_report,
+        md_path=markdown_report,
+    )
+
+    html = html_report.read_text()
+    markdown = markdown_report.read_text()
+    assert "Why it matters" in html
+    assert "Copy fix" in html
+    assert "ast.literal_eval" in html
+    assert "## Finding Guidance" in markdown
+    assert "Safe to suppress" in markdown

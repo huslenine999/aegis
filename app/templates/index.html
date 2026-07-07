@@ -870,7 +870,7 @@
             }
         }
     </style>
-    <link rel="stylesheet" href="/static/enhanced-dashboard.css?v=2.5.2">
+    <link rel="stylesheet" href="/static/enhanced-dashboard.css?v=2.5.3">
 </head>
 <body class="view-simple">
     <a class="skip-link" href="#workbench-main">Skip to workbench content</a>
@@ -979,20 +979,33 @@
                 </header>
 
                 <main id="workbench-main" class="workbench-content" tabindex="-1">
-            <header class="modern-hero">
-                <div>
+            <header class="modern-hero overview-hero">
+                <div class="overview-hero-copy">
                     <span class="sr-only">Project Security Dashboard</span>
                     <div class="modern-kicker"><span></span> Security intelligence / Local environment</div>
-                    <h1>Know what ships.<br><em>Stop what shouldn’t.</em></h1>
-                    <p>A focused security workbench for scanning code, resolving exposure, and making defensible deployment decisions.</p>
+                    <h1>Security overview</h1>
+                    <p>Current release gate, top risks, and the next action for this workspace.</p>
                 </div>
-                <div class="modern-actions">
-                    <select id="uxScanTarget" class="modern-select" aria-label="Scan target">
-                        <option value="vulnerable">Vulnerable demo target</option>
-                        <option value="secure">Secure demo target</option>
-                    </select>
-                    <button id="uxScanBtn" class="modern-btn primary" type="button">Run Audit</button>
-                    <button id="uxUploadBtn" class="modern-btn" type="button">Upload Python</button>
+                <div class="overview-command-panel" aria-label="Workspace actions">
+                    <div class="overview-status-line">
+                        <span id="uxOverviewDecision" class="overview-decision neutral">Not evaluated</span>
+                        <span id="uxOverviewUpdated">No scan yet</span>
+                    </div>
+                    <div class="overview-stat-grid" aria-label="Current security summary">
+                        <div><span>Findings</span><strong id="uxOverviewFindings">0</strong></div>
+                        <div><span>Blockers</span><strong id="uxOverviewBlockers">0</strong></div>
+                        <div><span>Coverage</span><strong><span id="uxOverviewScanners">0</span><small>/7</small></strong></div>
+                    </div>
+                    <p id="uxOverviewNextStep" class="overview-next-step">Run an audit to generate a release decision.</p>
+                    <div class="modern-actions overview-actions">
+                        <select id="uxScanTarget" class="modern-select" aria-label="Scan target">
+                            <option value="vulnerable">Vulnerable demo target</option>
+                            <option value="secure">Secure demo target</option>
+                        </select>
+                        <button id="uxScanBtn" class="modern-btn primary" type="button">Run Audit</button>
+                        <button id="uxUploadBtn" class="modern-btn" type="button">Upload Python</button>
+                        <a class="modern-btn" href="/projects">Projects</a>
+                    </div>
                 </div>
             </header>
 
@@ -1026,9 +1039,11 @@
                         <div id="uxVerdict" class="modern-verdict neutral">No Scan Yet</div>
                         <div id="uxVerdictReason" class="modern-muted">Run an audit to generate a deployment decision.</div>
                         <div id="uxBlockedBy" class="decision-reasons"></div>
+                        <div id="uxOverviewTopFindings" class="overview-top-findings empty-state">Top findings appear here after a scan.</div>
                         <div class="decision-actions">
                             <button class="modern-btn primary" type="button" data-go-tab="findings">Review findings</button>
                             <a class="modern-btn" href="/report">Open evidence</a>
+                            <a id="uxBundleLink" class="modern-btn" href="/download-report-bundle">Share bundle</a>
                         </div>
                     </article>
 
@@ -1174,8 +1189,9 @@
                 <div class="modern-report-grid">
                     <a class="modern-report-action" href="/report"><span>01</span><strong>HTML report</strong><small>Interactive assessment for review</small><b>Open ↗</b></a>
                     <a class="modern-report-action" href="/export-dossier"><span>02</span><strong>Security dossier</strong><small>Portable plain-text evidence</small><b>Download ↓</b></a>
-                    <a class="modern-report-action" href="/download-sbom"><span>03</span><strong>Software bill of materials</strong><small>Machine-readable dependency inventory</small><b>Download ↓</b></a>
-                    <button id="uxCopyReport" class="modern-report-action" type="button"><span>04</span><strong>Report reference</strong><small>Copy the latest evidence URL</small><b id="uxCopyReportLabel">Copy link</b></button>
+                    <a class="modern-report-action" href="/download-sbom"><span>03</span><strong>SBOM</strong><small>Machine-readable dependency inventory</small><b>Download ↓</b></a>
+                    <a id="uxReportBundleAction" class="modern-report-action bundle-action" href="/download-report-bundle"><span>04</span><strong>Share bundle</strong><small>HTML, Markdown, SARIF, SBOM, raw JSON, and manifest</small><b>Download ↓</b></a>
+                    <button id="uxCopyReport" class="modern-report-action" type="button"><span>05</span><strong>Report reference</strong><small>Copy the latest evidence URL</small><b id="uxCopyReportLabel">Copy link</b></button>
                 </div>
             </div>
 
@@ -3963,6 +3979,6 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             }
         }
     </script>
-    <script src="/static/enhanced-dashboard.js?v=2.5.2"></script>
+    <script src="/static/enhanced-dashboard.js?v=2.5.3"></script>
 </body>
 </html>

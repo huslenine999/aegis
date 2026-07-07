@@ -11,6 +11,8 @@ docker compose up --build -d
 
 Caddy obtains TLS certificates and is the only publicly exposed service.
 PostgreSQL and Redis remain on the internal Compose network.
+The dashboard applies versioned database migrations at startup and records
+completed versions in `schema_migrations`.
 
 For a published release image:
 

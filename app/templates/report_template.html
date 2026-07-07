@@ -1055,6 +1055,59 @@
             padding-bottom: 3px;
         }
 
+        .report-review-strip {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 0.75fr));
+            margin: 24px 0 12px;
+            overflow: hidden;
+            border: 1px solid var(--report-line);
+            border-radius: 7px;
+            background: var(--bg-surface);
+        }
+
+        .report-review-card {
+            display: grid;
+            min-height: 118px;
+            align-content: center;
+            gap: 8px;
+            padding: 18px;
+            border-right: 1px solid var(--report-line);
+        }
+
+        .report-review-card:last-child {
+            border-right: 0;
+        }
+
+        .report-review-card span {
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 8px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .report-review-card strong {
+            color: var(--text-main);
+            font-size: 28px;
+            font-weight: 500;
+            line-height: 1;
+        }
+
+        .report-review-card.status-blocked strong {
+            color: var(--danger);
+        }
+
+        .report-review-card.status-passed strong {
+            color: var(--primary);
+        }
+
+        .report-review-card p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
         body.report-page .decision-banner {
             min-height: 220px;
             box-sizing: border-box;
@@ -1313,6 +1366,76 @@
             font-size: 9px;
         }
 
+        .finding-guidance-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid var(--report-line);
+        }
+
+        .finding-guidance-card {
+            min-width: 0;
+            padding: 12px;
+            border: 1px solid var(--report-line);
+            border-radius: 7px;
+            background: rgba(9, 11, 9, 0.58);
+        }
+
+        .finding-guidance-card.wide {
+            grid-column: 1 / -1;
+        }
+
+        .finding-guidance-card span {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 8px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        .finding-guidance-card p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .fix-suggestion-card {
+            display: grid;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .fix-suggestion-card pre,
+        .suppression-example pre {
+            white-space: pre-wrap;
+            margin: 0;
+            padding: 12px;
+            overflow-x: auto;
+            border: 1px solid var(--report-line);
+            border-radius: 7px;
+            background: rgba(0, 0, 0, 0.25);
+            color: var(--text-main);
+            font-family: var(--report-mono);
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .suppression-example {
+            margin-top: 10px;
+        }
+
+        .suppression-example summary {
+            color: var(--primary);
+            cursor: pointer;
+            font-family: var(--report-mono);
+            font-size: 10px;
+        }
+
         body.report-page .explainer-box {
             border: 1px solid rgba(255, 181, 71, 0.22) !important;
             border-radius: 8px;
@@ -1360,6 +1483,18 @@
 
             .report-heading-actions {
                 flex-wrap: wrap;
+            }
+
+            .report-review-strip {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .report-review-card:nth-child(2) {
+                border-right: 0;
+            }
+
+            .report-review-card:nth-child(-n+2) {
+                border-bottom: 1px solid var(--report-line);
             }
 
             body.report-page .metrics-grid {
@@ -1419,6 +1554,24 @@
 
             body.report-page .metrics-grid {
                 grid-template-columns: 1fr !important;
+            }
+
+            .report-review-strip {
+                grid-template-columns: 1fr;
+            }
+
+            .report-review-card,
+            .report-review-card:nth-child(2) {
+                border-right: 0;
+                border-bottom: 1px solid var(--report-line);
+            }
+
+            .report-review-card:last-child {
+                border-bottom: 0;
+            }
+
+            .finding-guidance-grid {
+                grid-template-columns: 1fr;
             }
 
             body.report-page .metric-card {
@@ -1485,10 +1638,12 @@
             }
 
             body.report-page .decision-banner,
+            .report-review-strip,
             body.report-page .metrics-grid,
             body.report-page .terminal-panel,
             body.report-page .tool-panel,
-            body.report-page .finding-item {
+            body.report-page .finding-item,
+            .finding-guidance-card {
                 break-inside: avoid;
                 border-color: #bbb !important;
                 background: #fff !important;
@@ -1528,17 +1683,47 @@
     </nav>
 
     <main id="report-content" class="container" tabindex="-1">
+        {% set report_total_issues = namespace(val=0) %}
+        {% set report_total_blocking = namespace(val=0) %}
+        {% for r in results %}
+            {% set report_total_issues.val = report_total_issues.val + r.total_issues %}
+            {% set report_total_blocking.val = report_total_blocking.val + r.blocking_issues %}
+        {% endfor %}
         <header class="report-heading">
             <div>
                 <div class="report-kicker"><span></span> Evidence package / Local workspace</div>
                 <h1>Security assessment</h1>
-                <p>Deployment decision, scanner evidence, and remediation detail compiled into one reviewable artifact.</p>
+                <p>Release decision, scanner evidence, and remediation guidance packaged for review and sharing.</p>
             </div>
             <div class="report-heading-actions">
                 <button id="printReportBtn" class="btn report-print-btn" type="button">Print / Save PDF</button>
                 <a href="/export-dossier" class="btn">Download dossier</a>
+                <a href="/download-report-bundle" class="btn">Download share bundle</a>
             </div>
         </header>
+
+        <section class="report-review-strip reveal" aria-label="Report review summary">
+            <article class="report-review-card {% if final_status == 'BLOCKED' %}status-blocked{% else %}status-passed{% endif %}">
+                <span>Release gate</span>
+                <strong>{% if final_status == 'BLOCKED' %}Blocked{% else %}Passed{% endif %}</strong>
+                <p>{{ reason }}</p>
+            </article>
+            <article class="report-review-card">
+                <span>Blocking issues</span>
+                <strong>{{ report_total_blocking.val }}</strong>
+                <p>Must be resolved or accepted before release.</p>
+            </article>
+            <article class="report-review-card">
+                <span>Total findings</span>
+                <strong>{{ report_total_issues.val }}</strong>
+                <p>Across {{ results | length }} scanner modules.</p>
+            </article>
+            <article class="report-review-card">
+                <span>Exploitability</span>
+                <strong>{{ exploitability_score }}%</strong>
+                <p>{% if exploitability_score > 75 %}High exposure{% elif exploitability_score > 40 %}Material exposure{% else %}Low exposure{% endif %}</p>
+            </article>
+        </section>
 
         <!-- Decision Banner -->
         <div class="decision-banner {% if final_status == 'BLOCKED' %}status-blocked{% else %}status-passed{% endif %} reveal">
@@ -1674,7 +1859,7 @@
                                     {{ example.severity }}
                                 </span>
                                 <span class="finding-title">
-                                    {% if result.tool == 'Bandit' %}
+                                    {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
                                         {{ example.issue_text }}
                                     {% elif result.tool == 'Semgrep' %}
                                         {{ example.issue_text }}
@@ -1697,7 +1882,7 @@
                                 {% endif %}
                             </div>
                             <div class="finding-desc" data-tool="{{ result.tool }}">
-                                {% if result.tool == 'Bandit' %}
+                                {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
                                     <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Source Code Violation detected.</span>
                                 {% elif result.tool == 'Semgrep' %}
                                     <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Semgrep Pattern Match.</span>
@@ -1722,7 +1907,7 @@
                                 {% endif %}
                             </div>
                             <div class="finding-location">
-                                {% if result.tool == 'Bandit' %}
+                                {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
                                 {% elif result.tool == 'Semgrep' %}
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
@@ -1738,6 +1923,41 @@
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }}
                                 {% elif result.tool == 'OWASP ZAP DAST' %}
                                     <span data-i18n="target_route_label">> TARGET_ROUTE:</span> <code>{{ example.route }}</code>
+                                {% endif %}
+                            </div>
+                            <div class="finding-guidance-grid" aria-label="Finding guidance">
+                                <div class="finding-guidance-card">
+                                    <span>What failed</span>
+                                    <p>{{ example.test_id or example.id or example.vulnerability_id or example.rule or example.type or result.tool }}</p>
+                                </div>
+                                <div class="finding-guidance-card">
+                                    <span>Why it matters</span>
+                                    <p>{{ example.why_it_matters }}</p>
+                                </div>
+                                <div class="finding-guidance-card wide">
+                                    <span>How to fix</span>
+                                    <p>{{ example.remediation }}</p>
+                                </div>
+                                <div class="finding-guidance-card">
+                                    <span>New or pre-existing</span>
+                                    <p>{{ example.finding_status }}</p>
+                                </div>
+                                <div class="finding-guidance-card">
+                                    <span>Safe to suppress</span>
+                                    <p>{{ example.suppression_guidance }}</p>
+                                </div>
+                                {% if example.fix_suggestion %}
+                                <div class="finding-guidance-card wide fix-suggestion-card">
+                                    <span>Copyable fix</span>
+                                    <button class="btn btn-secondary copy-fix-btn" type="button" data-copy="{{ example.fix_suggestion }}">Copy fix</button>
+                                    <pre><code>{{ example.fix_suggestion }}</code></pre>
+                                </div>
+                                {% endif %}
+                                {% if example.suppression_example %}
+                                <details class="finding-guidance-card wide suppression-example">
+                                    <summary>Suppression example</summary>
+                                    <pre><code>{{ example.suppression_example }}</code></pre>
+                                </details>
                                 {% endif %}
                             </div>
                             <!-- Explainer subtext for dynamic scan findings -->
@@ -2328,6 +2548,19 @@
     </script>
     <script>
         document.getElementById('printReportBtn')?.addEventListener('click', () => window.print());
+        document.querySelectorAll('.copy-fix-btn').forEach((button) => {
+            button.addEventListener('click', async () => {
+                const original = button.textContent;
+                try {
+                    await navigator.clipboard.writeText(button.dataset.copy || '');
+                    button.textContent = 'Copied';
+                    window.setTimeout(() => { button.textContent = original; }, 1600);
+                } catch {
+                    button.textContent = 'Copy failed';
+                    window.setTimeout(() => { button.textContent = original; }, 1600);
+                }
+            });
+        });
         document.querySelector('.report-skip-link')?.addEventListener('click', () => {
             window.setTimeout(() => document.getElementById('report-content')?.focus(), 0);
         });

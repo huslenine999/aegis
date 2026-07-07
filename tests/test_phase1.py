@@ -1,4 +1,5 @@
 import json
+import zipfile
 from pathlib import Path
 import pytest
 from policy_engine import (
@@ -130,3 +131,31 @@ def test_download_sbom_route():
     cd = response.headers.get('content-disposition', '') or response.headers.get('Content-Disposition', '')
     assert 'attachment' in cd
     assert 'cyclonedx-sbom.json' in cd
+
+
+def test_download_report_bundle_route(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    import app.main as app_main
+
+    (tmp_path / "report.html").write_text("<html>Aegis</html>")
+    (tmp_path / "report.md").write_text("# Aegis\n")
+    (tmp_path / "sbom.json").write_text("{}")
+    (tmp_path / "scan-manifest.json").write_text("{}")
+    (tmp_path / "ruff-report.json").write_text("[]")
+    monkeypatch.setattr(app_main, "SCANS_DIR", tmp_path)
+
+    client = TestClient(app)
+    response = client.get("/download-report-bundle")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    bundle_path = tmp_path / "bundle.zip"
+    bundle_path.write_bytes(response.content)
+    with zipfile.ZipFile(bundle_path) as archive:
+        names = set(archive.namelist())
+    assert "report.html" in names
+    assert "report.md" in names
+    assert "sbom.json" in names
+    assert "scan-manifest.json" in names
+    assert "raw/ruff-report.json" in names
+    assert "bundle-manifest.json" in names

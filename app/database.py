@@ -3,8 +3,9 @@ import sqlite3
 import threading
 import json
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import redis
 
@@ -136,13 +137,42 @@ DEFAULT_WAF_RULES = [
 ]
 
 
-def initialize_database(*, reset: bool = False):
-    if not USING_POSTGRES:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_connection()
-    cursor = conn.cursor()
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    apply: Callable[[Any], None]
 
-    user_id = "BIGSERIAL PRIMARY KEY" if USING_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+def _identity_id_type() -> str:
+    return "BIGSERIAL PRIMARY KEY" if USING_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+
+def _create_schema_migrations_table(cursor) -> None:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+    """)
+
+
+def _applied_migration_versions(cursor) -> set[int]:
+    _create_schema_migrations_table(cursor)
+    rows = cursor.execute("SELECT version FROM schema_migrations").fetchall()
+    return {int(row[0]) for row in rows}
+
+
+def _record_migration(cursor, migration: Migration) -> None:
+    cursor.execute(
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+        (migration.version, migration.name, datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def _migration_001_initial_schema(cursor) -> None:
+    user_id = _identity_id_type()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS users (
             id {user_id},
@@ -152,15 +182,7 @@ def initialize_database(*, reset: bool = False):
         )
     """)
 
-    if reset:
-        cursor.execute("DELETE FROM users")
-    if cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO users (username, role, api_key) VALUES (?, ?, ?)",
-            DEFAULT_USERS,
-        )
-
-    waf_id = "BIGSERIAL PRIMARY KEY" if USING_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    waf_id = _identity_id_type()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS waf_rules (
             id {waf_id},
@@ -170,15 +192,7 @@ def initialize_database(*, reset: bool = False):
         )
     """)
 
-    if reset:
-        cursor.execute("DELETE FROM waf_rules")
-    if cursor.execute("SELECT COUNT(*) FROM waf_rules").fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO waf_rules (pattern, description, enabled) VALUES (?, ?, ?)",
-            DEFAULT_WAF_RULES,
-        )
-
-    auth_id = "BIGSERIAL PRIMARY KEY" if USING_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    auth_id = _identity_id_type()
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS auth_users (
             id {auth_id},
@@ -294,6 +308,53 @@ def initialize_database(*, reset: bool = False):
             created_at TEXT NOT NULL
         )
     """)
+
+
+MIGRATIONS = (
+    Migration(1, "initial_schema", _migration_001_initial_schema),
+)
+
+CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+
+def run_migrations(cursor) -> list[Migration]:
+    applied_versions = _applied_migration_versions(cursor)
+    applied_now = []
+    for migration in MIGRATIONS:
+        if migration.version in applied_versions:
+            continue
+        migration.apply(cursor)
+        _record_migration(cursor, migration)
+        applied_now.append(migration)
+    return applied_now
+
+
+def _seed_default_rows(cursor, *, reset: bool = False) -> None:
+    if reset:
+        cursor.execute("DELETE FROM users")
+    if cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+        cursor.executemany(
+            "INSERT INTO users (username, role, api_key) VALUES (?, ?, ?)",
+            DEFAULT_USERS,
+        )
+
+    if reset:
+        cursor.execute("DELETE FROM waf_rules")
+    if cursor.execute("SELECT COUNT(*) FROM waf_rules").fetchone()[0] == 0:
+        cursor.executemany(
+            "INSERT INTO waf_rules (pattern, description, enabled) VALUES (?, ?, ?)",
+            DEFAULT_WAF_RULES,
+        )
+
+
+def initialize_database(*, reset: bool = False):
+    if not USING_POSTGRES:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    run_migrations(cursor)
+    _seed_default_rows(cursor, reset=reset)
 
     conn.commit()
     conn.close()

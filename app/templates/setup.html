@@ -8,9 +8,9 @@
   <style>
     :root { font-family: system-ui, sans-serif; color-scheme: dark; }
     body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #060a07; color: #e8f5e9; }
-    main { width: min(34rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
+    main { width: min(38rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
     h1 { margin-top: 0; color: #3dfb57; }
-    .steps { color: #aab8ab; }
+    .steps, .hint { color: #aab8ab; }
     label, input, select, button { display: block; width: 100%; box-sizing: border-box; }
     label { margin: 1rem 0 .35rem; font-weight: 600; }
     input, select { padding: .75rem; border: 1px solid #687a6b; background: #050805; color: inherit; }
@@ -22,22 +22,23 @@
 </head>
 <body>
   <main>
-    <p class="steps">First-run setup · one step</p>
+    <p class="steps">First-run setup · guided first scan</p>
     <h1>Configure Aegis</h1>
-    <p>Claim the administrator account and choose the initial workspace defaults.</p>
+    <p>Claim the administrator account, add the first repository, then run the first scan from Projects.</p>
+    <p class="hint">To try Aegis without a repository, run <code>aegis demo</code> in a terminal.</p>
     <form id="setup-form">
       <label for="workspace-name">Workspace name</label>
       <input id="workspace-name" value="My security workspace" maxlength="128" required autofocus>
 
       <label for="repository">Repository URL or path</label>
       <input id="repository" placeholder="https://github.com/organization/project">
-      <small>This is stored as the workspace’s default scan target reference.</small>
+      <small>This creates your first project automatically. You can leave it blank and create one next.</small>
 
       <label for="scan-preset">Default scan depth</label>
       <select id="scan-preset">
-        <option value="quick">Quick — local checks</option>
-        <option value="standard" selected>Standard — recommended</option>
-        <option value="deep">Deep — all available scanners</option>
+        <option value="quick">Quick — fastest local feedback</option>
+        <option value="standard" selected>Standard — recommended PR gate</option>
+        <option value="deep">Deep — release audit</option>
       </select>
 
       <label for="username">Administrator username</label>
@@ -84,7 +85,8 @@
         })
       });
       if (response.ok) {
-        window.location.replace("/");
+        const payload = await response.json();
+        window.location.replace(payload.next_url || "/projects?welcome=1");
         return;
       }
       const payload = await response.json().catch(() => ({}));

@@ -97,6 +97,152 @@ def get_ruff_severity(code: str) -> str:
     return "LOW"
 
 
+def _format_dependency_fix(package_name: str | None, fixed_versions: Any = None) -> str:
+    package = package_name or "package"
+    if isinstance(fixed_versions, list):
+        fixed = next((str(item) for item in fixed_versions if item), "")
+    else:
+        fixed = str(fixed_versions or "").strip()
+    if fixed and fixed not in {"None", "[]"}:
+        return f"python -m pip install --upgrade \"{package}>={fixed.split(',')[0].strip()}\""
+    return f"python -m pip install --upgrade {package}"
+
+
+def _suppression_example(tool: str, issue: Dict[str, Any]) -> str:
+    rule = (
+        issue.get("test_id")
+        or issue.get("id")
+        or issue.get("vulnerability_id")
+        or issue.get("rule")
+        or issue.get("type")
+        or ""
+    )
+    path = issue.get("filename") or issue.get("path") or "requirements.txt"
+    return "\n".join([
+        "scan:",
+        "  suppressions:",
+        f"    - tool: {tool}",
+        f"      rule: {rule}",
+        f"      path: {path}",
+        "      reason: Reviewed and accepted by the security owner.",
+    ])
+
+
+def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(issue)
+    rule = str(issue.get("test_id") or issue.get("id") or issue.get("vulnerability_id") or issue.get("rule") or "").upper()
+    package_name = issue.get("package_name")
+
+    guidance = {
+        "why": "This finding can weaken the security gate and should be reviewed before release.",
+        "fix": "Review the affected code or dependency, apply the smallest safe change, and rerun Aegis.",
+        "suggestion": "aegis scan . --fast",
+    }
+
+    if tool == "Ruff (SAST)":
+        guidance.update({
+            "why": "A Python security rule matched source code that may allow unsafe runtime behavior.",
+            "fix": "Replace the risky API or add input validation before user-controlled data reaches it.",
+            "suggestion": "# Fix the flagged Python line, then rerun\naegis scan . --fast",
+        })
+        ruff_guidance = {
+            "S307": {
+                "why": "Using eval can execute attacker-controlled Python code.",
+                "fix": "Replace eval with ast.literal_eval for literals, or use an explicit parser/allowlist.",
+                "suggestion": "import ast\nvalue = ast.literal_eval(user_input)",
+            },
+            "S102": {
+                "why": "exec can run arbitrary Python code if input is influenced by a user.",
+                "fix": "Remove dynamic execution and dispatch through explicit functions or commands.",
+                "suggestion": "handlers = {\"status\": show_status}\nhandlers[action]()",
+            },
+            "S602": {
+                "why": "shell=True lets shell metacharacters change the command being executed.",
+                "fix": "Pass command arguments as a list and keep shell=False.",
+                "suggestion": "subprocess.run([\"git\", \"status\"], check=True, shell=False)",
+            },
+            "S608": {
+                "why": "String-built SQL can let attackers change the query.",
+                "fix": "Use parameterized queries instead of concatenating SQL.",
+                "suggestion": "cursor.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))",
+            },
+            "S506": {
+                "why": "Unsafe YAML loading can construct arbitrary Python objects.",
+                "fix": "Use yaml.safe_load for untrusted YAML.",
+                "suggestion": "data = yaml.safe_load(raw_yaml)",
+            },
+            "S104": {
+                "why": "Binding to all interfaces can expose a development service outside localhost.",
+                "fix": "Bind local-only services to 127.0.0.1, or require auth/TLS before public exposure.",
+                "suggestion": "uvicorn.run(app, host=\"127.0.0.1\", port=5001)",
+            },
+            "S113": {
+                "why": "HTTP calls without timeouts can hang workers and exhaust resources.",
+                "fix": "Set a bounded connect/read timeout.",
+                "suggestion": "requests.get(url, timeout=10)",
+            },
+        }
+        guidance.update(ruff_guidance.get(rule, {}))
+    elif tool == "Semgrep":
+        check_id = str(issue.get("test_id") or "").lower()
+        guidance.update({
+            "why": "A Semgrep rule matched a risky source pattern that may become exploitable in production.",
+            "fix": "Follow the rule message, validate untrusted input, and prefer framework-safe APIs.",
+            "suggestion": "# Inspect the matched line, apply the rule-specific fix, then rerun\naegis scan . --fast",
+        })
+        if "sql" in check_id:
+            guidance.update({
+                "why": "The matched code appears to build SQL from dynamic input.",
+                "fix": "Use parameterized queries or an ORM query builder.",
+                "suggestion": "cursor.execute(\"SELECT * FROM users WHERE name = ?\", (name,))",
+            })
+        elif "xss" in check_id:
+            guidance.update({
+                "why": "The matched code may render untrusted HTML or script content.",
+                "fix": "Escape output by default and only allow sanitized HTML from trusted sources.",
+                "suggestion": "{{ user_value | e }}",
+            })
+    elif tool in {"Safety", "OSV Dependency Audit"}:
+        fixed_versions = issue.get("fixed_versions") or issue.get("fixed") or issue.get("version")
+        guidance.update({
+            "why": "The dependency version is associated with a published vulnerability advisory.",
+            "fix": "Upgrade to a fixed version, verify compatibility, and commit the lockfile or requirements change.",
+            "suggestion": _format_dependency_fix(package_name, fixed_versions),
+        })
+    elif tool == "Trivy":
+        guidance.update({
+            "why": "The container or OS package has a known vulnerability in the scanned image.",
+            "fix": "Upgrade the base image or package to the fixed version and rebuild the image.",
+            "suggestion": f"# Update {package_name or 'the affected package'} to {issue.get('fixed_version') or 'a fixed version'}\ndocker build --pull -t your-image .",
+        })
+    elif tool == "Secrets Scanner":
+        guidance.update({
+            "why": "A plaintext credential can be copied from source history and used outside the application.",
+            "fix": "Revoke and rotate the credential, move it to a secret manager or environment variable, and remove it from history.",
+            "suggestion": "export SERVICE_TOKEN=\"...\"\n# read it with os.environ[\"SERVICE_TOKEN\"]",
+        })
+    elif tool in {"YARA Scanner", "ClamAV"}:
+        guidance.update({
+            "why": "A malware or suspicious-code signature matched the target file.",
+            "fix": "Quarantine the file, inspect its origin, and replace it from a trusted source.",
+            "suggestion": "# Remove the suspicious file and restore from trusted source control\ngit restore path/to/file",
+        })
+    elif tool == "OWASP ZAP DAST":
+        guidance.update({
+            "why": "A dynamic probe reached behavior that appears exposed at runtime.",
+            "fix": "Validate input at the route boundary, enforce authorization, and add regression tests for the payload.",
+            "suggestion": "# Add route validation and rerun a deep scan\naegis scan . --no-docker",
+        })
+
+    enriched.setdefault("finding_status", "Unclassified in this standalone report")
+    enriched["why_it_matters"] = guidance["why"]
+    enriched["remediation"] = guidance["fix"]
+    enriched["fix_suggestion"] = guidance["suggestion"]
+    enriched["suppression_guidance"] = "Suppress only after a named owner verifies the risk is accepted, non-exploitable, or covered by a compensating control."
+    enriched["suppression_example"] = _suppression_example(tool, enriched)
+    return enriched
+
+
 def analyze_ruff(report: Any) -> Dict[str, Any]:
     if report is None or not isinstance(report, list):
         return {
@@ -113,13 +259,13 @@ def analyze_ruff(report: Any) -> Dict[str, Any]:
     for r in results:
         code = r.get("code", "UNKNOWN")
         severity = get_ruff_severity(code)
-        issues.append({
+        issues.append(enrich_finding("Ruff (SAST)", {
             "severity": severity,
             "test_id": code,
             "filename": r.get("filename"),
             "line_number": r.get("location", {}).get("row"),
             "issue_text": r.get("message"),
-        })
+        }))
 
     blocking_issues = [
         issue for issue in issues
@@ -158,14 +304,14 @@ def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
         else:
             mapped_severity = "LOW"
             
-        issues.append({
+        issues.append(enrich_finding("Semgrep", {
             "severity": mapped_severity,
             "test_id": r.get("check_id"),
             "filename": r.get("path"),
             "line_number": r.get("start", {}).get("line"),
             "issue_text": extra.get("message"),
             "code": extra.get("lines"),
-        })
+        }))
 
     blocking_issues = [
         issue for issue in issues
@@ -210,13 +356,13 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
     # Normalize examples for reporting
     normalized_examples = []
     for v in vulnerabilities:
-        normalized_examples.append({
+        normalized_examples.append(enrich_finding("Safety", {
             "package_name": v.get("package_name") or v.get("package"),
             "vulnerability_id": v.get("vulnerability_id") or v.get("advisory"),
             "affected_versions": v.get("affected_versions") or v.get("version"),
             "fixed_versions": v.get("fixed_versions") or v.get("fixed"),
             "description": v.get("description") or v.get("reason", "No description provided."),
-        })
+        }))
 
     return {
         "tool": "Safety",
@@ -240,7 +386,7 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     findings = []
     for f in report:
         cvss_score = f.get("cvss") or 0.0
-        findings.append({
+        findings.append(enrich_finding("OSV Dependency Audit", {
             "severity": "HIGH" if cvss_score >= 7.0 else ("MEDIUM" if cvss_score >= 4.0 else "LOW"),
             "id": f.get("id"),
             "package_name": f.get("package"),
@@ -248,7 +394,7 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "cvss": f.get("cvss"),
             "summary": f.get("summary"),
             "details": f.get("details"),
-        })
+        }))
 
     blocking_issues = [f for f in findings if f["severity"] in {"MEDIUM", "HIGH"}]
 
@@ -276,7 +422,7 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
     for result in report.get("Results", []):
         for vulnerability in result.get("Vulnerabilities", []) or []:
             severity = vulnerability.get("Severity", "").upper()
-            vulnerabilities.append({
+            vulnerabilities.append(enrich_finding("Trivy", {
                 "target": result.get("Target"),
                 "vulnerability_id": vulnerability.get("VulnerabilityID"),
                 "package_name": vulnerability.get("PkgName"),
@@ -284,7 +430,7 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
                 "fixed_version": vulnerability.get("FixedVersion"),
                 "severity": severity,
                 "title": vulnerability.get("Title"),
-            })
+            }))
 
     blocking_issues = [v for v in vulnerabilities if v["severity"] in FAIL_ON_TRIVY_SEVERITIES]
 
@@ -312,12 +458,12 @@ def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
     
     for filename, file_secrets in results.items():
         for secret in file_secrets:
-            findings.append({
+            findings.append(enrich_finding("Secrets Scanner", {
                 "severity": "HIGH",
                 "type": secret.get("type"),
                 "filename": filename,
                 "line_number": secret.get("line_number"),
-            })
+            }))
 
     return {
         "tool": "Secrets Scanner",
@@ -340,13 +486,13 @@ def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     findings = []
     for f in report:
-        findings.append({
+        findings.append(enrich_finding("YARA Scanner", {
             "severity": "HIGH",
             "rule": f.get("rule"),
             "filename": f.get("filename"),
             "description": f.get("description"),
             "author": f.get("author")
-        })
+        }))
 
     return {
         "tool": "YARA Scanner",
@@ -369,12 +515,12 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     findings = []
     for f in report:
-        findings.append({
+        findings.append(enrich_finding("ClamAV", {
             "severity": "HIGH",
             "virus": f.get("virus"),
             "filename": f.get("filename"),
             "description": f.get("description")
-        })
+        }))
 
     return {
         "tool": "ClamAV",
@@ -399,14 +545,14 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     blocking_count = 0
     for f in report:
         is_exposed = f.get("status") == "EXPOSED"
-        findings.append({
+        findings.append(enrich_finding("OWASP ZAP DAST", {
             "severity": "HIGH" if is_exposed else "LOW",
             "vuln_type": f.get("vuln_type"),
             "route": f.get("route"),
             "payload": f.get("payload"),
             "description": f.get("description"),
             "status": f.get("status")
-        })
+        }))
         if is_exposed:
             blocking_count += 1
 
@@ -779,7 +925,49 @@ def generate_reports(
     ]
     for r in results:
         md_lines.append(f"| {r['tool']} | {r['status']} | {r['total_issues']} | {r['blocking_issues']} |")
-    
+
+    md_lines.extend([
+        "",
+        "## Finding Guidance",
+        "",
+        "Each finding below answers what failed, why it matters, how to fix it, whether Aegis can classify it as new, and when suppression is acceptable.",
+    ])
+    for result in results:
+        if not result.get("examples"):
+            continue
+        md_lines.extend(["", f"### {result['tool']}"])
+        for example in result["examples"]:
+            title = (
+                example.get("issue_text")
+                or example.get("summary")
+                or example.get("description")
+                or example.get("title")
+                or example.get("vulnerability_id")
+                or example.get("id")
+                or "Finding"
+            )
+            location = example.get("filename") or example.get("target") or example.get("package_name") or example.get("route") or "N/A"
+            md_lines.extend([
+                "",
+                f"#### {title}",
+                f"- **What failed:** {example.get('test_id') or example.get('id') or example.get('vulnerability_id') or example.get('rule') or result['tool']}",
+                f"- **Location/package:** {location}",
+                f"- **Why it matters:** {example.get('why_it_matters', 'Review before release.')}",
+                f"- **How to fix:** {example.get('remediation', 'Apply the scanner recommendation and rerun Aegis.')}",
+                f"- **New or pre-existing:** {example.get('finding_status', 'Unclassified in this standalone report')}",
+                f"- **Safe to suppress:** {example.get('suppression_guidance', 'Suppress only with documented risk acceptance.')}",
+                "",
+                "```bash",
+                str(example.get("fix_suggestion", "aegis scan . --fast")),
+                "```",
+                "",
+                "Suppression example:",
+                "",
+                "```yaml",
+                str(example.get("suppression_example", "")),
+                "```",
+            ])
+
     md_lines.append("\n---\n*Generated by Aegis Policy Engine*")
     m_path.write_text("\n".join(md_lines))
     print(f"[INFO] Markdown report generated: {m_path}")

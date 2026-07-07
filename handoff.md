@@ -74,6 +74,7 @@ but fully isolated per-run artifact storage remains future work.
 - PostgreSQL-backed users, tokens, projects, memberships, scan histories,
   GitHub connections, notification channels, audit events, WAF rules, and
   application state.
+- Versioned database migrations with recorded applied schema versions.
 - Redis-backed queues, rate limits, live job state, and bounded logs.
 - Caddy reverse proxy with automatic production TLS.
 - Hardened dashboard, worker, PostgreSQL, and Redis Compose topology.
@@ -113,14 +114,13 @@ credential testing.
 
 Before treating Aegis as a public multi-tenant SaaS:
 
-1. Replace startup schema creation with versioned database migrations.
-2. Move generated artifacts to project/run-scoped object storage.
-3. Add MFA, password reset, account disablement, and session revocation.
-4. Replace broad GitHub OAuth repository scope with a fine-grained GitHub App.
-5. Add pull-request checks/comments and webhook automation.
-6. Run load, soak, failover, penetration, and disaster-recovery tests.
-7. Configure external log aggregation, alert rules, and error tracking.
-8. Verify notification retries and provider rate-limit behavior.
+1. Move generated artifacts to project/run-scoped object storage.
+2. Add MFA, password reset, account disablement, and session revocation.
+3. Replace broad GitHub OAuth repository scope with a fine-grained GitHub App.
+4. Add pull-request checks/comments and webhook automation.
+5. Run load, soak, failover, penetration, and disaster-recovery tests.
+6. Configure external log aggregation, alert rules, and error tracking.
+7. Verify notification retries and provider rate-limit behavior.
 
 ## Required production configuration
 
