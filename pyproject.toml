@@ -45,7 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 scanner = [
-  "semgrep==1.163.0",
+  "semgrep==1.168.0",
 ]
 dev = [
   "httpx==0.28.1",
