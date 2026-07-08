@@ -6,6 +6,10 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+try:
+    from .dependencies import discover_dependency_manifests, first_requirements_manifest
+except ImportError:
+    from dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import get_ruff_severity
 
 
@@ -117,14 +121,11 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
 
 
 def generate_fallback_tree(project_root: Path) -> list[dict]:
-    req_path = project_root / "requirements.txt"
-    if not req_path.exists():
-        req_path = Path("requirements.txt")
-
+    requirements_manifest = first_requirements_manifest(discover_dependency_manifests(project_root))
     tree = []
-    if req_path.exists():
+    if requirements_manifest:
         try:
-            content = req_path.read_text()
+            content = requirements_manifest.path.read_text()
             for line in content.splitlines():
                 line = line.strip()
                 if not line or line.startswith("#"):

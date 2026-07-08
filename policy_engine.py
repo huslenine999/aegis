@@ -12,6 +12,8 @@ from typing import Any, Dict, List
 
 from jinja2 import Environment, select_autoescape
 
+from app.dependencies import DependencyManifest, DependencyPackage, discover_dependency_manifests, extract_packages_from_manifest
+
 # Use an explicit scanner directory when provided. Otherwise keep reports in
 # the persistent Aegis data directory used by the dashboard and worker.
 _data_dir = os.environ.get("AEGIS_DATA_DIR")
@@ -227,7 +229,7 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
             "fix": "Quarantine the file, inspect its origin, and replace it from a trusted source.",
             "suggestion": "# Remove the suspicious file and restore from trusted source control\ngit restore path/to/file",
         })
-    elif tool == "OWASP ZAP DAST":
+    elif tool == "Aegis DAST Probe":
         guidance.update({
             "why": "A dynamic probe reached behavior that appears exposed at runtime.",
             "fix": "Validate input at the route boundary, enforce authorization, and add regression tests for the payload.",
@@ -534,7 +536,7 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
 def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     if report is None:
         return {
-            "tool": "OWASP ZAP DAST",
+            "tool": "Aegis DAST Probe",
             "total_issues": 0,
             "blocking_issues": 0,
             "status": "MISSING",
@@ -545,7 +547,7 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     blocking_count = 0
     for f in report:
         is_exposed = f.get("status") == "EXPOSED"
-        findings.append(enrich_finding("OWASP ZAP DAST", {
+        findings.append(enrich_finding("Aegis DAST Probe", {
             "severity": "HIGH" if is_exposed else "LOW",
             "vuln_type": f.get("vuln_type"),
             "route": f.get("route"),
@@ -557,7 +559,7 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             blocking_count += 1
 
     return {
-        "tool": "OWASP ZAP DAST",
+        "tool": "Aegis DAST Probe",
         "total_issues": len(findings),
         "blocking_issues": blocking_count,
         "status": "FAIL" if blocking_count > 0 else "PASS",
@@ -565,31 +567,52 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def generate_cyclonedx_sbom(requirements_path: Path, output_path: Path):
-    import re
+def _normalize_manifests(manifests_or_path: Any) -> list[DependencyManifest]:
+    if manifests_or_path is None:
+        return []
+    if isinstance(manifests_or_path, DependencyManifest):
+        return [manifests_or_path]
+    if isinstance(manifests_or_path, (str, Path)):
+        path = Path(manifests_or_path)
+        ecosystem = "npm" if path.name in {
+            "package.json",
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+        } else "PyPI"
+        packages = tuple(extract_packages_from_manifest(path, path.name, ecosystem)) if path.exists() else ()
+        return [DependencyManifest(path=path, kind=path.name, ecosystem=ecosystem, packages=packages)]
+    return list(manifests_or_path)
+
+
+def _package_purl(package: DependencyPackage) -> str:
+    purl_type = "pypi" if package.ecosystem == "PyPI" else package.ecosystem.lower()
+    base = f"pkg:{purl_type}/{package.name.lower()}"
+    return f"{base}@{package.version}" if package.version else base
+
+
+def generate_cyclonedx_sbom(manifests_or_path: Any, output_path: Path):
     import uuid
     from datetime import datetime
     
     components = []
-    if requirements_path.exists():
-        content = requirements_path.read_text()
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            # Match package==version or package>=version
-            match = re.match(r'^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)', line)
-            if match:
-                pkg_name = match.group(1)
-                pkg_ver = match.group(3)
-                purl = f"pkg:pypi/{pkg_name.lower()}@{pkg_ver}"
-                components.append({
-                    "type": "library",
-                    "name": pkg_name,
-                    "version": pkg_ver,
-                    "purl": purl,
-                    "bom-ref": purl
-                })
+    for manifest in _normalize_manifests(manifests_or_path):
+        for package in manifest.packages:
+            purl = _package_purl(package)
+            component = {
+                "type": "library",
+                "name": package.name,
+                "purl": purl,
+                "bom-ref": purl,
+                "properties": [
+                    {"name": "aegis:manifest", "value": str(manifest.path)},
+                    {"name": "aegis:ecosystem", "value": package.ecosystem},
+                ],
+            }
+            if package.version:
+                component["version"] = package.version
+            components.append(component)
                 
     sbom = {
         "bomFormat": "CycloneDX",
@@ -687,28 +710,21 @@ def parse_cvss_vector(vector_str: str) -> float:
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
 
 def query_osv_vulnerabilities(
-    requirements_path: Path,
+    manifests_or_path: Any,
     *,
     raise_on_error: bool = False,
 ) -> List[Dict[str, Any]]:
     findings = []
     failed_queries = []
-    if not requirements_path.exists():
-        print(f"[WARN] requirements.txt not found at {requirements_path}")
+    packages = [
+        package
+        for manifest in _normalize_manifests(manifests_or_path)
+        for package in manifest.packages
+        if package.version
+    ]
+    if not packages:
+        print("[INFO] No pinned dependency versions found for OSV queries.")
         return findings
-
-    packages = []
-    content = requirements_path.read_text()
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        match = re.match(r'^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)', line)
-        if match:
-            packages.append({
-                "name": match.group(1),
-                "version": match.group(3)
-            })
 
     cache = {}
     if OSV_CACHE_FILE.exists():
@@ -722,9 +738,10 @@ def query_osv_vulnerabilities(
     CACHE_TTL = 86400  # 24 hours
 
     for pkg in packages:
-        pkg_name = pkg["name"]
-        pkg_ver = pkg["version"]
-        cache_key = f"{pkg_name.lower()}@{pkg_ver}"
+        pkg_name = pkg.name
+        pkg_ver = pkg.version
+        ecosystem = pkg.ecosystem
+        cache_key = f"{ecosystem}:{pkg_name.lower()}@{pkg_ver}"
         
         if cache_key in cache:
             entry = cache[cache_key]
@@ -737,7 +754,7 @@ def query_osv_vulnerabilities(
             "version": pkg_ver,
             "package": {
                 "name": pkg_name,
-                "ecosystem": "PyPI"
+                "ecosystem": ecosystem
             }
         }
         
@@ -775,6 +792,7 @@ def query_osv_vulnerabilities(
                         "id": vuln.get("id"),
                         "package": pkg_name,
                         "version": pkg_ver,
+                        "ecosystem": ecosystem,
                         "cvss": cvss_score,
                         "vector": vector,
                         "summary": vuln.get("summary", "No summary provided."),
@@ -847,7 +865,7 @@ def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: b
         elif tool == "ClamAV":
             for _ in range(r.get("total_issues", 0)):
                 findings.append({"type": "malware", "cvss": 9.0})
-        elif tool == "OWASP ZAP DAST":
+        elif tool == "Aegis DAST Probe":
             exposed_count = len([ex for ex in r.get("examples", []) if ex.get("status") == "EXPOSED"])
             if exposed_count > 0:
                 dast_exposed_multiplier = 1.5
@@ -990,19 +1008,22 @@ def run_policy_engine(
     html_path: Path = None,
     md_path: Path = None,
     req_path: Path = None,
+    dependency_manifests: list[DependencyManifest] | None = None,
     reporter_callback = None,
     operational_failures: List[str] | None = None,
     tool_states: Dict[str, str] | None = None,
 ) -> int:
-    if not req_path:
-        req_path = Path("requirements.txt")
-        if not req_path.exists():
-            script_dir = Path(__file__).resolve().parent
-            req_path = script_dir / "requirements.txt"
+    if dependency_manifests is None:
+        if req_path:
+            dependency_manifests = _normalize_manifests(req_path)
+        elif os.environ.get("AEGIS_TARGET_PATH"):
+            dependency_manifests = discover_dependency_manifests(Path(os.environ["AEGIS_TARGET_PATH"]))
+        else:
+            dependency_manifests = []
 
     # Run CycloneDX SBOM Generation
     try:
-        generate_cyclonedx_sbom(req_path, scan_dir / "sbom.json")
+        generate_cyclonedx_sbom(dependency_manifests, scan_dir / "sbom.json")
     except Exception as e:
         print(f"[WARN] Failed to generate SBOM manifest: {e}")
 
@@ -1019,9 +1040,12 @@ def run_policy_engine(
     cached_osv_report = load_json(osv_report_path)
     if cached_osv_report is not None:
         osv_findings = cached_osv_report
+    elif not dependency_manifests:
+        osv_findings = []
+        osv_report_path.write_text(json.dumps(osv_findings, indent=2))
     else:
         try:
-            osv_findings = query_osv_vulnerabilities(req_path)
+            osv_findings = query_osv_vulnerabilities(dependency_manifests)
             osv_report_path.write_text(json.dumps(osv_findings, indent=2))
             print(f"[INFO] OSV scan completed. Report written to {osv_report_path}")
         except Exception as e:
@@ -1049,7 +1073,7 @@ def run_policy_engine(
         "Secrets Scanner": "Secrets",
         "YARA Scanner": "YARA",
         "ClamAV": "ClamAV",
-        "OWASP ZAP DAST": "DAST",
+        "Aegis DAST Probe": "DAST",
     }
     for result in results:
         scanner_state = (tool_states or {}).get(state_aliases[result["tool"]])

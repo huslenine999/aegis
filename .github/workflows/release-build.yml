@@ -32,7 +32,7 @@ jobs:
       - name: Install release dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ".[dev]"
+          python -m pip install ".[dev,scanner]"
           python -m pip check
 
       - name: Verify tag and package versions

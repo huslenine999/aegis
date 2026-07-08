@@ -87,6 +87,38 @@ print(json.dumps({"scan_dir": str(SCAN_DIR)}))
     assert json.loads(result.stdout)["scan_dir"] == str(tmp_path / "scans")
 
 
+def test_worker_dependency_scan_does_not_fall_back_to_project_requirements(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    assert app_worker._target_requirements_file(target) is None
+
+    (target / "pyproject.toml").write_text('[project]\ndependencies = ["requests==2.34.2"]\n')
+    assert app_worker._target_requirements_file(target) is None
+
+    target_requirements = target / "requirements.txt"
+    target_requirements.write_text("requests==2.34.2\n")
+
+    assert app_worker._target_requirements_file(target) == target_requirements
+
+
+def test_worker_mirrors_latest_reports_without_copying_run_workspace(tmp_path, monkeypatch):
+    source_dir = tmp_path / "runs" / "job-1"
+    source_dir.mkdir(parents=True)
+    latest_dir = tmp_path / "latest"
+    monkeypatch.setattr(app_worker, "SCANS_DIR", latest_dir)
+
+    (source_dir / "ruff-report.json").write_text("[]")
+    (source_dir / "sandbox-status.json").write_text('{"status": "simulated_fallback"}')
+    (source_dir / "internal.log").write_text("do not copy")
+
+    app_worker._mirror_latest_reports(source_dir)
+
+    assert (latest_dir / "ruff-report.json").read_text() == "[]"
+    assert (latest_dir / "sandbox-status.json").exists()
+    assert not (latest_dir / "internal.log").exists()
+
+
 def test_container_runtime_is_hardened_and_persistent():
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text()
     compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())

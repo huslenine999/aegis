@@ -7,6 +7,16 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any
 
+try:
+    from .dependencies import discover_dependency_manifests, first_requirements_manifest
+except ImportError:
+    from dependencies import discover_dependency_manifests, first_requirements_manifest
+
+
+SANDBOX_UID = 10001
+SANDBOX_GID = 10001
+SANDBOX_FALLBACK_REQUIREMENTS = "Flask==3.1.3\nrequests==2.34.2\n"
+
 def is_docker_available() -> bool:
     """
     Checks if docker CLI is installed and the daemon is currently running.
@@ -38,6 +48,17 @@ def detect_port_from_file(filepath: Path) -> int:
         pass
     return 5001
 
+
+def sandbox_requirements_file(target_path: Path) -> Path | None:
+    manifest = first_requirements_manifest(discover_dependency_manifests(target_path))
+    if manifest:
+        return manifest.path
+    if target_path.parent.name == "app":
+        manifest = first_requirements_manifest(discover_dependency_manifests(target_path.parent.parent))
+        if manifest:
+            return manifest.path
+    return None
+
 def scaffold_sandbox_context(target_path: Path, temp_dir: Path) -> int:
     """
     Prepares a clean Docker build context directory under temp_dir.
@@ -47,14 +68,11 @@ def scaffold_sandbox_context(target_path: Path, temp_dir: Path) -> int:
     temp_dir.mkdir(exist_ok=True, parents=True)
     port = detect_port_from_file(target_path)
 
-    # Copy requirements.txt from local repo
-    req_src = Path("requirements.txt")
-    if not req_src.exists():
-        req_src = Path(__file__).resolve().parent.parent / "requirements.txt"
-    if req_src.exists():
+    req_src = sandbox_requirements_file(target_path)
+    if req_src and req_src.exists():
         shutil.copy2(req_src, temp_dir / "requirements.txt")
     else:
-        (temp_dir / "requirements.txt").write_text("Flask==3.1.3\nrequests==2.34.2\n")
+        (temp_dir / "requirements.txt").write_text(SANDBOX_FALLBACK_REQUIREMENTS)
 
     # Detect if target is local Aegis codebase (runs with app/ folder structure)
     is_local_app = "app" in target_path.parts or target_path.name in {"main.py", "secure_main.py"}
@@ -77,9 +95,15 @@ def scaffold_sandbox_context(target_path: Path, temp_dir: Path) -> int:
 
         dockerfile_content = f"""FROM python:3.11-alpine
 WORKDIR /app
+ENV AEGIS_DATA_DIR=/tmp/aegis-data
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY app/ app/
+RUN pip install --no-cache-dir -r requirements.txt \\
+    && addgroup -S -g {SANDBOX_GID} aegis \\
+    && adduser -S -D -H -u {SANDBOX_UID} -G aegis aegis \\
+    && mkdir -p /app/app/downloads /tmp/aegis-data \\
+    && chown -R {SANDBOX_UID}:{SANDBOX_GID} /app/app/downloads /tmp/aegis-data
+COPY --chown={SANDBOX_UID}:{SANDBOX_GID} app/ app/
+USER {SANDBOX_UID}:{SANDBOX_GID}
 EXPOSE {port}
 CMD ["python", "app/{target_path.name}"]
 """
@@ -89,9 +113,15 @@ CMD ["python", "app/{target_path.name}"]
         shutil.copy2(target_path, temp_dir / "app.py")
         dockerfile_content = f"""FROM python:3.11-alpine
 WORKDIR /app
+ENV AEGIS_DATA_DIR=/tmp/aegis-data
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+RUN pip install --no-cache-dir -r requirements.txt \\
+    && addgroup -S -g {SANDBOX_GID} aegis \\
+    && adduser -S -D -H -u {SANDBOX_UID} -G aegis aegis \\
+    && mkdir -p /tmp/aegis-data \\
+    && chown -R {SANDBOX_UID}:{SANDBOX_GID} /tmp/aegis-data
+COPY --chown={SANDBOX_UID}:{SANDBOX_GID} app.py .
+USER {SANDBOX_UID}:{SANDBOX_GID}
 EXPOSE {port}
 CMD ["python", "app.py"]
 """
@@ -122,6 +152,11 @@ def run_sandbox_container(image_tag: str, container_name: str, host_port: int, c
             "--memory", "128m",
             "--cpus", "0.5",
             "--pids-limit", "50",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges:true",
+            "--read-only",
+            "--tmpfs", "/tmp:size=64m,mode=1777",
+            "--user", f"{SANDBOX_UID}:{SANDBOX_GID}",
             "-e", f"WAF_ENABLED={waf_env}",
             image_tag
         ]

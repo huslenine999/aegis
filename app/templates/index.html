@@ -1699,11 +1699,11 @@
                 </div>
             </div>
 
-            <!-- OWASP ZAP DAST Panel -->
+            <!-- Aegis DAST Probe Panel -->
             <div class="card reveal" id="zap-card" style="transition-delay: 250ms;">
                 <div class="card-title" data-i18n="zap_panel_title">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                    OWASP_ZAP_DAST
+                    Aegis_DAST_Probe
                 </div>
                 <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;" data-i18n="zap_panel_desc">
                     Dynamic Application Security Testing (DAST) crawler.
@@ -1974,7 +1974,7 @@
                 legend_exposure: "Path of Exposure",
                 clamav_panel_title: "CLAMAV_ANTIVIRUS",
                 clamav_panel_desc: "Malware & threat signature database scanner.",
-                zap_panel_title: "OWASP_ZAP_DAST",
+                zap_panel_title: "Aegis_DAST_Probe",
                 zap_panel_desc: "Dynamic Application Security Testing (DAST) crawler."
             },
             ko: {
@@ -2074,7 +2074,7 @@
                 legend_exposure: "노출 경로",
                 clamav_panel_title: "CLAMAV_백신_스캐너",
                 clamav_panel_desc: "파일 시스템의 악성코드 및 위협 서명 데이터베이스 검사기.",
-                zap_panel_title: "OWASP_ZAP_동적_웹스캔",
+                zap_panel_title: "Aegis_DAST_동적_프로브",
                 zap_panel_desc: "모의 해킹 공격 패킷을 주입하는 동적 웹 애플리케이션 보안 테스트(DAST) 크롤러."
             }
         };
@@ -2350,7 +2350,7 @@
                     }).join('');
                 } else {
                     zapSummary.innerText = 'STATUS: NO_SCAN_DATA';
-                    zapList.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">Run policy scan to initiate ZAP DAST crawler.</div>`;
+                    zapList.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">Run policy scan to initiate Aegis DAST Probe crawler.</div>`;
                 }
             } catch (e) {
                 console.error("Error loading scan results: ", e);

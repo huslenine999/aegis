@@ -17,6 +17,10 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from database import BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, get_connection, redis_client
 from config import environment_positive_int
+try:
+    from .dependencies import discover_dependency_manifests, first_requirements_manifest
+except ImportError:
+    from dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import get_ruff_severity
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
@@ -222,10 +226,10 @@ def run_dast_scan(target_url: str = None, job_id: str = None, waf_enabled: bool 
                 app_main.WAF_ENABLED = old_waf
     return findings
 
-def execute_subprocess_log(cmd, cwd, job_id, tool_name):
+def execute_subprocess_log(cmd, cwd, job_id, tool_name, env=None):
     publish_job_event(job_id, "log", {"text": f"[{tool_name}] Executing: {' '.join(cmd)}", "color": "var(--text-muted)"})
     try:
-        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         for line in p.stdout:
             publish_job_event(job_id, "log", {"text": f"[{tool_name}] {line.strip()}", "color": "var(--text-main)"})
         p.wait()
@@ -283,6 +287,24 @@ def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tupl
     return str(destination), destination
 
 
+def _target_requirements_file(target_path: str | Path) -> Path | None:
+    manifest = first_requirements_manifest(discover_dependency_manifests(target_path))
+    return manifest.path if manifest else None
+
+
+def _mirror_latest_reports(source_dir: Path) -> None:
+    source_dir.mkdir(parents=True, exist_ok=True)
+    SCANS_DIR.mkdir(parents=True, exist_ok=True)
+    for path in source_dir.iterdir():
+        if not path.is_file():
+            continue
+        if (
+            path.name.endswith("-report.json")
+            or path.name in {"osv-report.json", "sandbox-status.json", "report.html", "report.md", "sbom.json"}
+        ):
+            shutil.copy2(path, SCANS_DIR / path.name)
+
+
 def async_scan_task(
     job_id: str,
     target: str,
@@ -294,6 +316,8 @@ def async_scan_task(
     preset: str = "standard",
 ):
     external_project_dir = None
+    report_dir = SCANS_DIR / "runs" / job_id
+    report_dir.mkdir(parents=True, exist_ok=True)
     try:
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
@@ -326,12 +350,13 @@ def async_scan_task(
         
         if is_custom_scan:
             target_path = custom_file_path
+            dependency_manifests = discover_dependency_manifests(target_path)
             # Empty placeholders for custom scans
-            with open(SCANS_DIR / "safety-report.json", "w") as f:
+            with open(report_dir / "safety-report.json", "w") as f:
                 json.dump([], f)
-            with open(SCANS_DIR / "osv-report.json", "w") as f:
+            with open(report_dir / "osv-report.json", "w") as f:
                 json.dump([], f)
-            with open(SCANS_DIR / "trivy-report.json", "w") as f:
+            with open(report_dir / "trivy-report.json", "w") as f:
                 json.dump({"Results": []}, f)
         else:
             if target == "secure":
@@ -340,23 +365,29 @@ def async_scan_task(
                 target_path = str(BASE_DIR / "demo_lab.py")
             elif not external_project_dir:
                 target_path = str(PROJECT_ROOT)
+
+            dependency_manifests = discover_dependency_manifests(target_path)
                 
             # Run Safety SCA
             if skip_external_scanners:
-                with open(SCANS_DIR / "safety-report.json", "w") as f:
+                with open(report_dir / "safety-report.json", "w") as f:
                     json.dump([], f)
                 publish_job_event(job_id, "log", {"text": "[SCA] Safety skipped by scanner configuration.", "color": "var(--text-muted)"})
             else:
                 publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
-                requirements_file = Path(target_path) / "requirements.txt"
-                if not requirements_file.exists():
-                    requirements_file = PROJECT_ROOT / "requirements.txt"
-                safety_cmd = [python_bin, "-m", "safety", "check", "-r", str(requirements_file), "--save-json", str(SCANS_DIR / "safety-report.json")]
-                subprocess.run(safety_cmd, cwd=Path(target_path) if Path(target_path).is_dir() else PROJECT_ROOT, check=False)
-                publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
+                requirements_manifest = first_requirements_manifest(dependency_manifests)
+                if requirements_manifest:
+                    requirements_file = requirements_manifest.path
+                    safety_cmd = [python_bin, "-m", "safety", "check", "-r", str(requirements_file), "--save-json", str(report_dir / "safety-report.json")]
+                    subprocess.run(safety_cmd, cwd=requirements_file.parent, check=False)
+                    publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
+                else:
+                    with open(report_dir / "safety-report.json", "w") as f:
+                        json.dump([], f)
+                    publish_job_event(job_id, "log", {"text": "[SCA] requirements.txt not found in target. Safety skipped.", "color": "var(--text-muted)"})
             
             # Ensure trivy-report.json exists
-            trivy_path = SCANS_DIR / "trivy-report.json"
+            trivy_path = report_dir / "trivy-report.json"
             if not trivy_path.exists():
                 with open(trivy_path, "w") as f:
                     json.dump({"Results": []}, f)
@@ -378,7 +409,7 @@ def async_scan_task(
         sandbox_uuid = uuid.uuid4().hex
         sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
         sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
-        sandbox_temp_dir = SCANS_DIR / "sandbox" / sandbox_uuid
+        sandbox_temp_dir = report_dir / "sandbox" / sandbox_uuid
         host_port = None
 
         def find_free_port() -> int:
@@ -406,7 +437,7 @@ def async_scan_task(
             except Exception as ex:
                 publish_job_event(job_id, "log", {"text": f"[SANDBOX Error] Failed to launch sandbox: {ex}", "color": "var(--danger)"})
 
-        sandbox_status_file = SCANS_DIR / "sandbox-status.json"
+        sandbox_status_file = report_dir / "sandbox-status.json"
         try:
             with open(sandbox_status_file, "w") as sf:
                 json.dump({"status": "active" if sandbox_active else "simulated_fallback"}, sf)
@@ -420,7 +451,7 @@ def async_scan_task(
         _check_cancelled(job_id)
         
         # SAST: Ruff (SAST)
-        ruff_report_path = SCANS_DIR / "ruff-report.json"
+        ruff_report_path = report_dir / "ruff-report.json"
         if has_python:
             ruff_cmd = [python_bin, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
@@ -431,7 +462,7 @@ def async_scan_task(
             publish_job_event(job_id, "log", {"text": "[SAST:Ruff (SAST)] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
 
         # SAST: Semgrep
-        semgrep_report_path = SCANS_DIR / "semgrep-report.json"
+        semgrep_report_path = report_dir / "semgrep-report.json"
         if has_python and not skip_external_scanners:
             try:
                 semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
@@ -459,7 +490,7 @@ def async_scan_task(
             publish_job_event(job_id, "log", {"text": f"[SAST:Semgrep] Skipped ({reason}).", "color": "var(--text-muted)"})
 
         # Secrets Scanner
-        secrets_report_path = SCANS_DIR / "secrets-report.json"
+        secrets_report_path = report_dir / "secrets-report.json"
         try:
             if skip_external_scanners:
                 with open(secrets_report_path, "w") as f:
@@ -482,7 +513,7 @@ def async_scan_task(
                 json.dump({"results": {}}, f)
 
         # YARA Scanner
-        yara_report_path = SCANS_DIR / "yara-report.json"
+        yara_report_path = report_dir / "yara-report.json"
         try:
             publish_job_event(job_id, "log", {"text": "[YARA] Triggering YARA signature engine...", "color": "var(--text-muted)"})
             yara_findings = run_yara_scan(target_path, job_id)
@@ -495,7 +526,7 @@ def async_scan_task(
                 json.dump([], f)
 
         # ClamAV Scanner
-        clamav_report_path = SCANS_DIR / "clamav-report.json"
+        clamav_report_path = report_dir / "clamav-report.json"
         try:
             publish_job_event(job_id, "log", {"text": "[ClamAV] Triggering ClamAV antivirus scanner...", "color": "var(--text-muted)"})
             clamav_findings = run_clamav_scan(target_path, job_id)
@@ -507,8 +538,8 @@ def async_scan_task(
             with open(clamav_report_path, "w") as f:
                 json.dump([], f)
 
-        # ZAP DAST Scanner
-        zap_report_path = SCANS_DIR / "zap-report.json"
+        # Aegis DAST Probe Scanner
+        zap_report_path = report_dir / "zap-report.json"
         try:
             publish_job_event(job_id, "log", {"text": "[DAST] Running active crawler against endpoints...", "color": "var(--text-muted)"})
             if not enable_dynamic_scanners:
@@ -532,7 +563,7 @@ def async_scan_task(
         if sandbox_active:
             publish_job_event(job_id, "log", {"text": "[Trivy] Auditing built image layers for CVEs...", "color": "var(--text-muted)"})
             try:
-                run_trivy_scan(sandbox_image, SCANS_DIR / "trivy-report.json")
+                run_trivy_scan(sandbox_image, report_dir / "trivy-report.json")
                 publish_job_event(job_id, "log", {"text": "[Trivy] Image layer audit complete.", "color": "var(--primary)"})
             except Exception as e:
                 publish_job_event(job_id, "log", {"text": f"[Trivy Error] {e}", "color": "var(--danger)"})
@@ -547,7 +578,10 @@ def async_scan_task(
         # Run policy engine
         engine_path = PROJECT_ROOT / "policy_engine.py"
         engine_cmd = [python_bin, str(engine_path)]
-        execute_subprocess_log(engine_cmd, PROJECT_ROOT, job_id, "PolicyEngine")
+        engine_env = os.environ.copy()
+        engine_env["SCANS_DIR"] = str(report_dir)
+        engine_env["AEGIS_TARGET_PATH"] = str(target_path)
+        execute_subprocess_log(engine_cmd, PROJECT_ROOT, job_id, "PolicyEngine", env=engine_env)
 
         # 4. State: CORRELATING -> REPORTING
         publish_job_event(job_id, "state", {"state": "reporting", "progress": 90})
@@ -585,11 +619,11 @@ def async_scan_task(
                     pass
             return None
             
-        clamav = load_json_safe(SCANS_DIR / "clamav-report.json")
-        zap = load_json_safe(SCANS_DIR / "zap-report.json")
-        osv = load_json_safe(SCANS_DIR / "osv-report.json")
-        ruff_rep = load_json_safe(SCANS_DIR / "ruff-report.json")
-        semgrep_rep = load_json_safe(SCANS_DIR / "semgrep-report.json")
+        clamav = load_json_safe(report_dir / "clamav-report.json")
+        zap = load_json_safe(report_dir / "zap-report.json")
+        osv = load_json_safe(report_dir / "osv-report.json")
+        ruff_rep = load_json_safe(report_dir / "ruff-report.json")
+        semgrep_rep = load_json_safe(report_dir / "semgrep-report.json")
         
         # Quick check for blocks
         is_blocked = False
@@ -599,7 +633,7 @@ def async_scan_task(
             reasons.append("ClamAV")
         if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
             is_blocked = True
-            reasons.append("ZAP DAST")
+            reasons.append("Aegis DAST Probe")
         if ruff_rep and isinstance(ruff_rep, list):
             blocking_issues = [
                 r for r in ruff_rep
@@ -618,7 +652,8 @@ def async_scan_task(
                 reasons.append("OSV Dependency Audit")
 
         from main import calculate_exploitability_score
-        score = calculate_exploitability_score(SCANS_DIR, waf_enabled)
+        score = calculate_exploitability_score(report_dir, waf_enabled)
+        _mirror_latest_reports(report_dir)
         
         result_payload = {
             "clamav": clamav,

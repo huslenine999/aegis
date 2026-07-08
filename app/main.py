@@ -1030,11 +1030,9 @@ def download_sbom():
     sbom_path = SCANS_DIR / "sbom.json"
     if not sbom_path.exists():
         from policy_engine import generate_cyclonedx_sbom
+        from dependencies import discover_dependency_manifests
         try:
-            req_path = PROJECT_ROOT / "requirements.txt"
-            if not req_path.exists():
-                req_path = Path("requirements.txt")
-            generate_cyclonedx_sbom(req_path, sbom_path)
+            generate_cyclonedx_sbom(discover_dependency_manifests(PROJECT_ROOT), sbom_path)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"SBOM generation failed: {e}")
             
@@ -1140,7 +1138,7 @@ def get_scan_results():
         reasons.append("ClamAV")
     if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
         is_blocked = True
-        reasons.append("ZAP DAST")
+        reasons.append("Aegis DAST Probe")
         
     if ruff and isinstance(ruff, list):
         blocking_ruff = len([r for r in ruff if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
@@ -1802,7 +1800,7 @@ def export_dossier():
         clamav_blocking = clamav_total
         clamav_status = "FAIL" if clamav_blocking > 0 else "PASS"
 
-    # ZAP DAST
+    # Aegis DAST Probe
     if not (SCANS_DIR / "zap-report.json").exists():
         zap_status = "MISSING"
         zap_total = 0
@@ -1824,7 +1822,7 @@ def export_dossier():
         ("Secrets Scanner", secrets_status),
         ("YARA Scanner", yara_status),
         ("ClamAV Antivirus", clamav_status),
-        ("OWASP ZAP DAST", zap_status)
+        ("Aegis DAST Probe", zap_status)
     ]:
         if status == "FAIL":
             failed_tools.append(tool)
@@ -2071,7 +2069,7 @@ Blocking Issues: {clamav_blocking}
 FINDINGS (Top 5):
 {clamav_findings_text}
 
-[7] DYNAMIC APPLICATION SECURITY TESTING (DAST) - OWASP ZAP
+[7] DYNAMIC APPLICATION SECURITY TESTING (DAST) - AEGIS PROBE
 --------------------------------------------------------------------------------
 Status: {zap_status}
 Total Issues Detected: {zap_total}

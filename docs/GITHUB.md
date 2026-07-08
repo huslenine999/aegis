@@ -28,3 +28,18 @@ private repositories.
 Tokens are encrypted in PostgreSQL. Repository clone credentials are supplied
 through Git process environment configuration and are not included in command
 arguments or logs.
+
+## Main branch protection
+
+Protect `main` with a GitHub branch rule or repository ruleset before enabling
+auto-merge. Require pull requests, dismiss stale approvals, require branches to
+be up to date, and block force pushes/deletions.
+
+Mark these checks as required status checks:
+
+- `Aegis Project Approval Gate`
+- `Validate CLI and Policy`
+- `Production Container Smoke`
+
+The release workflow runs on tags and manual dispatches, so it should remain a
+release gate rather than a required pull-request check.

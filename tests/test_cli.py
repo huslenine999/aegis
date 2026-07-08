@@ -351,7 +351,7 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
         for result in summary["results"]
         if result["status"] == "SKIPPED"
     }
-    assert {"Semgrep", "Safety", "OSV Dependency Audit", "Trivy", "ClamAV", "OWASP ZAP DAST"} <= skipped_tools
+    assert {"Semgrep", "Safety", "OSV Dependency Audit", "Trivy", "ClamAV", "Aegis DAST Probe"} <= skipped_tools
     manifest = json.loads((output_dir / "scan-manifest.json").read_text())
     assert manifest["status"] == "error"
     assert next(tool for tool in manifest["tools"] if tool["name"] == "Ruff")["status"] == "failed"

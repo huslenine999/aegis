@@ -20,6 +20,7 @@ sys.path.append(str(PROJECT_ROOT / "app"))
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
 from config import config_bool, config_list, load_config
+from dependencies import discover_dependency_manifests, first_requirements_manifest
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import configure_semgrep_environment
@@ -735,15 +736,16 @@ def execute_scan(
     print(f"🛡️  Aegis CLI Scanner: Auditing target path: {target_path}")
 
     # Set up local scans directory
+    dependency_manifests = discover_dependency_manifests(target_path)
+    requirements_manifest = first_requirements_manifest(dependency_manifests)
+    req_file = requirements_manifest.path if requirements_manifest else None
+
     if output_dir:
         scan_dir = Path(output_dir).expanduser().resolve()
-        req_file = (target_path / "requirements.txt") if target_path.is_dir() else (target_path.parent / "requirements.txt")
     elif target_path.is_dir():
         scan_dir = target_path / ".aegis" / "scans"
-        req_file = target_path / "requirements.txt"
     else:
         scan_dir = target_path.parent / ".aegis" / "scans"
-        req_file = target_path.parent / "requirements.txt"
 
     scan_dir.mkdir(parents=True, exist_ok=True)
 
@@ -768,31 +770,36 @@ def execute_scan(
         record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
         mark_tool("Safety", "skipped", detail="fast mode")
         mark_tool("OSV", "skipped", detail="fast mode")
-    elif req_file.exists():
+    elif dependency_manifests:
         with timed_step(timings, "Safety/OSV"):
-            print("🔍 [SCA] requirements.txt detected. Running Safety and OSV audits...")
+            manifest_names = ", ".join(sorted({manifest.kind for manifest in dependency_manifests}))
+            print(f"🔍 [SCA] Dependency manifest(s) detected: {manifest_names}. Running available Safety and OSV audits...")
             
             # Safety Scan
             safety_report_path = scan_dir / "safety-report.json"
-            safety_cmd = [sys.executable, "-m", "safety", "check", "-r", str(req_file), "--save-json", str(safety_report_path)]
-            safety_report_path.unlink(missing_ok=True)
-            safety_return_code = run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
-            safety_report = read_json(safety_report_path)
-            if isinstance(safety_report, (dict, list)):
-                mark_tool("Safety", "completed", return_code=safety_return_code)
+            if req_file:
+                safety_cmd = [sys.executable, "-m", "safety", "check", "-r", str(req_file), "--save-json", str(safety_report_path)]
+                safety_report_path.unlink(missing_ok=True)
+                safety_return_code = run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
+                safety_report = read_json(safety_report_path)
+                if isinstance(safety_report, (dict, list)):
+                    mark_tool("Safety", "completed", return_code=safety_return_code)
+                else:
+                    write_json(safety_report_path, [])
+                    mark_tool(
+                        "Safety",
+                        "failed",
+                        detail="scanner did not produce a valid JSON report",
+                        return_code=safety_return_code,
+                    )
             else:
                 write_json(safety_report_path, [])
-                mark_tool(
-                    "Safety",
-                    "failed",
-                    detail="scanner did not produce a valid JSON report",
-                    return_code=safety_return_code,
-                )
+                mark_tool("Safety", "skipped", detail="no requirements.txt manifest")
             
             # OSV Scan
             osv_report_path = scan_dir / "osv-report.json"
             try:
-                osv_findings = query_osv_vulnerabilities(req_file, raise_on_error=strict)
+                osv_findings = query_osv_vulnerabilities(dependency_manifests, raise_on_error=strict)
                 write_json(osv_report_path, osv_findings)
                 print("  [SCA] OSV API checks completed.")
                 mark_tool("OSV", "completed")
@@ -800,10 +807,10 @@ def execute_scan(
                 print(f"  [SCA Warn] OSV query failed: {e}")
                 mark_tool("OSV", "failed", detail=str(e))
     else:
-        print("ℹ️  [SCA] No requirements.txt found, skipping dependency scan.")
+        print("ℹ️  [SCA] No supported dependency manifest found, skipping dependency scan.")
         record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
-        mark_tool("Safety", "skipped", detail="requirements.txt not found")
-        mark_tool("OSV", "skipped", detail="requirements.txt not found")
+        mark_tool("Safety", "skipped", detail="dependency manifest not found")
+        mark_tool("OSV", "skipped", detail="dependency manifest not found")
 
     # 2. Python SAST (Ruff)
     with timed_step(timings, "Ruff"):
@@ -1003,7 +1010,7 @@ def execute_scan(
                     print(f"  [Trivy Error] Image scan failed: {e}")
                     mark_tool("Trivy", "failed", detail=str(e))
 
-                # 7b. ZAP DAST active scanning
+                # 7b. Aegis DAST Probe active scanning
                 zap_report_path = scan_dir / "zap-report.json"
                 print("  [DAST] Running active crawler against endpoints...")
                 zap_findings = run_dast_scan(target_url)
@@ -1062,7 +1069,8 @@ def execute_scan(
             scan_dir=scan_dir,
             html_path=html_report,
             md_path=md_report,
-            req_path=req_file if req_file.exists() else None,
+            req_path=req_file,
+            dependency_manifests=dependency_manifests,
             reporter_callback=capture_policy_summary,
             operational_failures=pre_policy_failures if strict else None,
             tool_states={item["name"]: item["status"] for item in tool_statuses},

@@ -1875,7 +1875,7 @@
                                         Malicious Pattern Matched: {{ example.rule }}
                                     {% elif result.tool == 'ClamAV' %}
                                         Malware Signature Matched: {{ example.virus }}
-                                    {% elif result.tool == 'OWASP ZAP DAST' %}
+                                    {% elif result.tool == 'Aegis DAST Probe' %}
                                         Active DAST Alert: {{ example.vuln_type }} ({{ example.status }})
                                     {% endif %}
                                 </span>
@@ -1901,7 +1901,7 @@
                                     <span data-i18n="yara_rule_label">Rule Name:</span> {{ example.rule }} &bull; <span data-i18n="yara_desc_label">Threat Profile:</span> {{ example.description }}
                                 {% elif result.tool == 'ClamAV' %}
                                     <span data-i18n="clamav_virus_label">Virus Name:</span> {{ example.virus }} &bull; <span data-i18n="clamav_desc_label">Threat Profile:</span> {{ example.description }}
-                                {% elif result.tool == 'OWASP ZAP DAST' %}
+                                {% elif result.tool == 'Aegis DAST Probe' %}
                                     <span data-i18n="zap_vuln_label">Vulnerability Type:</span> {{ example.vuln_type }} &bull; <span data-i18n="zap_status_label">Status:</span> <span class="badge {% if example.status == 'EXPOSED' %}badge-danger{% else %}badge-success{% endif %}">{{ example.status }}</span><br>
                                     <span data-i18n="zap_payload_label">Attack Payload:</span> <code>{{ example.payload }}</code>
                                 {% endif %}
@@ -1921,7 +1921,7 @@
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }}
                                 {% elif result.tool == 'ClamAV' %}
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }}
-                                {% elif result.tool == 'OWASP ZAP DAST' %}
+                                {% elif result.tool == 'Aegis DAST Probe' %}
                                     <span data-i18n="target_route_label">> TARGET_ROUTE:</span> <code>{{ example.route }}</code>
                                 {% endif %}
                             </div>
@@ -1988,8 +1988,8 @@
                                     <span data-i18n="exp_report_yara_desc">⚠️ Malicious code pattern: Match against custom signature definition rules (backdoors, shells, obfuscated executions). Ensure code origin is verified and remove suspicious components.</span>
                                 {% elif result.tool == 'ClamAV' %}
                                     <span data-i18n="exp_report_clamav_desc">⚠️ Active virus or malware signature detected in codebase. Remove the infected code or test file before staging.</span>
-                                {% elif result.tool == 'OWASP ZAP DAST' %}
-                                    <span data-i18n="exp_report_zap_desc">⚠️ Active endpoint vulnerability: ZAP crawler successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.</span>
+                                {% elif result.tool == 'Aegis DAST Probe' %}
+                                    <span data-i18n="exp_report_zap_desc">⚠️ Active endpoint vulnerability: Aegis DAST probe successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -2233,7 +2233,7 @@
                 zap_payload_label: "Attack Payload:",
                 target_route_label: "> TARGET_ROUTE:",
                 exp_report_clamav_desc: "⚠️ Active virus or malware signature detected in codebase. Remove the infected code or test file before staging.",
-                exp_report_zap_desc: "⚠️ Active endpoint vulnerability: ZAP crawler successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.",
+                exp_report_zap_desc: "⚠️ Active endpoint vulnerability: Aegis DAST probe successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.",
                 sbom_panel_title: "Software bill of materials (SBOM)",
                 sbom_panel_status: "CYCLONEDX_1.5",
                 sbom_panel_desc: "A Software Bill of Materials (SBOM) has been generated in CycloneDX v1.5 JSON format, mapping the full dependency inventory of third-party libraries used by this application.",
