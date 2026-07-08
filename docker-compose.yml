@@ -140,7 +140,7 @@ services:
     restart: unless-stopped
     depends_on:
       dashboard:
-        condition: service_healthy
+        condition: service_started
     environment:
       AEGIS_DOMAIN: ${AEGIS_DOMAIN:?Set the public DNS name}
     ports:

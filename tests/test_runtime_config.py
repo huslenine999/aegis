@@ -143,6 +143,7 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["dashboard"]["expose"] == ["5001"]
     assert services["proxy"]["ports"] == ["80:80", "443:443", "443:443/udp"]
     assert services["dashboard"]["environment"]["DATABASE_URL"].startswith("postgresql://")
+    assert services["proxy"]["depends_on"]["dashboard"]["condition"] == "service_started"
 
 
 def test_security_headers_are_added_to_dynamic_responses():
