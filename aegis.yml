@@ -25,7 +25,23 @@ scan:
       rule: S310
       path: policy_engine.py
       reason: OSV vulnerability queries call a fixed HTTPS endpoint assembled by the scanner.
+    - tool: Ruff
+      rule: S310
+      path: app/cli_stack.py
+      reason: CLI stack helper opens only locally generated report paths for developer convenience.
+    - tool: Ruff
+      rule: S607
+      path: app/worker.py
+      reason: Worker intentionally invokes configured scanner executables from the runtime PATH.
     - tool: Secrets
       rule: Hex High Entropy String
       path: .github/workflows/security-pipeline.yml
       reason: Reviewed immutable Git commit SHA for the trusted Aegis scanner revision.
+    - tool: Secrets
+      rule: Secret Keyword
+      path: playwright.config.js
+      reason: E2E test credentials are deterministic local-only fixtures scoped to the temporary test server.
+    - tool: YARA
+      rule: Backdoor_Webshell
+      path: app/cli.py
+      reason: CLI scanner test fixture generation intentionally writes payload strings used to validate detections.

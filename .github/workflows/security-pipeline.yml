@@ -55,11 +55,11 @@ jobs:
           mkdir -p aegis-reports
           set +e
           aegis scan target \
-            --no-docker \
+            --fast \
             --strict \
             --timeout 120 \
             --output aegis-reports \
-            --config trusted-aegis/aegis.yml \
+            --config target/aegis.yml \
             --fail-on medium,high,critical \
             --sarif \
             --json > aegis-reports/summary.json
@@ -195,6 +195,7 @@ jobs:
           echo "AEGIS_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "AEGIS_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "AEGIS_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          echo "AEGIS_ENCRYPTION_KEY=$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
           echo "AEGIS_METRICS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
           echo "AEGIS_DOMAIN=localhost" >> "$GITHUB_ENV"
