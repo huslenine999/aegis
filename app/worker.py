@@ -262,9 +262,12 @@ def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tupl
                 "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
             }
         )
+    git_executable = shutil.which("git")
+    if not git_executable:
+        raise RuntimeError("git executable is required to clone GitHub projects")
     result = subprocess.run(
         [
-            "git",
+            git_executable,
             "clone",
             "--depth",
             "1",

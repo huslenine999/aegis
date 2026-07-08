@@ -1,4 +1,5 @@
 import base64
+import http.client
 import json
 import os
 import secrets
@@ -6,7 +7,7 @@ import socket
 import sys
 import tempfile
 import time
-import urllib.request
+import urllib.parse
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,14 +77,25 @@ def port_is_available(port: int) -> bool:
 
 
 def wait_for_dashboard(url: str, timeout: int = 180) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return False
+    connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    health_path = f"{parsed.path.rstrip('/')}/health" if parsed.path else "/health"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        connection = None
         try:
-            with urllib.request.urlopen(f"{url}/health", timeout=3) as response:
-                if response.status == 200:
-                    return True
+            connection = connection_cls(parsed.hostname, parsed.port, timeout=3)
+            connection.request("GET", health_path)
+            response = connection.getresponse()
+            if response.status == 200:
+                return True
         except Exception:
             time.sleep(2)
+        finally:
+            if connection is not None:
+                connection.close()
     return False
 
 

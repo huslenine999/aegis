@@ -54,12 +54,12 @@ jobs:
           set -uo pipefail
           mkdir -p aegis-reports
           set +e
-          aegis scan target \
+          aegis scan target/app \
             --fast \
             --strict \
             --timeout 120 \
             --output aegis-reports \
-            --config target/aegis.yml \
+            --config trusted-aegis/aegis.yml \
             --fail-on medium,high,critical \
             --sarif \
             --json > aegis-reports/summary.json
@@ -203,20 +203,29 @@ jobs:
           echo "AEGIS_CORS_ORIGINS=https://localhost" >> "$GITHUB_ENV"
           echo "AEGIS_SKIP_EXTERNAL_SCANNERS=true" >> "$GITHUB_ENV"
 
+      - name: Configure CI Compose override
+        run: |
+          cat > docker-compose.ci.yml <<'YAML'
+          services:
+            dashboard:
+              ports:
+                - "5001:5001"
+          YAML
+
       - name: Validate and build Compose stack
         run: |
-          docker compose config --quiet
-          docker compose build
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml build
 
       - name: Start production stack
-        run: docker compose up -d
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker
 
       - name: Verify readiness and worker scan
         shell: bash
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
-            if curl --insecure --fail --silent https://localhost/ready > /tmp/aegis-ready.json; then
+            if curl --fail --silent http://localhost:5001/ready > /tmp/aegis-ready.json; then
               break
             fi
             if [ "$attempt" -eq 60 ]; then
@@ -226,21 +235,21 @@ jobs:
             sleep 2
           done
           cat /tmp/aegis-ready.json
-          curl --insecure --fail --silent https://localhost/health
-          curl --insecure --fail --silent \
+          curl --fail --silent http://localhost:5001/health
+          curl --fail --silent \
             -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
-            https://localhost/metrics
+            http://localhost:5001/metrics
 
           job_id="$(
-            curl --insecure --fail --silent \
+            curl --fail --silent \
               -H "X-Aegis-Token: $AEGIS_ADMIN_TOKEN" \
               -H "Content-Type: application/json" \
               -d '{"target":"secure"}' \
-              https://localhost/run-scan |
+              http://localhost:5001/run-scan |
             python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
           )"
           for attempt in $(seq 1 60); do
-            state="$(docker compose exec -T redis redis-cli HGET "job:$job_id" state)"
+            state="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T redis redis-cli HGET "job:$job_id" state)"
             if [ "$state" = "completed" ]; then
               break
             fi
@@ -250,14 +259,14 @@ jobs:
             fi
             sleep 2
           done
-          docker compose exec -T dashboard test -f /data/scans/report.html
-          docker compose exec -T dashboard test -f /data/scans/report.md
-          docker compose ps
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.html
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.md
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
 
       - name: Show container logs
         if: always()
-        run: docker compose logs --no-color proxy dashboard worker postgres redis
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color dashboard worker postgres redis
 
       - name: Stop production stack
         if: always()
-        run: docker compose down --volumes
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down --volumes
