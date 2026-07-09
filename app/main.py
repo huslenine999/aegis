@@ -60,6 +60,7 @@ from auth import (
 )
 from observability import ObservabilityMiddleware, configure_logging, recent_requests, render_metrics
 from rate_limit import RateLimitMiddleware, allow_websocket
+from security_middleware import SecurityHeadersMiddleware, WafASGIMiddleware
 from projects import (
     VALID_PRESETS,
     create_project,
@@ -229,175 +230,15 @@ def setup_is_available() -> bool:
     )
 
 
-class SecurityHeadersMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        async def send_with_security_headers(message):
-            if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                headers.extend(
-                    [
-                        (b"x-content-type-options", b"nosniff"),
-                        (b"x-frame-options", b"DENY"),
-                        (b"referrer-policy", b"no-referrer"),
-                        (
-                            b"permissions-policy",
-                            b"camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-                        ),
-                        (b"cross-origin-opener-policy", b"same-origin"),
-                        (
-                            b"content-security-policy",
-                            (
-                                b"default-src 'self'; "
-                                b"script-src 'self' 'unsafe-inline'; "
-                                b"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                                b"font-src 'self' https://fonts.gstatic.com; "
-                                b"img-src 'self' data:; "
-                                b"connect-src 'self' ws: wss:; "
-                                b"object-src 'none'; base-uri 'none'; "
-                                b"frame-ancestors 'none'; form-action 'self'"
-                            ),
-                        ),
-                    ]
-                )
-                if not scope.get("path", "").startswith("/static/"):
-                    headers.append((b"cache-control", b"no-store"))
-                message["headers"] = headers
-            await send(message)
-
-        await self.app(scope, receive, send_with_security_headers)
-
-
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware, redis_client=redis_client)
 app.add_middleware(ObservabilityMiddleware)
 
-# Custom ASGI middleware for WAF checks (replaces BaseHTTPMiddleware to prevent TestClient hangs)
-import urllib.parse
-
-class WafASGIMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        global WAF_ENABLED
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        path = scope.get("path", "")
-        if path in [
-            "/toggle-waf",
-            "/get-waf-rules",
-            "/save-waf-rules",
-            "/run-scan",
-            "/export-dossier",
-            "/api/setup",
-            "/api/auth/login",
-            "/api/github/callback",
-        ]:
-            await self.app(scope, receive, send)
-            return
-
-        if not WAF_ENABLED:
-            await self.app(scope, receive, send)
-            return
-
-        # Read query params
-        query_string = scope.get("query_string", b"").decode('utf-8', errors='ignore')
-        query_string_decoded = urllib.parse.unquote_plus(query_string)
-
-        # Cache request body
-        body_chunks = []
-        more_body = True
-        while more_body:
-            message = await receive()
-            body_chunks.append(message.get("body", b""))
-            more_body = message.get("more_body", False)
-
-        body = b"".join(body_chunks)
-
-        # Re-create receive channel
-        sent_body = False
-        async def cached_receive():
-            nonlocal sent_body
-            if not sent_body:
-                sent_body = True
-                return {
-                    "type": "http.request",
-                    "body": body,
-                    "more_body": False
-                }
-            return {
-                "type": "http.request",
-                "body": b"",
-                "more_body": False
-            }
-
-        payload_parts = [query_string_decoded]
-        if body:
-            try:
-                body_str = body.decode('utf-8', errors='ignore')
-                payload_parts.append(body_str)
-                payload_parts.append(urllib.parse.unquote_plus(body_str))
-            except Exception:
-                payload_parts.append(str(body))
-        
-        payload = " ".join(payload_parts)
-
-        # Run WAF rules check
-        blocked = False
-        block_reason = ""
-        rules = load_waf_rules_from_db()
-        for rule in rules:
-            if not rule.get("enabled", True):
-                continue
-            pattern = rule.get("pattern", "")
-            if not pattern:
-                continue
-            try:
-                if re.search(pattern, payload, re.IGNORECASE):
-                    blocked = True
-                    block_reason = f"Detected malicious pattern: {rule.get('description', pattern)}"
-                    break
-            except re.error:
-                if pattern in payload:
-                    blocked = True
-                    block_reason = f"Detected malicious pattern (literal): {rule.get('description', pattern)}"
-                    break
-
-        if blocked:
-            # Send 403 Forbidden ASGI response directly
-            response_content = json.dumps({
-                "error": "Blocked by Aegis WAF",
-                "reason": block_reason,
-                "status": "security_violation"
-            }).encode('utf-8')
-            
-            await send({
-                "type": "http.response.start",
-                "status": 403,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(response_content)).encode('utf-8'))
-                ]
-            })
-            await send({
-                "type": "http.response.body",
-                "body": response_content,
-                "more_body": False
-            })
-            return
-
-        await self.app(scope, cached_receive, send)
-
-app.add_middleware(WafASGIMiddleware)
+app.add_middleware(
+    WafASGIMiddleware,
+    enabled=lambda: WAF_ENABLED,
+    load_rules=load_waf_rules_from_db,
+)
 
 # REST Router Endpoints
 @app.get("/", response_class=HTMLResponse)

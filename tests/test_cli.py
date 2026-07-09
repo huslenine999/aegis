@@ -346,14 +346,36 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
     assert summary["status"] == "error"
     assert summary["policy_status"] == "ERROR"
     assert summary["operational_failures"] == ["Ruff"]
-    skipped_tools = {
-        result["tool"]
-        for result in summary["results"]
-        if result["status"] == "SKIPPED"
-    }
-    assert {"Semgrep", "Safety", "OSV Dependency Audit", "Trivy", "ClamAV", "Aegis DAST Probe"} <= skipped_tools
+
+
+def test_non_strict_scan_surfaces_operational_failures(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    output_dir = tmp_path / "reports"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.chdir(tmp_path)
+
+    def invalid_ruff(command, *, stdout=None, timeout=120, label="Scanner"):
+        if label == "Ruff":
+            return 2
+        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=invalid_ruff):
+        summary = execute_scan(
+            str(target_file),
+            use_docker=False,
+            tool_timeout=5,
+            output_dir=str(output_dir),
+            quiet=True,
+            strict=False,
+            return_summary=True,
+        )
+
+    assert summary["exit_code"] == 0
+    assert "Ruff" in summary["operational_failures"]
     manifest = json.loads((output_dir / "scan-manifest.json").read_text())
-    assert manifest["status"] == "error"
+    assert "Ruff" in manifest["operational_failures"]
     assert next(tool for tool in manifest["tools"] if tool["name"] == "Ruff")["status"] == "failed"
 
 

@@ -59,7 +59,7 @@ print(json.dumps({
     paths = json.loads(result.stdout)
 
     assert paths["project_root"] == str(PROJECT_ROOT)
-    assert paths["db_path"] == str(tmp_path / "aegis_demo.db")
+    assert paths["db_path"] == str(tmp_path / "aegis.db")
     assert paths["download_dir"] == str(tmp_path / "downloads")
     assert paths["scans_dir"] == str(tmp_path / "scans")
 

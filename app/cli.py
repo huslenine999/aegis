@@ -25,6 +25,8 @@ from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import configure_semgrep_environment
 from scanners import write_semgrep_rules
+from scan_status import ToolStatusTracker
+from cli_output import print_ascii_report, print_timing_summary
 import cli_stack
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
@@ -347,10 +349,6 @@ def validate_fail_on(value: str | None) -> str | None:
     return ",".join(sorted(severities))
 
 
-def format_duration(seconds: float) -> str:
-    return f"{seconds:.2f}s"
-
-
 def record_timing(timings: list[dict], name: str, start: float, status: str = "completed"):
     timings.append({
         "name": name,
@@ -366,15 +364,6 @@ def timed_step(timings: list[dict], name: str, status: str = "completed"):
         yield
     finally:
         record_timing(timings, name, start, status)
-
-
-def print_timing_summary(timings: list[dict]):
-    if not timings:
-        return
-    print("\nScanner timings:")
-    for item in timings:
-        suffix = f" ({item['status']})" if item.get("status") and item["status"] != "completed" else ""
-        print(f"  {item['name']}: {format_duration(item['seconds'])}{suffix}")
 
 
 def get_package_version() -> str:
@@ -541,122 +530,6 @@ def run_dast_scan(target_url: str = None):
             })
     return findings
 
-def format_cell(text: str, width: int, align: str = "left", color: str = "") -> str:
-    if align == "left":
-        padded = text.ljust(width)
-    elif align == "center":
-        padded = text.center(width)
-    elif align == "right":
-        padded = text.rjust(width)
-    else:
-        padded = text.ljust(width)
-        
-    if color:
-        return f"{color}{padded}\033[0m"
-    return padded
-
-def print_ascii_report(results: list, final_status: str, reason: str, exploitability_score: float):
-    cyan = "\033[96m"
-    reset = "\033[0m"
-    bold = "\033[1m"
-    gray = "\033[90m"
-    yellow = "\033[93m"
-    green = "\033[92m"
-    red = "\033[91m"
-    
-    # ASCII Art Header
-    print("\n")
-    print(f"  {cyan}╔══════════════════════════════════════════════════════════════════════════╗{reset}")
-    print(f"  {cyan}║{reset}   {cyan}█████╗ ███████╗ ██████╗ ██╗███████╗{reset}                                    {cyan}║{reset}")
-    print(f"  {cyan}║{reset}  {cyan}██╔══██╗██╔════╝██╔════╝ ██║██╔════╝{reset}   {bold}A E G I S   S E C U R I T Y{reset}      {cyan}║{reset}")
-    print(f"  {cyan}║{reset}  {cyan}███████║█████╗  ██║  ███╗██║███████╗{reset}   {bold}S E C U R E   G A T E W A Y{reset}      {cyan}║{reset}")
-    print(f"  {cyan}║{reset}  {cyan}██╔══██║██╔══╝  ██║   ██║██║╚════██║{reset}   {gray}SHIELD ACTIVE v2.0{reset}                {cyan}║{reset}")
-    print(f"  {cyan}║{reset}  {cyan}██║  ██║███████╗╚██████╔╝██║███████║{reset}                                     {cyan}║{reset}")
-    print(f"  {cyan}║{reset}  {cyan}╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝{reset}                                     {cyan}║{reset}")
-    print(f"  {cyan}╚══════════════════════════════════════════════════════════════════════════╝{reset}")
-    
-    # Table Header
-    print(f"  {gray}┌──────────────────────────────┬──────────┬──────────────┬─────────────────┐{reset}")
-    h1 = format_cell("SCANNER SUITE", 30, "left", "\033[96m\033[1m")
-    h2 = format_cell("STATUS", 10, "center", "\033[96m\033[1m")
-    h3 = format_cell("TOTAL ISSUES", 14, "right", "\033[96m\033[1m")
-    h4 = format_cell("BLOCKING ISSUES", 17, "right", "\033[96m\033[1m")
-    print(f"  {gray}│{reset}{h1}{gray}│{reset}{h2}{gray}│{reset}{h3}{gray}│{reset}{h4}{gray}│{reset}")
-    print(f"  {gray}├──────────────────────────────┼──────────┼──────────────┼─────────────────┤{reset}")
-    
-    # Table Rows
-    for r in results:
-        tool_name = r["tool"]
-        status = r["status"]
-        total = str(r["total_issues"])
-        blocking = str(r["blocking_issues"])
-        
-        if status == "PASS":
-            status_text = "✔ PASS"
-            status_color = green
-        elif status == "FAIL":
-            status_text = "✘ FAIL"
-            status_color = red
-        elif status == "MISSING":
-            status_text = "⚠ MISSING"
-            status_color = yellow
-        else:
-            status_text = status
-            status_color = reset
-            
-        t_cell = format_cell(" " + tool_name, 30, "left")
-        s_cell = format_cell(status_text, 10, "center", status_color)
-        tot_cell = format_cell(total + " ", 14, "right")
-        blk_cell = format_cell(blocking + " ", 17, "right", status_color if status == "FAIL" else "")
-        print(f"  {gray}│{reset}{t_cell}{gray}│{reset}{s_cell}{gray}│{reset}{tot_cell}{gray}│{reset}{blk_cell}{gray}│{reset}")
-        
-    print(f"  {gray}└──────────────────────────────┴──────────┴──────────────┴─────────────────┘{reset}")
-    
-    # Exploitability risk gauge panel card
-    print(f"  {cyan}╔══════════════════════════════════════════════════════════════════════════╗{reset}")
-    
-    # Draw exploitability score bar (gauge width = 40 characters)
-    filled_width = int(exploitability_score / 100.0 * 40.0)
-    empty_width = 40 - filled_width
-    gauge_str = "█" * filled_width + "░" * empty_width
-    
-    if exploitability_score >= 80.0:
-        gauge_color = red
-    elif exploitability_score >= 40.0:
-        gauge_color = yellow
-    else:
-        gauge_color = green
-        
-    visible_gauge = f"  EXPLOITABILITY RISK: [{gauge_str}] {exploitability_score}%"
-    padded_gauge = visible_gauge.ljust(74)
-    color_gauge = padded_gauge.replace(gauge_str, gauge_color + gauge_str + reset)
-    print(f"  {cyan}║{reset}{color_gauge}{cyan}║{reset}")
-    
-    print(f"  {cyan}║{reset}{' ' * 74}{cyan}║{reset}")
-    
-    if final_status == "ALLOWED":
-        verdict_label = "[✔] DEPLOYMENT ALLOWED"
-        verdict_color = green + bold
-    elif final_status == "ERROR":
-        verdict_label = "[!] SCAN INCOMPLETE"
-        verdict_color = yellow + bold
-    else:
-        verdict_label = "[✘] DEPLOYMENT BLOCKED"
-        verdict_color = red + bold
-    
-    visible_verdict = f"  VERDICT: {verdict_label}"
-    padded_verdict = visible_verdict.ljust(74)
-    color_verdict = padded_verdict.replace(verdict_label, verdict_color + verdict_label + reset)
-    print(f"  {cyan}║{reset}{color_verdict}{cyan}║{reset}")
-    
-    visible_reason = f"  REASON:  {reason}"
-    if len(visible_reason) > 72:
-        visible_reason = visible_reason[:69] + "..."
-    padded_reason = visible_reason.ljust(74)
-    print(f"  {cyan}║{reset}{padded_reason}{cyan}║{reset}")
-    
-    print(f"  {cyan}╚══════════════════════════════════════════════════════════════════════════╝{reset}")
-
 def execute_scan(
     target_path_str: str,
     *,
@@ -675,18 +548,8 @@ def execute_scan(
     timings = []
     total_start = time.perf_counter()
     started_at = utc_timestamp()
-    tool_statuses = []
-
-    def mark_tool(name: str, status: str, *, detail: str | None = None, return_code: int | None = None):
-        record = next((item for item in tool_statuses if item["name"] == name), None)
-        if record is None:
-            record = {"name": name}
-            tool_statuses.append(record)
-        record["status"] = status
-        if detail:
-            record["detail"] = detail
-        if return_code is not None:
-            record["return_code"] = return_code
+    tool_statuses = ToolStatusTracker()
+    mark_tool = tool_statuses.mark
 
     target_path = Path(target_path_str).resolve()
     if not target_path.exists():
@@ -1020,9 +883,9 @@ def execute_scan(
             except Exception as e:
                 print(f"  \033[91m[Sandbox Error] Docker execution pipeline encountered an error: {e}\033[0m")
                 mark_tool("Docker Sandbox", "failed", detail=str(e))
-                if not any(item["name"] == "Trivy" for item in tool_statuses):
+                if not tool_statuses.has("Trivy"):
                     mark_tool("Trivy", "skipped", detail="sandbox unavailable")
-                if not any(item["name"] == "DAST" for item in tool_statuses):
+                if not tool_statuses.has("DAST"):
                     mark_tool("DAST", "skipped", detail="sandbox unavailable")
             finally:
                 print("  [Docker Sandbox] Cleaning up sandbox containers...")
@@ -1063,7 +926,7 @@ def execute_scan(
             print_ascii_report(results, final_status, reason, exploitability_score)
     
     # Run the policy engine
-    pre_policy_failures = [item["name"] for item in tool_statuses if item["status"] == "failed"]
+    pre_policy_failures = tool_statuses.failures()
     with timed_step(timings, "Policy Engine"):
         policy_exit_code = run_policy_engine(
             scan_dir=scan_dir,
@@ -1073,7 +936,7 @@ def execute_scan(
             dependency_manifests=dependency_manifests,
             reporter_callback=capture_policy_summary,
             operational_failures=pre_policy_failures if strict else None,
-            tool_states={item["name"]: item["status"] for item in tool_statuses},
+            tool_states=tool_statuses.states(),
         )
     record_timing(timings, "Total", total_start)
     mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
@@ -1089,11 +952,11 @@ def execute_scan(
         write_sarif_report(sarif_path, policy_summary.get("results", []), base_path=sarif_base)
         policy_summary["sarif_report"] = str(sarif_path)
 
-    failed_tools = [item["name"] for item in tool_statuses if item["status"] == "failed"]
+    failed_tools = tool_statuses.failures()
     exit_code = policy_exit_code
+    policy_summary["operational_failures"] = failed_tools
     if strict and failed_tools:
         exit_code = EXIT_OPERATIONAL_ERROR
-        policy_summary["operational_failures"] = failed_tools
 
     manifest = {
         "schema_version": 1,
@@ -1111,10 +974,11 @@ def execute_scan(
             EXIT_BLOCKED: "blocked",
             EXIT_OPERATIONAL_ERROR: "error",
         }.get(exit_code, "error"),
-        "tools": tool_statuses,
+        "operational_failures": failed_tools,
+        "tools": tool_statuses.records,
     }
     write_json(scan_dir / "scan-manifest.json", manifest)
-    policy_summary["tools"] = tool_statuses
+    policy_summary["tools"] = tool_statuses.records
 
     print(f"\nScan complete. Dossier report available at: {html_report}")
     if not json_output and not quiet:

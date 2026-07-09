@@ -49,6 +49,7 @@ scanner = [
 ]
 dev = [
   "httpx==0.28.1",
+  "mypy==1.18.2",
   "pytest==8.1.1",
   "pytest-timeout==2.3.1",
 ]
@@ -69,3 +70,11 @@ include-package-data = true
 [tool.setuptools.package-data]
 app = ["templates/*.html", "static/*.css", "static/*.js", "downloads/*"]
 rules = ["*.yar", "*.yaml"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+files = ["app", "policy_engine.py"]
