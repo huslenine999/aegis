@@ -351,7 +351,12 @@ def async_scan_task(
         skip_external_scanners = os.environ.get(
             "AEGIS_SKIP_EXTERNAL_SCANNERS", ""
         ).lower() in {"1", "true", "yes", "on"} or preset == "quick"
-        enable_dynamic_scanners = scan_run_id is None or preset == "deep"
+        # The explicit scanner skip is used by tests and lightweight smoke
+        # environments where Docker may exist but must not be invoked. Deep
+        # project scans still fail closed when isolation is unavailable.
+        enable_dynamic_scanners = preset == "deep" or (
+            scan_run_id is None and not skip_external_scanners
+        )
 
         if project_id:
             project = get_project(project_id)

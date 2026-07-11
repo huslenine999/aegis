@@ -93,13 +93,22 @@ def test_repository_has_no_tracked_absolute_symlinks():
     )
 
 
+def test_redis_runtime_can_drop_to_its_unprivileged_user():
+    compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
+    redis_service = compose["services"]["redis"]
+
+    assert redis_service["cap_drop"] == ["ALL"]
+    assert set(redis_service["cap_add"]) == {"SETGID", "SETUID"}
+
+
 def test_security_gate_uses_trusted_scanner_and_policy_revision():
     workflow = (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
 
     assert "uses: ./" not in workflow
-    assert "ref: e292c60770bee621fb70ba07b71cc9f2a525ea1a" in workflow
+    assert "ref: 395f4479c3f092b416bf13e2c3b45323db777ef1" in workflow
     assert "python -m pip install ./trusted-aegis" in workflow
-    assert "--config trusted-aegis/aegis.yml" in workflow
+    assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
+    assert "--config target/.aegis-trusted.yml" in workflow
     assert "aegis scan target" in workflow
     assert "--disable-version-check" in workflow
     assert "--validate" in workflow

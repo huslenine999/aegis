@@ -187,6 +187,36 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     }
 
 
+def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
+    scans_dir = tmp_path / "scans"
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "safe.py").write_text("def add(left, right):\n    return left + right\n")
+    monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "true")
+    monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(worker, "PROJECT_ROOT", target)
+    monkeypatch.setattr(worker, "run_yara_scan", lambda *args: [])
+    monkeypatch.setattr(worker, "run_clamav_scan", lambda *args: [])
+    docker_checks = []
+    monkeypatch.setattr(
+        worker,
+        "is_docker_available",
+        lambda: docker_checks.append(True) or True,
+    )
+    monkeypatch.setattr(
+        worker,
+        "build_sandbox_image",
+        lambda *args: pytest.fail("test-mode scan attempted to build a container"),
+    )
+    monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
+
+    worker.async_scan_task("legacy-job", "secure")
+
+    manifest = (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
+    assert '"policy_status": "ALLOWED"' in manifest
+    assert docker_checks == [True]
+
+
 def test_github_oauth_uses_pkce_and_encrypts_token(tmp_path, monkeypatch):
     configure_project_database(tmp_path, monkeypatch)
     monkeypatch.setattr(
