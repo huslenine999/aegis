@@ -126,9 +126,10 @@ jobs:
         run: |
           python -m compileall -q app policy_engine.py tests
 
-      - name: Critical lint checks
+      - name: Python lint and type checks
         run: |
-          ruff check app/cli.py app/config.py policy_engine.py --select E9,F63,F7,F82
+          ruff check app policy_engine.py tests
+          mypy
 
       - name: Validate Semgrep rules
         env:

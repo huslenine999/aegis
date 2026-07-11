@@ -128,6 +128,53 @@ def get_project(project_id: int) -> dict | None:
     }
 
 
+def update_project(
+    project_id: int,
+    *,
+    name: str,
+    repository_url: str,
+    default_branch: str,
+    scan_preset: str,
+) -> None:
+    if scan_preset not in VALID_PRESETS:
+        raise ValueError("Invalid scan preset.")
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """UPDATE projects SET name = ?, repository_url = ?,
+               default_branch = ?, scan_preset = ? WHERE id = ?""",
+            (name, repository_url or None, default_branch, scan_preset, project_id),
+        )
+        if not getattr(cursor, "rowcount", 0):
+            raise ValueError("Project not found.")
+
+
+def delete_project(project_id: int) -> list[str]:
+    with get_connection() as connection:
+        job_ids = [
+            row[0]
+            for row in connection.execute(
+                "SELECT job_id FROM scan_runs WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        ]
+        channel_ids = [
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM notification_channels WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        ]
+        for channel_id in channel_ids:
+            connection.execute(
+                "DELETE FROM notification_deliveries WHERE channel_id = ?", (channel_id,)
+            )
+        connection.execute("DELETE FROM notification_channels WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM scan_runs WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM project_members WHERE project_id = ?", (project_id,))
+        cursor = connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        if not getattr(cursor, "rowcount", 0):
+            raise ValueError("Project not found.")
+    return job_ids
+
+
 def create_scan_run(
     *, job_id: str, project_id: int, requested_by: int, target: str, preset: str
 ) -> int:
@@ -154,16 +201,40 @@ def _fingerprints(result: dict | None) -> set[str]:
     result = result or {}
     values = set()
     for item in result.get("ruff") or []:
-        values.add(f"ruff:{item.get('code')}:{item.get('filename')}:{item.get('location')}")
+        values.add(f"ruff:{item.get('code')}:{item.get('filename')}:{item.get('message')}")
     for item in (result.get("semgrep") or {}).get("results", []):
-        values.add(f"semgrep:{item.get('check_id')}:{item.get('path')}:{item.get('start')}")
+        values.add(
+            f"semgrep:{item.get('check_id')}:{item.get('path')}:{item.get('extra', {}).get('message')}"
+        )
     for family, keys in {
         "osv": ("id", "package"),
+        "yara": ("rule", "filename"),
         "clamav": ("virus", "filename"),
         "zap": ("vuln_type", "route"),
     }.items():
         for item in result.get(family) or []:
             values.add(f"{family}:" + ":".join(str(item.get(key)) for key in keys))
+    safety = result.get("safety") or {}
+    if isinstance(safety, dict):
+        safety_items = safety.get("vulnerabilities", []) or safety.get("results", [])
+    else:
+        safety_items = safety
+    for item in safety_items or []:
+        values.add(
+            "safety:"
+            + ":".join(
+                str(item.get(key))
+                for key in ("vulnerability_id", "advisory", "package_name", "package")
+            )
+        )
+    for target in (result.get("trivy") or {}).get("Results", []):
+        for item in target.get("Vulnerabilities", []) or []:
+            values.add(
+                f"trivy:{item.get('VulnerabilityID')}:{target.get('Target')}:{item.get('PkgName')}"
+            )
+    for filename, items in (result.get("secrets") or {}).get("results", {}).items():
+        for item in items:
+            values.add(f"secrets:{item.get('type')}:{filename}")
     return values
 
 
@@ -238,11 +309,28 @@ def get_scan_run(run_id: int) -> dict | None:
 def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
-            """SELECT id FROM scan_runs WHERE project_id = ?
+            """SELECT id, job_id, project_id, requested_by, target, preset,
+                      state, progress, new_findings, created_at, completed_at
+               FROM scan_runs WHERE project_id = ?
                ORDER BY id DESC LIMIT ?""",
             (project_id, max(1, min(limit, 100))),
         ).fetchall()
-    return [get_scan_run(int(row[0])) for row in rows]
+    return [
+        {
+            "id": int(row[0]),
+            "job_id": row[1],
+            "project_id": int(row[2]),
+            "requested_by": int(row[3]),
+            "target": row[4],
+            "preset": row[5],
+            "state": row[6],
+            "progress": int(row[7]),
+            "new_findings": int(row[8]),
+            "created_at": row[9],
+            "completed_at": row[10],
+        }
+        for row in rows
+    ]
 
 
 def list_project_members(project_id: int) -> list[dict]:
@@ -281,3 +369,24 @@ def set_project_member(project_id: int, username: str, role: str) -> dict:
                 (project_id, user[0], role, _now()),
             )
     return {"user_id": int(user[0]), "username": user[1], "role": role}
+
+
+def remove_project_member(project_id: int, user_id: int) -> bool:
+    with get_connection() as connection:
+        admins = connection.execute(
+            "SELECT COUNT(*) FROM project_members WHERE project_id = ? AND role = 'admin'",
+            (project_id,),
+        ).fetchone()[0]
+        member = connection.execute(
+            "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        if not member:
+            return False
+        if member[0] == "admin" and admins <= 1:
+            raise ValueError("At least one project administrator is required.")
+        cursor = connection.execute(
+            "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id),
+        )
+    return bool(getattr(cursor, "rowcount", 0))

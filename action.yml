@@ -64,7 +64,7 @@ runs:
       run: |
         set -euo pipefail
         python -m pip install --upgrade pip
-        python -m pip install "$AEGIS_ACTION_PATH"
+        python -m pip install "${AEGIS_ACTION_PATH}[scanner]"
 
     - name: Run Aegis project approval gate
       id: aegis

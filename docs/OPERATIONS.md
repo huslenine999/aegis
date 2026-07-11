@@ -47,6 +47,11 @@ Recommended retention:
 - daily backups for 14 days;
 - monthly backups for 12 months when Aegis is used for release evidence.
 
+Generated run artifacts are pruned after `AEGIS_ARTIFACT_RETENTION_DAYS`
+(30 days by default). Database scan summaries remain available after artifact
+expiry. Coordinate artifact retention with backup retention and regulatory
+evidence requirements.
+
 Test restore procedures regularly on a separate environment. A restore test is
 not complete until an administrator can sign in, project history is visible,
 reports open, and a worker can complete a quick scan.

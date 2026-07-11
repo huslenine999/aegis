@@ -1,10 +1,14 @@
 import json
+import logging
 from datetime import datetime, timezone
 
 try:
     from database import get_connection
 except ImportError:
     from .database import get_connection
+
+
+LOGGER = logging.getLogger("aegis.audit")
 
 
 def record_audit(actor_id, action: str, resource_type: str, resource_id=None, details=None):
@@ -24,7 +28,7 @@ def record_audit(actor_id, action: str, resource_type: str, resource_id=None, de
                 ),
             )
     except Exception:
-        pass
+        LOGGER.exception("Failed to persist audit event", extra={"action": action})
 
 
 def list_audit_events(limit: int = 200):

@@ -3,8 +3,8 @@
 ## Delivery state
 
 - Branch: `main`
-- Package version: `2.2.0`
-- Python suite: `120 passed`
+- Package version: `2.3.0`
+- Python suite: `138 passed`
 - Playwright/axe suite: `6 passed`
 - Compile and whitespace validation: passed
 - Docker Compose runtime smoke: requires a Docker-capable host or CI runner
@@ -19,7 +19,7 @@ operations console while retaining the CLI scanner and GitHub Action.
 
 ### Authentication and authorization
 
-- PBKDF2 password authentication with signed HTTP-only sessions.
+- PBKDF2 password authentication with revocable server-side HTTP-only sessions.
 - CSRF protection for cookie-authenticated mutations.
 - `viewer`, `operator`, and `admin` global and project roles.
 - Bearer API tokens with one-time display, listing, and revocation.
@@ -50,9 +50,10 @@ project scans.
 - New-finding comparison against the previous completed project scan.
 - Bounded Redis logs and retention.
 
-Generated HTML, Markdown, SBOM, and raw scanner artifacts still use shared file
-storage. Project result summaries and histories are separated in PostgreSQL,
-but fully isolated per-run artifact storage remains future work.
+Generated HTML, Markdown, SBOM, manifests, and raw scanner artifacts use
+project-authorized per-run directories with integrity metadata and retention.
+The local storage backend should be replaced by tenant-scoped object storage
+before operating Aegis as a public multi-tenant service.
 
 ### Notifications and operations
 
@@ -115,12 +116,12 @@ credential testing.
 Before treating Aegis as a public multi-tenant SaaS:
 
 1. Move generated artifacts to project/run-scoped object storage.
-2. Add MFA, password reset, account disablement, and session revocation.
+2. Add MFA, password reset, and enterprise identity federation.
 3. Replace broad GitHub OAuth repository scope with a fine-grained GitHub App.
 4. Add pull-request checks/comments and webhook automation.
 5. Run load, soak, failover, penetration, and disaster-recovery tests.
 6. Configure external log aggregation, alert rules, and error tracking.
-7. Verify notification retries and provider rate-limit behavior.
+7. Verify provider rate-limit behavior under load and add a durable notification dead-letter queue.
 
 ## Required production configuration
 

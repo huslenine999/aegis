@@ -1,7 +1,5 @@
-import io
 import json
 import pytest
-from pathlib import Path
 from fastapi.testclient import TestClient
 import app.main as app_main
 from app.main import SCANS_DIR

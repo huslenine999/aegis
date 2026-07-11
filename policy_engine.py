@@ -1,8 +1,8 @@
 import json
 import os
-import re
 import sys
 import math
+from collections import Counter
 import time
 import urllib.request
 import urllib.error
@@ -97,6 +97,11 @@ def get_ruff_severity(code: str) -> str:
     elif code_upper in medium_rules:
         return "MEDIUM"
     return "LOW"
+
+
+def _severity_counts(findings: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = Counter(str(item.get("severity", "LOW")).upper() for item in findings)
+    return dict(sorted(counts.items()))
 
 
 def _format_dependency_fix(package_name: str | None, fixed_versions: Any = None) -> str:
@@ -279,6 +284,7 @@ def analyze_ruff(report: Any) -> Dict[str, Any]:
         "total_issues": len(issues),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
+        "severity_counts": _severity_counts(issues),
         "examples": (blocking_issues if blocking_issues else issues)[:5],
     }
 
@@ -325,6 +331,7 @@ def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
         "total_issues": len(issues),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
+        "severity_counts": _severity_counts(issues),
         "examples": (blocking_issues if blocking_issues else issues)[:5],
     }
 
@@ -371,6 +378,7 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
         "total_issues": len(vulnerabilities),
         "blocking_issues": len(vulnerabilities) if FAIL_ON_SAFETY else 0,
         "status": "FAIL" if vulnerabilities and FAIL_ON_SAFETY else "PASS",
+        "severity_counts": {"MEDIUM": len(vulnerabilities)} if vulnerabilities else {},
         "examples": normalized_examples[:5],
     }
 
@@ -405,6 +413,7 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_issues": len(findings),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
+        "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
 
@@ -441,6 +450,7 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
         "total_issues": len(vulnerabilities),
         "blocking_issues": len(blocking_issues),
         "status": "FAIL" if blocking_issues else "PASS",
+        "severity_counts": _severity_counts(vulnerabilities),
         "examples": (blocking_issues if blocking_issues else vulnerabilities)[:5],
     }
 
@@ -472,6 +482,7 @@ def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
         "total_issues": len(findings),
         "blocking_issues": len(findings),
         "status": "FAIL" if findings else "PASS",
+        "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
 
@@ -501,6 +512,7 @@ def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_issues": len(findings),
         "blocking_issues": len(findings),
         "status": "FAIL" if findings else "PASS",
+        "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
 
@@ -529,6 +541,7 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_issues": len(findings),
         "blocking_issues": len(findings),
         "status": "FAIL" if findings else "PASS",
+        "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
 
@@ -563,6 +576,7 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_issues": len(findings),
         "blocking_issues": blocking_count,
         "status": "FAIL" if blocking_count > 0 else "PASS",
+        "severity_counts": _severity_counts(findings),
         "examples": findings[:6],
     }
 
@@ -829,74 +843,21 @@ def query_osv_vulnerabilities(
 
 
 def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: bool) -> float:
-    findings = []
-    dast_exposed_multiplier = 1.0
-    
-    for r in results:
-        tool = r.get("tool")
-        if tool == "Ruff (SAST)":
-            for ex in r.get("examples", []):
-                sev = ex.get("severity", "LOW").upper()
-                cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
-                findings.append({"type": "sast", "cvss": cvss})
-        elif tool == "Semgrep":
-            for ex in r.get("examples", []):
-                sev = ex.get("severity", "LOW").upper()
-                cvss = 8.5 if sev == "HIGH" else (5.5 if sev == "MEDIUM" else 2.0)
-                findings.append({"type": "sast", "cvss": cvss})
-        elif tool == "Safety" and not any(other.get("tool") == "OSV Dependency Audit" and other.get("total_issues", 0) > 0 for other in results):
-            for _ in range(r.get("total_issues", 0)):
-                findings.append({"type": "sca", "cvss": 6.5})
-        elif tool == "OSV Dependency Audit":
-            for ex in r.get("examples", []):
-                cvss = ex.get("cvss") or 6.5
-                findings.append({"type": "sca", "cvss": cvss})
-        elif tool == "Trivy":
-            for ex in r.get("examples", []):
-                sev = ex.get("severity", "LOW").upper()
-                cvss = 9.8 if sev == "CRITICAL" else (8.0 if sev == "HIGH" else (5.0 if sev == "MEDIUM" else 2.0))
-                findings.append({"type": "container", "cvss": cvss})
-        elif tool == "Secrets Scanner":
-            for _ in range(r.get("total_issues", 0)):
-                findings.append({"type": "secrets", "cvss": 8.5})
-        elif tool == "YARA Scanner":
-            for _ in range(r.get("total_issues", 0)):
-                findings.append({"type": "malware", "cvss": 9.0})
-        elif tool == "ClamAV":
-            for _ in range(r.get("total_issues", 0)):
-                findings.append({"type": "malware", "cvss": 9.0})
-        elif tool == "Aegis DAST Probe":
-            exposed_count = len([ex for ex in r.get("examples", []) if ex.get("status") == "EXPOSED"])
-            if exposed_count > 0:
-                dast_exposed_multiplier = 1.5
-            for ex in r.get("examples", []):
-                if ex.get("status") == "EXPOSED":
-                    findings.append({"type": "dast", "cvss": 8.5})
+    severity_cvss = {"LOW": 2.0, "MEDIUM": 5.5, "HIGH": 8.5, "CRITICAL": 9.8}
+    severities = []
+    for result in results:
+        if result.get("status") in {"SKIPPED", "MISSING", "ERROR"}:
+            continue
+        for severity, count in (result.get("severity_counts") or {}).items():
+            severities.extend([severity_cvss.get(severity.upper(), 2.0)] * int(count))
 
-    if not findings:
+    if not severities:
         return 0.0
-
-    weighted_sum = 0.0
-    weights = {
-        "sast": 1.0,
-        "sca": 0.8,
-        "container": 0.9,
-        "secrets": 1.2,
-        "malware": 1.1,
-        "dast": 1.0
-    }
-    
-    for f in findings:
-        w = weights.get(f["type"], 1.0)
-        weighted_sum += f["cvss"] * w
-
-    base_score = min(100.0, weighted_sum * 5.0)
-    score = base_score * dast_exposed_multiplier
-    
-    if waf_enabled:
-        score *= 0.5
-        
-    return round(min(100.0, score), 1)
+    # A risk score should reflect the worst credible finding without growing
+    # linearly merely because a scanner emitted many low-confidence matches.
+    maximum_risk = max(severities) * 10.0
+    volume_bonus = min(15.0, math.log2(len(severities) + 1) * 2.5)
+    return round(min(100.0, maximum_risk + volume_bonus), 1)
 
 
 def generate_reports(
@@ -1012,6 +973,7 @@ def run_policy_engine(
     reporter_callback = None,
     operational_failures: List[str] | None = None,
     tool_states: Dict[str, str] | None = None,
+    waf_enabled: bool | None = None,
 ) -> int:
     if dependency_manifests is None:
         if req_path:
@@ -1101,7 +1063,8 @@ def run_policy_engine(
         reason = " | ".join(reasons)
 
     # Determine WAF status from environment (injected by main.py)
-    waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
+    if waf_enabled is None:
+        waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
     exploitability_score = calculate_exploitability_score(results, waf_enabled)
 
     if reporter_callback:

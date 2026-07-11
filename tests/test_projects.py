@@ -2,8 +2,11 @@ from app import database
 from app import github_integration
 from app import notifications
 from app import projects
+from app import main as app_main
+from app import worker
 from cryptography.fernet import Fernet
 from urllib.parse import parse_qs, urlparse
+import pytest
 
 
 def configure_project_database(tmp_path, monkeypatch):
@@ -12,6 +15,17 @@ def configure_project_database(tmp_path, monkeypatch):
     monkeypatch.setattr(projects, "get_connection", database.get_connection)
     monkeypatch.setattr(projects, "USING_POSTGRES", False)
     database.initialize_database(reset=True)
+    with database.get_connection() as connection:
+        connection.executemany(
+            """INSERT INTO auth_users
+               (id, username, password_hash, role, active, created_at)
+               VALUES (?, ?, ?, ?, 1, ?)""",
+            [
+                (7, "github-user", "unused", "operator", "2026-01-01T00:00:00+00:00"),
+                (10, "owner", "unused", "operator", "2026-01-01T00:00:00+00:00"),
+                (11, "viewer", "unused", "viewer", "2026-01-01T00:00:00+00:00"),
+            ],
+        )
 
 
 def test_projects_are_membership_scoped(tmp_path, monkeypatch):
@@ -79,6 +93,98 @@ def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeyp
     latest = projects.get_scan_run(second)
     assert latest["new_findings"] == 1
     assert [run["id"] for run in projects.list_scan_runs(project_id)] == [second, first]
+
+
+def test_fingerprints_cover_every_scanner_family_and_ignore_line_moves():
+    first = {
+        "ruff": [{"code": "S105", "filename": "a.py", "message": "secret", "location": {"row": 1}}],
+        "secrets": {"results": {"a.py": [{"type": "API Key", "line_number": 4}]}},
+        "yara": [{"rule": "Webshell", "filename": "a.py"}],
+        "trivy": {"Results": [{"Target": "image", "Vulnerabilities": [{"VulnerabilityID": "CVE-1", "PkgName": "lib"}]}]},
+    }
+    moved = {
+        **first,
+        "ruff": [{"code": "S105", "filename": "a.py", "message": "secret", "location": {"row": 99}}],
+        "secrets": {"results": {"a.py": [{"type": "API Key", "line_number": 99}]}},
+    }
+    assert projects._fingerprints(first) == projects._fingerprints(moved)
+    assert len(projects._fingerprints(first)) == 4
+
+
+def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
+    scans_dir = tmp_path / "scans"
+    run_dir = scans_dir / "runs" / "job-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.html").write_text("<h1>Project report</h1>")
+    (run_dir / "sbom.json").write_text("{}")
+    monkeypatch.setattr(app_main, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(app_main, "_project_access", lambda *args: {"id": 7})
+    monkeypatch.setattr(
+        app_main,
+        "get_scan_run",
+        lambda run_id: {"id": run_id, "project_id": 7, "job_id": "job-1"},
+    )
+
+    listing = app_main.project_scan_artifacts(7, 3, principal=object())
+    assert {item["name"] for item in listing["artifacts"]} == {
+        "report.html",
+        "sbom.json",
+        "report-bundle.zip",
+    }
+    response = app_main.project_scan_artifact(
+        7, 3, "report.html", principal=object()
+    )
+    assert response.path == str(run_dir / "report.html")
+
+
+def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "safe.py").write_text("def add(left, right):\n    return left + right\n")
+    scans_dir = tmp_path / "scans"
+    project_id = projects.create_project(
+        name="Deep audit",
+        repository_url="",
+        github_full_name="",
+        default_branch="main",
+        scan_preset="deep",
+        user_id=10,
+    )
+    run_id = projects.create_scan_run(
+        job_id="deep-job",
+        project_id=project_id,
+        requested_by=10,
+        target="project",
+        preset="deep",
+    )
+    monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(worker, "PROJECT_ROOT", target)
+    monkeypatch.setattr(worker, "get_project", projects.get_project)
+    monkeypatch.setattr(worker, "update_scan_run", projects.update_scan_run)
+    monkeypatch.setattr(worker, "is_docker_available", lambda: False)
+    monkeypatch.setattr(worker, "run_yara_scan", lambda *args: [])
+    monkeypatch.setattr(worker, "run_clamav_scan", lambda *args: [])
+    monkeypatch.setattr(worker, "stop_and_cleanup_sandbox", lambda *args: None)
+    monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
+
+    with pytest.raises(worker.ScanOperationalFailure):
+        worker.async_scan_task(
+            "deep-job",
+            "project",
+            scan_run_id=run_id,
+            project_id=project_id,
+            requested_by=10,
+            preset="deep",
+        )
+
+    failed = projects.get_scan_run(run_id)
+    assert failed["state"] == "failed"
+    assert set(failed["result"]["operational_failures"]) >= {
+        "Docker Sandbox",
+        "DAST",
+        "Trivy",
+    }
 
 
 def test_github_oauth_uses_pkce_and_encrypts_token(tmp_path, monkeypatch):
@@ -185,6 +291,8 @@ def test_notification_configuration_is_encrypted_and_delivered(tmp_path, monkeyp
     assert "hooks.slack.com" not in encrypted
 
     class Response:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 
@@ -204,3 +312,25 @@ def test_notification_configuration_is_encrypted_and_delivered(tmp_path, monkeyp
             (channel_id,),
         ).fetchone()[0]
     assert status == "delivered"
+
+
+def test_webhook_delivery_rejects_redirects(monkeypatch):
+    monkeypatch.setattr(notifications, "_validate_webhook_url", lambda url: None)
+    monkeypatch.setattr(notifications.time, "sleep", lambda seconds: None)
+
+    class Redirect:
+        status_code = 302
+
+        def raise_for_status(self):
+            return None
+
+    attempts = []
+    monkeypatch.setattr(
+        notifications.requests,
+        "post",
+        lambda *args, **kwargs: attempts.append(kwargs) or Redirect(),
+    )
+    with pytest.raises(RuntimeError, match="redirects are not allowed"):
+        notifications._post_with_retries("https://example.com/hook", json={})
+    assert len(attempts) == 3
+    assert all(attempt["allow_redirects"] is False for attempt in attempts)

@@ -1,6 +1,4 @@
 import json
-from pathlib import Path
-import pytest
 from policy_engine import parse_cvss_vector, calculate_exploitability_score as calculate_policy_score
 import app.main as app_main
 
@@ -28,20 +26,20 @@ def test_parse_cvss_vector_invalid():
 
 def test_policy_exploitability_score_calculation():
     results = [
-        {"tool": "Ruff (SAST)", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "examples": [
+        {"tool": "Ruff (SAST)", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "severity_counts": {"HIGH": 1}, "examples": [
             {"severity": "HIGH", "issue_text": "SQL Injection"}
         ]},
-        {"tool": "OSV Dependency Audit", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "examples": [
+        {"tool": "OSV Dependency Audit", "total_issues": 1, "blocking_issues": 1, "status": "FAIL", "severity_counts": {"HIGH": 1}, "examples": [
             {"package": "flask", "cvss": 7.5, "id": "CVE-2024-1234"}
         ]}
     ]
-    # WAF disabled: Score = sum(CVSS * Weight) * 5 * DAST_mult = (8.5 * 1.0 + 7.5 * 0.8) * 5.0 * 1.0 = (8.5 + 6.0) * 5.0 = 14.5 * 5 = 72.5
+    # The score uses the worst severity plus a logarithmic volume bonus.
     score_waf_off = calculate_policy_score(results, False)
-    assert score_waf_off == 72.5
+    assert score_waf_off == 89.0
 
-    # WAF enabled: halves the score
+    # WAF state does not discount unrelated static or dependency findings.
     score_waf_on = calculate_policy_score(results, True)
-    assert score_waf_on == 36.2
+    assert score_waf_on == 89.0
 
 def test_app_exploitability_score_calculation(tmp_path):
     # Setup mock scan reports in temp directory
@@ -70,10 +68,10 @@ def test_app_exploitability_score_calculation(tmp_path):
         {"status": "EXPOSED", "vuln_type": "SQL Injection", "route": "/user", "payload": "' OR 1=1", "description": "SQL Injection"}
     ]))
 
-    # Score = sum(8.5 * 1.0 + 8.5 * 1.0) * 5.0 * 1.5 = 17.0 * 5.0 * 1.5 = 85.0 * 1.5 = 127.5 -> Capped at 100.0
+    # Two high-severity findings produce a high score without saturating at 100.
     score_waf_off = app_main.calculate_exploitability_score(scans_dir, False)
-    assert score_waf_off == 100.0
+    assert score_waf_off == 89.0
 
-    # WAF enabled: halves the score
+    # The WAF does not discount the independent static finding.
     score_waf_on = app_main.calculate_exploitability_score(scans_dir, True)
-    assert score_waf_on == 63.8
+    assert score_waf_on == 89.0

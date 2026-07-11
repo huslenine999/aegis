@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.0] - 2026-07-10
+
+### Changed
+
+- Unified worker decisions with the CLI policy engine and fail closed when scanner evidence is incomplete.
+- Added project/run-scoped artifact APIs, integrity hashes, retention controls, and authorized report downloads.
+- Replaced self-contained browser sessions with revocable server-side sessions that honor current account roles and status.
+- Added project update/deletion, member removal, user disable/role rotation, database indexes, and fresh-install constraints.
+- Hardened DAST fallback behavior, request-body limits, webhook redirects/retries, API-token expiry validation, linting, and focused type checks.
+- Made the GitHub Action install the full standard scanner extra and included Semgrep in the production worker image.
+
 All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]

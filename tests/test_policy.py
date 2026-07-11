@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from policy_engine import (
     analyze_ruff,
     analyze_safety,

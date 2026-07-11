@@ -10,7 +10,18 @@ try:
     from .dependencies import discover_dependency_manifests, first_requirements_manifest
 except ImportError:
     from dependencies import discover_dependency_manifests, first_requirements_manifest
-from policy_engine import get_ruff_severity
+from policy_engine import (
+    analyze_clamav,
+    analyze_osv,
+    analyze_ruff,
+    analyze_safety,
+    analyze_secrets,
+    analyze_semgrep,
+    analyze_trivy,
+    analyze_yara,
+    analyze_zap,
+    calculate_exploitability_score as calculate_policy_exploitability_score,
+)
 
 
 def extract_json_values(data):
@@ -44,80 +55,18 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
     zap = read_json_safe(scans_dir / "zap-report.json")
     osv = read_json_safe(scans_dir / "osv-report.json")
 
-    findings = []
-    dast_exposed_multiplier = 1.0
-
-    if ruff and isinstance(ruff, list):
-        for finding in ruff:
-            severity = get_ruff_severity(finding.get("code", "UNKNOWN"))
-            cvss = 8.5 if severity == "HIGH" else (5.5 if severity == "MEDIUM" else 2.0)
-            findings.append({"type": "sast", "cvss": cvss})
-
-    if semgrep and isinstance(semgrep, dict):
-        for finding in semgrep.get("results", []):
-            severity = finding.get("extra", {}).get("severity", "ERROR").upper()
-            cvss = 8.5 if severity == "ERROR" else (5.5 if severity == "WARNING" else 2.0)
-            findings.append({"type": "sast", "cvss": cvss})
-
-    if not osv and safety:
-        vulnerabilities = []
-        if isinstance(safety, dict):
-            vulnerabilities = safety.get("vulnerabilities", []) or safety.get("results", [])
-        elif isinstance(safety, list):
-            vulnerabilities = safety
-        for _ in vulnerabilities:
-            findings.append({"type": "sca", "cvss": 6.5})
-
-    if osv and isinstance(osv, list):
-        for vulnerability in osv:
-            findings.append({"type": "sca", "cvss": vulnerability.get("cvss") or 6.5})
-
-    if trivy and isinstance(trivy, dict):
-        for result in trivy.get("Results", []):
-            for vulnerability in result.get("Vulnerabilities", []) or []:
-                severity = vulnerability.get("Severity", "LOW").upper()
-                cvss = 9.8 if severity == "CRITICAL" else (8.0 if severity == "HIGH" else (5.0 if severity == "MEDIUM" else 2.0))
-                findings.append({"type": "container", "cvss": cvss})
-
-    if secrets and isinstance(secrets, dict):
-        for file_secrets in secrets.get("results", {}).values():
-            for _ in file_secrets:
-                findings.append({"type": "secrets", "cvss": 8.5})
-
-    if yara and isinstance(yara, list):
-        for _ in yara:
-            findings.append({"type": "malware", "cvss": 9.0})
-
-    if clamav and isinstance(clamav, list):
-        for _ in clamav:
-            findings.append({"type": "malware", "cvss": 9.0})
-
-    if zap and isinstance(zap, list):
-        exposed_count = len([finding for finding in zap if finding.get("status") == "EXPOSED"])
-        if exposed_count > 0:
-            dast_exposed_multiplier = 1.5
-        for finding in zap:
-            if finding.get("status") == "EXPOSED":
-                findings.append({"type": "dast", "cvss": 8.5})
-
-    if not findings:
-        return 0.0
-
-    weights = {
-        "sast": 1.0,
-        "sca": 0.8,
-        "container": 0.9,
-        "secrets": 1.2,
-        "malware": 1.1,
-        "dast": 1.0,
-    }
-    weighted_sum = sum(finding["cvss"] * weights.get(finding["type"], 1.0) for finding in findings)
-    score = min(100.0, weighted_sum * 5.0) * dast_exposed_multiplier
-
-    if waf_enabled:
-        score *= 0.5
-
-    return round(min(100.0, score), 1)
+    results = [
+        analyze_ruff(ruff),
+        analyze_semgrep(semgrep),
+        analyze_safety(safety),
+        analyze_osv(osv),
+        analyze_trivy(trivy),
+        analyze_secrets(secrets),
+        analyze_yara(yara),
+        analyze_clamav(clamav),
+        analyze_zap(zap),
+    ]
+    return calculate_policy_exploitability_score(results, waf_enabled)
 
 
 def generate_fallback_tree(project_root: Path) -> list[dict]:

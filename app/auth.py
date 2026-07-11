@@ -1,11 +1,10 @@
-import base64
 import hashlib
 import hmac
 import json
 import os
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, Request, WebSocket
 
@@ -35,6 +34,10 @@ def _secret() -> bytes:
     if not value and not AUTH_REQUIRED:
         value = "development-session-secret-not-for-production"
     return value.encode()
+
+
+def _session_token_hash(token: str) -> str:
+    return hmac.new(_secret(), token.encode(), hashlib.sha256).hexdigest()
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -134,39 +137,62 @@ def complete_initial_setup(username: str, password: str, settings: dict) -> Prin
 
 
 def create_session(principal: Principal) -> str:
-    payload = {
-        "sub": principal.user_id,
-        "usr": principal.username,
-        "role": principal.role,
-        "csrf": principal.csrf_token,
-        "iat": int(datetime.now(timezone.utc).timestamp()),
-    }
-    raw = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":")).encode()
-    ).rstrip(b"=")
-    signature = hmac.new(_secret(), raw, hashlib.sha256).digest()
-    return f"{raw.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+    token = secrets.token_urlsafe(48)
+    token_hash = _session_token_hash(token)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(
+        seconds=int(os.environ.get("AEGIS_SESSION_TTL_SECONDS", "28800"))
+    )
+    with get_connection() as connection:
+        connection.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= ?", (now.isoformat(),)
+        )
+        connection.execute(
+            """INSERT INTO auth_sessions
+               (user_id, token_hash, csrf_token, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                principal.user_id,
+                token_hash,
+                principal.csrf_token,
+                expires_at.isoformat(),
+                now.isoformat(),
+            ),
+        )
+    return token
 
 
 def _decode_session(token: str) -> Principal | None:
-    try:
-        raw_text, signature_text = token.split(".", 1)
-        raw = raw_text.encode()
-        signature = base64.urlsafe_b64decode(signature_text + "==")
-        expected = hmac.new(_secret(), raw, hashlib.sha256).digest()
-        if not hmac.compare_digest(signature, expected):
-            return None
-        payload = json.loads(base64.urlsafe_b64decode(raw_text + "=="))
-        age = int(datetime.now(timezone.utc).timestamp()) - int(payload["iat"])
-        if age < 0 or age > int(os.environ.get("AEGIS_SESSION_TTL_SECONDS", "28800")):
-            return None
-        if payload["role"] not in ROLE_LEVEL:
-            return None
-        return Principal(
-            int(payload["sub"]), payload["usr"], payload["role"], payload["csrf"]
-        )
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+    if not token:
         return None
+    token_hash = _session_token_hash(token)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_connection() as connection:
+            row = connection.execute(
+                """SELECT u.id, u.username, u.role, s.csrf_token
+                   FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id
+                   WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1""",
+                (token_hash, now),
+            ).fetchone()
+    except Exception:
+        return None
+    if not row or row[2] not in ROLE_LEVEL:
+        return None
+    return Principal(int(row[0]), row[1], row[2], row[3])
+
+
+def revoke_session(token: str) -> None:
+    if not token:
+        return
+    token_hash = _session_token_hash(token)
+    with get_connection() as connection:
+        connection.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+
+
+def revoke_user_sessions(user_id: int) -> None:
+    with get_connection() as connection:
+        connection.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
 
 
 def _api_token_principal(token: str) -> Principal | None:

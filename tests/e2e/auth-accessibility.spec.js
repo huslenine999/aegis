@@ -81,7 +81,7 @@ test("viewer, operator, and admin permissions are enforced by the API", async ({
     data: { username: viewer, password: "role-test-password" }
   });
   const viewerMe = await (await viewerContext.request.get("/api/auth/me")).json();
-  expect((await viewerContext.request.get("/get-scan-results")).status()).toBe(200);
+  expect((await viewerContext.request.get("/get-scan-results")).status()).toBe(403);
   expect((await viewerContext.request.post("/run-scan", {
     headers: { "X-CSRF-Token": viewerMe.csrf_token },
     data: { target: "invalid" }

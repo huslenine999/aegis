@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import pytest
 from policy_engine import analyze_semgrep
 from app.main import app, generate_fallback_tree
 from fastapi.testclient import TestClient

@@ -23,7 +23,7 @@ Use this checklist before tagging a public release.
 13. Tag the release only after CI is green, then verify the `Release Build`
     workflow accepts the tag/version match and produces the reviewed wheel.
 14. Verify backup and restore procedures for PostgreSQL, Redis, report, and Caddy volumes.
-15. Run `python -m mypy app policy_engine.py` or document every remaining type
-    checking finding in the release notes.
+15. Run `python -m mypy`; expand the checked security-core modules as legacy
+    orchestration code is incrementally typed.
 16. Confirm every non-strict scan summary used as release evidence has an empty
     `operational_failures` list.

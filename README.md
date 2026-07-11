@@ -209,7 +209,7 @@ Global and project roles:
 Security controls include:
 
 - PBKDF2 password hashes;
-- signed HTTP-only sessions;
+- revocable server-side HTTP-only sessions that honor current account state;
 - secure `SameSite` cookies in production;
 - CSRF validation for session mutations;
 - bearer API tokens with revocation;
@@ -217,6 +217,8 @@ Security controls include:
 - per-job WebSocket ownership;
 - Redis-backed request and connection rate limits;
 - encrypted GitHub and notification credentials;
+- project/run-scoped artifacts with membership checks and integrity hashes;
+- fail-closed worker decisions when required scanner evidence is unavailable;
 - explicit production host and CORS allowlists.
 
 ## GitHub Integration
@@ -294,7 +296,7 @@ Health endpoints:
 Deploy a published image:
 
 ```bash
-export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.2.0
+export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.3.0
 docker compose pull dashboard worker
 docker compose up -d --no-build
 ```
@@ -361,10 +363,9 @@ npm run test:e2e
 git diff --check
 ```
 
-Current baseline:
-
-- Python: **132 passing tests**
-- Playwright/axe: **6 passing browser and accessibility tests**
+Current baseline: **138 Python tests** and **6 Playwright/axe browser tests**.
+CI also enforces focused type checks, full Ruff linting, browser authentication
+flows, and serious/critical accessibility checks.
 
 The intentionally vulnerable demo routes are disabled by default. Enable them
 only for isolated training:
@@ -380,8 +381,8 @@ deployment rehearsal and backup/restore drill.
 
 Before operating it as a public multi-tenant SaaS:
 
-- move generated artifacts to project/run-scoped object storage;
-- add MFA, password reset, account disablement, and session revocation;
+- move the run-scoped local artifact backend to tenant-scoped object storage;
+- add MFA, password reset, and enterprise identity federation;
 - replace broad GitHub OAuth scope with a fine-grained GitHub App;
 - add automated pull-request checks and review comments;
 - run load, failover, penetration, and disaster-recovery testing;
@@ -397,6 +398,9 @@ See [the delivery handoff](handoff.md) for the detailed assessment.
 - [Operations and notifications](docs/OPERATIONS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 

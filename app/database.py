@@ -118,7 +118,9 @@ def get_connection():
         except ImportError as exc:
             raise RuntimeError("PostgreSQL requires psycopg. Install production dependencies.") from exc
         return PostgresConnection(psycopg.connect(DATABASE_URL))
-    return sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH)
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
 
 
 DEFAULT_USERS = [
@@ -205,7 +207,7 @@ def _migration_001_initial_schema(cursor) -> None:
             id {auth_id},
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('viewer', 'operator', 'admin')),
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         )
@@ -213,7 +215,7 @@ def _migration_001_initial_schema(cursor) -> None:
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS auth_tokens (
             id {auth_id},
-            user_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
             token_hash TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             expires_at TEXT,
@@ -234,16 +236,16 @@ def _migration_001_initial_schema(cursor) -> None:
             repository_url TEXT,
             github_full_name TEXT,
             default_branch TEXT NOT NULL DEFAULT 'main',
-            scan_preset TEXT NOT NULL DEFAULT 'standard',
-            created_by BIGINT NOT NULL,
+            scan_preset TEXT NOT NULL DEFAULT 'standard' CHECK (scan_preset IN ('quick', 'standard', 'deep')),
+            created_by BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE RESTRICT,
             created_at TEXT NOT NULL
         )
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS project_members (
-            project_id BIGINT NOT NULL,
-            user_id BIGINT NOT NULL,
-            role TEXT NOT NULL,
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('viewer', 'operator', 'admin')),
             created_at TEXT NOT NULL,
             PRIMARY KEY (project_id, user_id)
         )
@@ -252,12 +254,12 @@ def _migration_001_initial_schema(cursor) -> None:
         CREATE TABLE IF NOT EXISTS scan_runs (
             id {auth_id},
             job_id TEXT NOT NULL UNIQUE,
-            project_id BIGINT NOT NULL,
-            requested_by BIGINT NOT NULL,
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            requested_by BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE RESTRICT,
             target TEXT NOT NULL,
-            preset TEXT NOT NULL,
-            state TEXT NOT NULL,
-            progress INTEGER NOT NULL DEFAULT 0,
+            preset TEXT NOT NULL CHECK (preset IN ('quick', 'standard', 'deep')),
+            state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'analyzing', 'correlating', 'reporting', 'completed', 'failed', 'cancelled')),
+            progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
             result_json TEXT,
             new_findings INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -266,7 +268,7 @@ def _migration_001_initial_schema(cursor) -> None:
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS github_connections (
-            user_id BIGINT PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
             github_login TEXT NOT NULL,
             token_encrypted TEXT NOT NULL,
             scopes TEXT NOT NULL,
@@ -276,7 +278,7 @@ def _migration_001_initial_schema(cursor) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS github_oauth_states (
             state_hash TEXT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
             verifier_encrypted TEXT NOT NULL,
             expires_at TEXT NOT NULL
         )
@@ -284,20 +286,20 @@ def _migration_001_initial_schema(cursor) -> None:
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS notification_channels (
             id {auth_id},
-            project_id BIGINT NOT NULL,
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             name TEXT NOT NULL,
             channel_type TEXT NOT NULL,
             config_encrypted TEXT NOT NULL,
             events TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
-            created_by BIGINT NOT NULL,
+            created_by BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE RESTRICT,
             created_at TEXT NOT NULL
         )
     """)
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS notification_deliveries (
             id {auth_id},
-            channel_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
             event_type TEXT NOT NULL,
             status TEXT NOT NULL,
             error TEXT,
@@ -307,7 +309,7 @@ def _migration_001_initial_schema(cursor) -> None:
     cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS audit_events (
             id {auth_id},
-            actor_id BIGINT,
+            actor_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
             action TEXT NOT NULL,
             resource_type TEXT NOT NULL,
             resource_id TEXT,
@@ -317,8 +319,45 @@ def _migration_001_initial_schema(cursor) -> None:
     """)
 
 
+def _migration_002_sessions_and_indexes(cursor) -> None:
+    identity = _identity_id_type()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            id {identity},
+            user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            csrf_token TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)",
+        "CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_runs_project_id ON scan_runs(project_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_runs_job_id ON scan_runs(job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_notification_channels_project ON notification_channels(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(id)",
+    ):
+        cursor.execute(statement)
+
+
+def _migration_003_github_webhook_deliveries(cursor) -> None:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
+            delivery_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            repository TEXT NOT NULL,
+            received_at TEXT NOT NULL
+        )
+    """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
+    Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
+    Migration(3, "github_webhook_deliveries", _migration_003_github_webhook_deliveries),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -500,6 +539,7 @@ class InMemoryRedis:
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_URL = os.environ.get("REDIS_URL", f"redis://{REDIS_HOST}:6379/0")
+redis_client: Any
 try:
     _temp_client = redis.Redis.from_url(REDIS_URL, socket_connect_timeout=0.5)
     _temp_client.ping()

@@ -9,19 +9,19 @@ import time
 import re
 import base64
 from pathlib import Path
-import redis
 
 # Add project root to sys.path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from database import BASE_DIR, PROJECT_ROOT, DOWNLOAD_DIR, SCANS_DIR, get_connection, redis_client
+from database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, get_connection, redis_client
 from config import environment_positive_int
 try:
     from .dependencies import discover_dependency_manifests, first_requirements_manifest
 except ImportError:
     from dependencies import discover_dependency_manifests, first_requirements_manifest
-from policy_engine import get_ruff_severity
+from policy_engine import query_osv_vulnerabilities, run_policy_engine
+from scan_status import ToolStatusTracker
 from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import DEFAULT_IGNORED_DIRS
@@ -32,13 +32,13 @@ from github_integration import github_token
 from notifications import send_project_notification
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
-    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
-    get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
+    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox
 )
 
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
 JOB_LOG_LIMIT = environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
 JOB_RETENTION_SECONDS = environment_positive_int("AEGIS_JOB_RETENTION_SECONDS", 86400)
+ARTIFACT_RETENTION_DAYS = environment_positive_int("AEGIS_ARTIFACT_RETENTION_DAYS", 30)
 
 
 def add_semgrep_excludes(command: list[str]) -> list[str]:
@@ -174,11 +174,18 @@ def run_dast_scan(target_url: str = None, job_id: str = None, waf_enabled: bool 
             try:
                 res = requests.get(url, params=tc["params"], timeout=3)
                 status_code = res.status_code
-            except Exception as e:
+            except Exception:
                 status_code = 500
             
-            status = "MITIGATED" if status_code == 403 else "EXPOSED"
-            color = "var(--primary)" if status_code == 403 else "var(--danger)"
+            if 200 <= status_code < 400:
+                status = "EXPOSED"
+            elif status_code in {401, 403}:
+                status = "MITIGATED"
+            elif status_code in {404, 405}:
+                status = "NOT_APPLICABLE"
+            else:
+                status = "ERROR"
+            color = "var(--danger)" if status == "EXPOSED" else "var(--primary)"
             publish_job_event(job_id, "log", {"text": f"[DAST] Result for {tc['vuln_type']}: {status} (HTTP {status_code})", "color": color})
             
             findings.append({
@@ -190,40 +197,14 @@ def run_dast_scan(target_url: str = None, job_id: str = None, waf_enabled: bool 
                 "response_code": status_code
             })
     else:
-        # If no sandbox container is running, execute local requests directly against app via TestClient
-        from fastapi.testclient import TestClient
-        import app.main as app_main
-        
-        # Override WAF_ENABLED in target process space if provided
-        old_waf = app_main.WAF_ENABLED
-        if waf_enabled is not None:
-            app_main.WAF_ENABLED = waf_enabled
-            
-        try:
-            client = TestClient(app_main.app)
-            for tc in test_cases:
-                publish_job_event(job_id, "log", {"text": f"[DAST Fallback] Querying {tc['route']}...", "color": "var(--text-muted)"})
-                try:
-                    res = client.get(tc["route"], params=tc["params"])
-                    status_code = res.status_code
-                except Exception as e:
-                    status_code = 500
-                
-                status = "MITIGATED" if status_code == 403 else "EXPOSED"
-                color = "var(--primary)" if status_code == 403 else "var(--danger)"
-                publish_job_event(job_id, "log", {"text": f"[DAST Fallback] Result for {tc['vuln_type']}: {status} (HTTP {status_code})", "color": color})
-                
-                findings.append({
-                    "vuln_type": tc["vuln_type"],
-                    "route": tc["route"],
-                    "payload": tc["payload"],
-                    "description": tc["description"],
-                    "status": status,
-                    "response_code": status_code
-                })
-        finally:
-            if waf_enabled is not None:
-                app_main.WAF_ENABLED = old_waf
+        publish_job_event(
+            job_id,
+            "log",
+            {
+                "text": "[DAST] Skipped: no isolated target URL was available.",
+                "color": "var(--text-muted)",
+            },
+        )
     return findings
 
 def execute_subprocess_log(cmd, cwd, job_id, tool_name, env=None):
@@ -242,6 +223,12 @@ class ScanCancelled(Exception):
     pass
 
 
+class ScanOperationalFailure(Exception):
+    def __init__(self, message: str, result: dict):
+        super().__init__(message)
+        self.result = result
+
+
 def _check_cancelled(job_id: str) -> None:
     value = redis_client.hget(f"job:{job_id}", "cancel_requested")
     if value and str(value.decode() if isinstance(value, bytes) else value) == "1":
@@ -252,6 +239,8 @@ def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tupl
     destination = SCANS_DIR / "workspaces" / job_id
     destination.parent.mkdir(parents=True, exist_ok=True)
     token = github_token(requested_by)
+    if not token and requested_by != project["created_by"]:
+        token = github_token(project["created_by"])
     environment = os.environ.copy()
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
@@ -308,6 +297,25 @@ def _mirror_latest_reports(source_dir: Path) -> None:
             shutil.copy2(path, SCANS_DIR / path.name)
 
 
+def _cleanup_expired_artifacts(current_job_id: str) -> None:
+    runs_root = SCANS_DIR / "runs"
+    if not runs_root.is_dir():
+        return
+    cutoff = time.time() - ARTIFACT_RETENTION_DAYS * 86400
+    for run_dir in runs_root.iterdir():
+        if not run_dir.is_dir() or run_dir.name == current_job_id:
+            continue
+        try:
+            state = redis_client.hget(f"job:{run_dir.name}", "state")
+            state_text = state.decode() if isinstance(state, bytes) else str(state or "")
+            if state_text and state_text not in {"completed", "failed", "cancelled"}:
+                continue
+            if run_dir.stat().st_mtime < cutoff:
+                shutil.rmtree(run_dir, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def async_scan_task(
     job_id: str,
     target: str,
@@ -321,6 +329,21 @@ def async_scan_task(
     external_project_dir = None
     report_dir = SCANS_DIR / "runs" / job_id
     report_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_expired_artifacts(job_id)
+    tool_statuses = ToolStatusTracker()
+    mark_tool = tool_statuses.mark
+
+    def write_json(path: Path, value) -> None:
+        path.write_text(json.dumps(value, indent=2))
+
+    def load_json_safe(path: Path):
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+
     try:
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
@@ -340,7 +363,7 @@ def async_scan_task(
                     "color": "var(--text-muted)",
                 })
                 target_path, external_project_dir = _clone_github_project(
-                    project, project["created_by"], job_id
+                    project, requested_by or project["created_by"], job_id
                 )
                 target = "project"
         
@@ -361,6 +384,8 @@ def async_scan_task(
                 json.dump([], f)
             with open(report_dir / "trivy-report.json", "w") as f:
                 json.dump({"Results": []}, f)
+            mark_tool("Safety", "skipped", detail="single-file scan")
+            mark_tool("OSV", "skipped", detail="single-file scan")
         else:
             if target == "secure":
                 target_path = str(BASE_DIR / "secure_main.py")
@@ -373,8 +398,8 @@ def async_scan_task(
                 
             # Run Safety SCA
             if skip_external_scanners:
-                with open(report_dir / "safety-report.json", "w") as f:
-                    json.dump([], f)
+                write_json(report_dir / "safety-report.json", [])
+                mark_tool("Safety", "skipped", detail="scanner configuration")
                 publish_job_event(job_id, "log", {"text": "[SCA] Safety skipped by scanner configuration.", "color": "var(--text-muted)"})
             else:
                 publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
@@ -382,12 +407,46 @@ def async_scan_task(
                 if requirements_manifest:
                     requirements_file = requirements_manifest.path
                     safety_cmd = [python_bin, "-m", "safety", "check", "-r", str(requirements_file), "--save-json", str(report_dir / "safety-report.json")]
-                    subprocess.run(safety_cmd, cwd=requirements_file.parent, check=False)
-                    publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
+                    completed = subprocess.run(
+                        safety_cmd,
+                        cwd=requirements_file.parent,
+                        check=False,
+                        timeout=120,
+                    )
+                    safety_report = load_json_safe(report_dir / "safety-report.json")
+                    if isinstance(safety_report, (dict, list)):
+                        mark_tool("Safety", "completed", return_code=completed.returncode)
+                        publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
+                    else:
+                        write_json(report_dir / "safety-report.json", [])
+                        mark_tool(
+                            "Safety",
+                            "failed",
+                            detail="scanner did not produce a valid JSON report",
+                            return_code=completed.returncode,
+                        )
                 else:
-                    with open(report_dir / "safety-report.json", "w") as f:
-                        json.dump([], f)
+                    write_json(report_dir / "safety-report.json", [])
+                    mark_tool("Safety", "skipped", detail="requirements.txt not found")
                     publish_job_event(job_id, "log", {"text": "[SCA] requirements.txt not found in target. Safety skipped.", "color": "var(--text-muted)"})
+
+            if skip_external_scanners:
+                write_json(report_dir / "osv-report.json", [])
+                mark_tool("OSV", "skipped", detail="scanner configuration")
+            elif dependency_manifests:
+                try:
+                    osv_findings = query_osv_vulnerabilities(
+                        dependency_manifests, raise_on_error=True
+                    )
+                    write_json(report_dir / "osv-report.json", osv_findings)
+                    mark_tool("OSV", "completed")
+                except Exception as exc:
+                    write_json(report_dir / "osv-report.json", [])
+                    mark_tool("OSV", "failed", detail=str(exc))
+                    publish_job_event(job_id, "log", {"text": f"[OSV Error] {exc}", "color": "var(--danger)"})
+            else:
+                write_json(report_dir / "osv-report.json", [])
+                mark_tool("OSV", "skipped", detail="dependency manifest not found")
             
             # Ensure trivy-report.json exists
             trivy_path = report_dir / "trivy-report.json"
@@ -420,7 +479,8 @@ def async_scan_task(
                 s.bind(('', 0))
                 return s.getsockname()[1]
 
-        if enable_dynamic_scanners and is_docker_available() and has_python:
+        docker_available = is_docker_available()
+        if enable_dynamic_scanners and docker_available and has_python:
             publish_job_event(job_id, "log", {"text": "[SANDBOX] Docker available. Scaffold target sandbox...", "color": "var(--text-muted)"})
             try:
                 host_port = find_free_port()
@@ -436,9 +496,22 @@ def async_scan_task(
                         target_url = f"http://127.0.0.1:{host_port}"
                         if wait_for_container(target_url, timeout=6.0):
                             sandbox_active = True
+                            mark_tool("Docker Sandbox", "completed")
                             publish_job_event(job_id, "log", {"text": "[SANDBOX] Container healthy and ready.", "color": "var(--primary)"})
             except Exception as ex:
+                mark_tool("Docker Sandbox", "failed", detail=str(ex))
                 publish_job_event(job_id, "log", {"text": f"[SANDBOX Error] Failed to launch sandbox: {ex}", "color": "var(--danger)"})
+            if not sandbox_active and not tool_statuses.has("Docker Sandbox"):
+                mark_tool("Docker Sandbox", "failed", detail="sandbox did not become healthy")
+        elif enable_dynamic_scanners:
+            reason = "Docker is unavailable" if not docker_available else "no Python target found"
+            mark_tool(
+                "Docker Sandbox",
+                "failed" if scan_run_id else "skipped",
+                detail=reason,
+            )
+        else:
+            mark_tool("Docker Sandbox", "skipped", detail="scan preset")
 
         sandbox_status_file = report_dir / "sandbox-status.json"
         try:
@@ -458,10 +531,16 @@ def async_scan_task(
         if has_python:
             ruff_cmd = [python_bin, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
-            execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
+            return_code = execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
+            ruff_report = load_json_safe(ruff_report_path)
+            if return_code in {0, 1} and isinstance(ruff_report, list):
+                mark_tool("Ruff", "completed", return_code=return_code)
+            else:
+                write_json(ruff_report_path, [])
+                mark_tool("Ruff", "failed", detail="scanner did not produce a valid report", return_code=return_code)
         else:
-            with open(ruff_report_path, "w") as f:
-                json.dump([], f)
+            write_json(ruff_report_path, [])
+            mark_tool("Ruff", "skipped", detail="no Python scripts found")
             publish_job_event(job_id, "log", {"text": "[SAST:Ruff (SAST)] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
 
         # SAST: Semgrep
@@ -482,22 +561,28 @@ def async_scan_task(
                 semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]
                 add_semgrep_excludes(semgrep_cmd)
                 semgrep_cmd.extend(["-o", str(semgrep_report_path), target_path])
-                execute_subprocess_log(semgrep_cmd, PROJECT_ROOT, job_id, "SAST:Semgrep")
-            except Exception as e:
-                with open(semgrep_report_path, "w") as f:
-                    json.dump({"results": []}, f)
+                return_code = execute_subprocess_log(semgrep_cmd, PROJECT_ROOT, job_id, "SAST:Semgrep")
+                semgrep_report = load_json_safe(semgrep_report_path)
+                if return_code == 0 and isinstance(semgrep_report, dict):
+                    mark_tool("Semgrep", "completed", return_code=return_code)
+                else:
+                    write_json(semgrep_report_path, {"results": []})
+                    mark_tool("Semgrep", "failed", detail="scanner did not produce a valid report", return_code=return_code)
+            except Exception as exc:
+                write_json(semgrep_report_path, {"results": []})
+                mark_tool("Semgrep", "failed", detail=str(exc))
         else:
-            with open(semgrep_report_path, "w") as f:
-                json.dump({"results": []}, f)
+            write_json(semgrep_report_path, {"results": []})
             reason = "scanner configuration" if skip_external_scanners else "no Python scripts found"
+            mark_tool("Semgrep", "skipped", detail=reason)
             publish_job_event(job_id, "log", {"text": f"[SAST:Semgrep] Skipped ({reason}).", "color": "var(--text-muted)"})
 
         # Secrets Scanner
         secrets_report_path = report_dir / "secrets-report.json"
         try:
             if skip_external_scanners:
-                with open(secrets_report_path, "w") as f:
-                    json.dump({"results": {}}, f)
+                write_json(secrets_report_path, {"results": {}})
+                mark_tool("Secrets", "skipped", detail="scanner configuration")
                 publish_job_event(job_id, "log", {"text": "[Secrets] Skipped by scanner configuration.", "color": "var(--text-muted)"})
             else:
                 secrets_cmd = [
@@ -507,13 +592,25 @@ def async_scan_task(
                     target_path
                 ]
                 publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
-                with open(secrets_report_path, "w") as f:
-                    subprocess.run(secrets_cmd, cwd=PROJECT_ROOT, check=False, stdout=f)
-                publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[Secrets Error] {e}", "color": "var(--danger)"})
-            with open(secrets_report_path, "w") as f:
-                json.dump({"results": {}}, f)
+                with open(secrets_report_path, "w") as report_file:
+                    completed = subprocess.run(
+                        secrets_cmd,
+                        cwd=PROJECT_ROOT,
+                        check=False,
+                        stdout=report_file,
+                        timeout=120,
+                    )
+                secrets_report = load_json_safe(secrets_report_path)
+                if completed.returncode == 0 and isinstance(secrets_report, dict):
+                    mark_tool("Secrets", "completed", return_code=completed.returncode)
+                    publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
+                else:
+                    write_json(secrets_report_path, {"results": {}})
+                    mark_tool("Secrets", "failed", detail="scanner did not produce a valid report", return_code=completed.returncode)
+        except Exception as exc:
+            publish_job_event(job_id, "log", {"text": f"[Secrets Error] {exc}", "color": "var(--danger)"})
+            write_json(secrets_report_path, {"results": {}})
+            mark_tool("Secrets", "failed", detail=str(exc))
 
         # YARA Scanner
         yara_report_path = report_dir / "yara-report.json"
@@ -522,11 +619,13 @@ def async_scan_task(
             yara_findings = run_yara_scan(target_path, job_id)
             with open(yara_report_path, "w") as f:
                 json.dump(yara_findings, f, indent=2)
+            mark_tool("YARA", "completed")
             publish_job_event(job_id, "log", {"text": "[YARA] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
             publish_job_event(job_id, "log", {"text": f"[YARA Error] {e}", "color": "var(--danger)"})
             with open(yara_report_path, "w") as f:
                 json.dump([], f)
+            mark_tool("YARA", "failed", detail=str(e))
 
         # ClamAV Scanner
         clamav_report_path = report_dir / "clamav-report.json"
@@ -535,41 +634,60 @@ def async_scan_task(
             clamav_findings = run_clamav_scan(target_path, job_id)
             with open(clamav_report_path, "w") as f:
                 json.dump(clamav_findings, f, indent=2)
+            mark_tool("ClamAV", "completed")
             publish_job_event(job_id, "log", {"text": "[ClamAV] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
             publish_job_event(job_id, "log", {"text": f"[ClamAV Error] {e}", "color": "var(--danger)"})
             with open(clamav_report_path, "w") as f:
                 json.dump([], f)
+            mark_tool("ClamAV", "failed", detail=str(e))
 
         # Aegis DAST Probe Scanner
         zap_report_path = report_dir / "zap-report.json"
         try:
-            publish_job_event(job_id, "log", {"text": "[DAST] Running active crawler against endpoints...", "color": "var(--text-muted)"})
             if not enable_dynamic_scanners:
                 zap_findings = []
+                mark_tool("DAST", "skipped", detail="scan preset")
             elif sandbox_active:
+                publish_job_event(job_id, "log", {"text": "[DAST] Running active probes against the isolated target...", "color": "var(--text-muted)"})
                 zap_findings = run_dast_scan(f"http://127.0.0.1:{host_port}", job_id)
+                mark_tool("DAST", "completed")
+            elif scan_run_id is None:
+                zap_findings = []
+                mark_tool("DAST", "skipped", detail="isolated target unavailable")
             else:
-                if is_custom_scan or target == "secure":
-                    zap_findings = []
-                else:
-                    zap_findings = run_dast_scan(None, job_id)
-            with open(zap_report_path, "w") as f:
-                json.dump(zap_findings, f, indent=2)
+                zap_findings = []
+                mark_tool("DAST", "failed", detail="isolated target was unavailable")
+            write_json(zap_report_path, zap_findings)
             publish_job_event(job_id, "log", {"text": "[DAST] DAST scanning complete.", "color": "var(--primary)"})
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[DAST Error] {e}", "color": "var(--danger)"})
-            with open(zap_report_path, "w") as f:
-                json.dump([], f)
+        except Exception as exc:
+            publish_job_event(job_id, "log", {"text": f"[DAST Error] {exc}", "color": "var(--danger)"})
+            write_json(zap_report_path, [])
+            mark_tool("DAST", "failed", detail=str(exc))
 
         # Trivy Container Scan
         if sandbox_active:
             publish_job_event(job_id, "log", {"text": "[Trivy] Auditing built image layers for CVEs...", "color": "var(--text-muted)"})
             try:
                 run_trivy_scan(sandbox_image, report_dir / "trivy-report.json")
+                trivy_report = load_json_safe(report_dir / "trivy-report.json")
+                if not isinstance(trivy_report, dict):
+                    raise RuntimeError("Trivy did not produce a valid JSON report")
+                mark_tool("Trivy", "completed")
                 publish_job_event(job_id, "log", {"text": "[Trivy] Image layer audit complete.", "color": "var(--primary)"})
             except Exception as e:
+                mark_tool("Trivy", "failed", detail=str(e))
                 publish_job_event(job_id, "log", {"text": f"[Trivy Error] {e}", "color": "var(--danger)"})
+        elif enable_dynamic_scanners:
+            write_json(report_dir / "trivy-report.json", {"Results": []})
+            mark_tool(
+                "Trivy",
+                "failed" if scan_run_id else "skipped",
+                detail="isolated container image was unavailable",
+            )
+        else:
+            write_json(report_dir / "trivy-report.json", {"Results": []})
+            mark_tool("Trivy", "skipped", detail="scan preset")
 
         # 3. State: ANALYZING -> CORRELATING
         publish_job_event(job_id, "state", {"state": "correlating", "progress": 70})
@@ -578,13 +696,30 @@ def async_scan_task(
         _check_cancelled(job_id)
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Evaluating scanner outputs against security gate thresholds...", "color": "var(--text-muted)"})
         
-        # Run policy engine
-        engine_path = PROJECT_ROOT / "policy_engine.py"
-        engine_cmd = [python_bin, str(engine_path)]
-        engine_env = os.environ.copy()
-        engine_env["SCANS_DIR"] = str(report_dir)
-        engine_env["AEGIS_TARGET_PATH"] = str(target_path)
-        execute_subprocess_log(engine_cmd, PROJECT_ROOT, job_id, "PolicyEngine", env=engine_env)
+        policy_summary = {}
+
+        def capture_policy_summary(results, final_status, reason, exploitability_score):
+            policy_summary.update(
+                {
+                    "results": results,
+                    "status": final_status,
+                    "reason": reason,
+                    "exploitability_score": exploitability_score,
+                }
+            )
+
+        operational_failures = tool_statuses.failures()
+        policy_exit_code = run_policy_engine(
+            scan_dir=report_dir,
+            html_path=report_dir / "report.html",
+            md_path=report_dir / "report.md",
+            dependency_manifests=dependency_manifests,
+            reporter_callback=capture_policy_summary,
+            operational_failures=operational_failures or None,
+            tool_states=tool_statuses.states(),
+            waf_enabled=waf_enabled,
+        )
+        mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
 
         # 4. State: CORRELATING -> REPORTING
         publish_job_event(job_id, "state", {"state": "reporting", "progress": 90})
@@ -604,7 +739,7 @@ def async_scan_task(
         if sandbox_temp_dir and sandbox_temp_dir.exists():
             try:
                 shutil.rmtree(sandbox_temp_dir)
-            except Exception as e:
+            except Exception:
                 pass
 
         if is_custom_scan and target_path and Path(target_path).parent.exists():
@@ -613,64 +748,57 @@ def async_scan_task(
             except Exception:
                 pass
 
-        # Load scan results to save to Job Hash
-        def load_json_safe(path):
-            if path.exists():
-                try:
-                    return json.loads(path.read_text())
-                except Exception:
-                    pass
-            return None
-            
-        clamav = load_json_safe(report_dir / "clamav-report.json")
-        zap = load_json_safe(report_dir / "zap-report.json")
-        osv = load_json_safe(report_dir / "osv-report.json")
-        ruff_rep = load_json_safe(report_dir / "ruff-report.json")
-        semgrep_rep = load_json_safe(report_dir / "semgrep-report.json")
-        
-        # Quick check for blocks
-        is_blocked = False
-        reasons = []
-        if clamav and len(clamav) > 0:
-            is_blocked = True
-            reasons.append("ClamAV")
-        if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
-            is_blocked = True
-            reasons.append("Aegis DAST Probe")
-        if ruff_rep and isinstance(ruff_rep, list):
-            blocking_issues = [
-                r for r in ruff_rep
-                if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}
-            ]
-            if len(blocking_issues) > 0:
-                is_blocked = True
-                reasons.append("Ruff (SAST)")
-        if semgrep_rep and isinstance(semgrep_rep, dict):
-            if len([r for r in semgrep_rep.get("results", []) if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}]) > 0:
-                is_blocked = True
-                reasons.append("Semgrep")
-        if osv and isinstance(osv, list):
-            if len([f for f in osv if (f.get("cvss") or 0.0) >= 4.0]) > 0:
-                is_blocked = True
-                reasons.append("OSV Dependency Audit")
-
-        from main import calculate_exploitability_score
-        score = calculate_exploitability_score(report_dir, waf_enabled)
-        _mirror_latest_reports(report_dir)
-        
+        raw_results = {
+            "ruff": load_json_safe(report_dir / "ruff-report.json"),
+            "semgrep": load_json_safe(report_dir / "semgrep-report.json"),
+            "safety": load_json_safe(report_dir / "safety-report.json"),
+            "osv": load_json_safe(report_dir / "osv-report.json"),
+            "trivy": load_json_safe(report_dir / "trivy-report.json"),
+            "secrets": load_json_safe(report_dir / "secrets-report.json"),
+            "yara": load_json_safe(report_dir / "yara-report.json"),
+            "clamav": load_json_safe(report_dir / "clamav-report.json"),
+            "zap": load_json_safe(report_dir / "zap-report.json"),
+        }
+        final_status = policy_summary.get("status", "ERROR")
+        blocking_tools = [
+            result["tool"]
+            for result in policy_summary.get("results", [])
+            if result.get("status") == "FAIL"
+        ]
         result_payload = {
-            "clamav": clamav,
-            "zap": zap,
-            "osv": osv,
-            "ruff": ruff_rep,
-            "semgrep": semgrep_rep,
-            "exploitability_score": score,
+            **raw_results,
+            "policy": policy_summary,
+            "tools": [dict(item) for item in tool_statuses.records],
+            "operational_failures": operational_failures,
+            "exploitability_score": policy_summary.get("exploitability_score", 0.0),
             "waf_enabled": waf_enabled,
             "has_run": True,
-            "is_blocked": is_blocked,
-            "blocked_by": reasons,
-            "sandbox_status": "active" if sandbox_active else "simulated_fallback"
+            "is_blocked": final_status == "BLOCKED",
+            "blocked_by": blocking_tools,
+            "sandbox_status": "active" if sandbox_active else "unavailable",
+            "artifact_base": f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts" if project_id and scan_run_id else None,
         }
+        write_json(
+            report_dir / "scan-manifest.json",
+            {
+                "schema_version": 1,
+                "job_id": job_id,
+                "project_id": project_id,
+                "scan_run_id": scan_run_id,
+                "target": str(target_path),
+                "preset": preset,
+                "policy_status": final_status,
+                "policy_exit_code": policy_exit_code,
+                "operational_failures": operational_failures,
+                "tools": [dict(item) for item in tool_statuses.records],
+            },
+        )
+
+        if scan_run_id is None:
+            _mirror_latest_reports(report_dir)
+
+        if final_status == "ERROR":
+            raise ScanOperationalFailure(policy_summary.get("reason", "Scanner operational failure"), result_payload)
 
         # 5. State: REPORTING -> COMPLETED
         if scan_run_id:
@@ -681,13 +809,13 @@ def async_scan_task(
             project = get_project(project_id)
             send_project_notification(
                 project_id,
-                "blocked" if is_blocked else "completed",
+                "blocked" if result_payload["is_blocked"] else "completed",
                 {
                     "project_name": project["name"] if project else "Project",
                     "job_id": job_id,
                     "new_findings": result_payload.get("new_findings", 0),
-                    "is_blocked": is_blocked,
-                    "blocked_by": reasons,
+                    "is_blocked": result_payload["is_blocked"],
+                    "blocked_by": blocking_tools,
                 },
             )
         publish_job_event(job_id, "result", {"result": result_payload})
@@ -705,6 +833,21 @@ def async_scan_task(
                 "project_name": project["name"] if project else "Project",
                 "job_id": job_id,
             })
+    except ScanOperationalFailure as exc:
+        if scan_run_id:
+            update_scan_run(scan_run_id, state="failed", progress=100, result=exc.result)
+        publish_job_event(job_id, "result", {"result": exc.result})
+        publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
+        publish_job_event(job_id, "log", {"text": f"[ERROR] Security evidence is incomplete: {exc}", "color": "var(--danger)"})
+        redis_client.hset(f"job:{job_id}", "error", str(exc))
+        if project_id:
+            project = get_project(project_id)
+            send_project_notification(project_id, "failed", {
+                "project_name": project["name"] if project else "Project",
+                "job_id": job_id,
+                "error": str(exc)[:500],
+            })
+        raise
     except Exception as e:
         if scan_run_id:
             update_scan_run(scan_run_id, state="failed", progress=100)

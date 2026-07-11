@@ -1,7 +1,5 @@
 import json
 import zipfile
-from pathlib import Path
-import pytest
 from policy_engine import (
     analyze_secrets,
     analyze_yara,

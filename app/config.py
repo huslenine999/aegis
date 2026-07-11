@@ -89,8 +89,10 @@ def validate_runtime_configuration() -> None:
     errors = []
     try:
         environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
+        environment_positive_int("AEGIS_MAX_REQUEST_BYTES", 1024 * 1024 + 64 * 1024)
         environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
         environment_positive_int("AEGIS_JOB_RETENTION_SECONDS", 86400)
+        environment_positive_int("AEGIS_ARTIFACT_RETENTION_DAYS", 30)
     except RuntimeError as exc:
         errors.append(str(exc))
     admin_token = os.environ.get("AEGIS_ADMIN_TOKEN", "")

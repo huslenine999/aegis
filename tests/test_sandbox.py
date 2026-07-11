@@ -1,22 +1,11 @@
-import json
-import os
-import shutil
-import subprocess
-from pathlib import Path
 from unittest.mock import patch, MagicMock
-import pytest
 from fastapi.testclient import TestClient
 
 from app.sandbox import (
     is_docker_available,
-    is_trivy_available,
     detect_port_from_file,
     scaffold_sandbox_context,
-    build_sandbox_image,
-    run_sandbox_container,
-    wait_for_container,
-    run_trivy_scan,
-    stop_and_cleanup_sandbox
+    run_sandbox_container
 )
 
 def test_detect_port_from_file(tmp_path):

@@ -47,15 +47,18 @@
         api("/api/admin/diagnostics").then(r=>r.json()),api("/api/users").then(r=>r.json()),api("/api/tokens").then(r=>r.json()),api("/api/admin/audit").then(r=>r.json()),api("/api/admin/requests").then(r=>r.json())
       ]);
       el("diagnostics").innerHTML=Object.entries(diagnostics).map(([key,value])=>`<div class="metric"><small>${esc(key)}</small><strong>${esc(value)}</strong></div>`).join("");
-      el("users").innerHTML=(users.users||[]).map(user=>`<div class="item row spread"><span>${esc(user.username)} <small>${esc(user.role)}</small></span><button data-token-user="${user.id}">Issue token</button></div>`).join("");
+      el("users").innerHTML=(users.users||[]).map(user=>`<div class="item row spread"><span>${esc(user.username)} <small>${user.active?"active":"disabled"}</small></span><span class="row"><select data-user-role="${user.id}" aria-label="Role for ${esc(user.username)}">${["viewer","operator","admin"].map(role=>`<option ${role===user.role?"selected":""}>${role}</option>`).join("")}</select><button data-toggle-user="${user.id}" data-active="${user.active}">${user.active?"Disable":"Enable"}</button><button data-token-user="${user.id}" ${user.active?"":"disabled"}>Issue token</button></span></div>`).join("");
       el("tokens").innerHTML=(tokens.tokens||[]).map(token=>`<div class="item row spread"><span>${esc(token.name)} <small>${esc(token.username)}</small></span><button data-revoke="${token.id}">Revoke</button></div>`).join("")||"<p>No active tokens.</p>";
       el("audit").innerHTML=(audit.events||[]).map(event=>`<div class="item"><strong>${esc(event.action)}</strong> <small>${esc(event.resource_type)} ${esc(event.resource_id||"")} · ${esc(event.created_at)}</small></div>`).join("")||"<p>No audit events.</p>";
       el("requests").textContent=(requests.requests||[]).map(item=>`${item.status} ${item.method} ${item.path} ${item.duration_ms}ms ${item.request_id}`).join("\\n");
       document.querySelectorAll("[data-token-user]").forEach(button=>button.onclick=()=>issueToken(button.dataset.tokenUser));
+      document.querySelectorAll("[data-user-role]").forEach(select=>select.onchange=()=>updateUser(select.dataset.userRole,{role:select.value}));
+      document.querySelectorAll("[data-toggle-user]").forEach(button=>button.onclick=()=>updateUser(button.dataset.toggleUser,{active:button.dataset.active!=="true"}));
       document.querySelectorAll("[data-revoke]").forEach(button=>button.onclick=()=>revokeToken(button.dataset.revoke));
     }
     async function issueToken(userId){const name=prompt("Token name","automation");if(!name)return;const response=await api(`/api/users/${userId}/tokens`,{method:"POST",body:JSON.stringify({name})});const data=await response.json();if(!response.ok)return message(data.detail||"Token issue failed.",true);prompt("Copy this token now. It will not be shown again.",data.token);await load()}
     async function revokeToken(id){if(!confirm("Revoke this API token?"))return;const response=await api(`/api/tokens/${id}`,{method:"DELETE"});if(!response.ok)return message("Token revocation failed.",true);message("Token revoked.");await load()}
+    async function updateUser(id,changes){const response=await api(`/api/users/${id}`,{method:"PATCH",body:JSON.stringify(changes)});const data=await response.json();if(!response.ok){message(data.detail||"User update failed.",true);return load()}message("User updated and active sessions revoked.");await load()}
     el("user-form").onsubmit=async event=>{event.preventDefault();const response=await api("/api/users",{method:"POST",body:JSON.stringify({username:el("username").value,password:el("password").value,role:el("role").value})});const data=await response.json();if(!response.ok)return message(data.detail||"User creation failed.",true);event.target.reset();message("User created.");await load()};
     el("refresh").onclick=load;load();
   </script>

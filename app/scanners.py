@@ -244,6 +244,10 @@ def run_clamav_scan(
                 check=False,
                 timeout=timeout,
             )
+            if result.returncode not in {0, 1}:
+                raise RuntimeError(
+                    f"clamscan exited with code {result.returncode}: {result.stderr[-500:]}"
+                )
             for line in result.stdout.splitlines():
                 if "FOUND" not in line:
                     continue
@@ -260,6 +264,7 @@ def run_clamav_scan(
             return findings
         except Exception as exc:
             _emit(log, f"[ClamAV Error] {exc}", "error")
+            raise
 
     eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 

@@ -1,7 +1,5 @@
-import base64
 import hashlib
 import os
-import json
 import sqlite3
 import subprocess  # nosec
 from pathlib import Path
@@ -10,7 +8,7 @@ from pathlib import Path
 import sys
 sys.path.append(str(Path(__file__).resolve().parent))
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request
 
 # In a secure app, you'd import database logic securely
 from database import DB_PATH
@@ -72,10 +70,7 @@ def calculate():
     """
     SECURE: Avoids eval(). Uses a safe parser if needed.
     """
-    expression = request.args.get("expr", "1+1")
-    
     # SECURE: Use literal_eval for basic math or a dedicated parser
-    import ast
     try:
         # Note: literal_eval only handles literals, not operators like +
         # In a real app, you'd use a safe math library or restricted parser.
@@ -214,4 +209,3 @@ if __name__ == "__main__":
 
     # SECURE: Debug mode always False in production
     app.run(host="0.0.0.0", port=port, debug=False)  # nosemgrep # nosec # noqa: S104
-

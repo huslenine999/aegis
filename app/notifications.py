@@ -6,6 +6,7 @@ import os
 import smtplib
 import socket
 import ssl
+import time
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from urllib.parse import urlparse
@@ -41,7 +42,7 @@ def _decrypt(value: str) -> dict:
 
 def _validate_webhook_url(url: str) -> None:
     parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Webhook URLs must use HTTPS.")
     addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443)
     for address in addresses:
@@ -54,6 +55,26 @@ def _validate_webhook_url(url: str) -> None:
             or ip.is_reserved
         ):
             raise ValueError("Webhook URL resolves to a non-public address.")
+
+
+def _post_with_retries(url: str, **kwargs):
+    last_error = None
+    for attempt in range(3):
+        _validate_webhook_url(url)
+        try:
+            response = requests.post(
+                url, timeout=10, allow_redirects=False, **kwargs
+            )
+            status_code = int(getattr(response, "status_code", 200))
+            if 300 <= status_code < 400:
+                raise RuntimeError("Webhook redirects are not allowed.")
+            response.raise_for_status()
+            return response
+        except (requests.RequestException, RuntimeError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(0.25 * (2**attempt))
+    raise RuntimeError(f"Webhook delivery failed after retries: {last_error}")
 
 
 def create_channel(
@@ -155,15 +176,17 @@ def _deliver(channel_type: str, config: dict, event: str, payload: dict) -> None
                 headers["X-Aegis-Signature-256"] = "sha256=" + hmac.new(
                     str(config["secret"]).encode(), body, hashlib.sha256
                 ).hexdigest()
-            response = requests.post(url, data=body, headers=headers, timeout=10)
+            _post_with_retries(url, data=body, headers=headers)
         else:
-            response = requests.post(url, json={"text": text}, timeout=10)
-        response.raise_for_status()
+            _post_with_retries(url, json={"text": text})
         return
     message = EmailMessage()
     message["Subject"] = title
     message["From"] = os.environ["AEGIS_SMTP_FROM"]
-    message["To"] = config["to"]
+    destination = str(config["to"])
+    if "\n" in destination or "\r" in destination:
+        raise ValueError("Invalid email destination.")
+    message["To"] = destination
     message.set_content(text)
     host = os.environ["AEGIS_SMTP_HOST"]
     port = int(os.environ.get("AEGIS_SMTP_PORT", "587"))

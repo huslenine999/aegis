@@ -25,6 +25,7 @@ def test_action_exposes_stable_production_outputs():
 
     assert action["inputs"]["strict"]["default"] == "true"
     assert set(action["outputs"]) >= {"decision", "summary-json", "exit-code"}
+    assert '${AEGIS_ACTION_PATH}[scanner]' in ACTION_PATH.read_text()
 
 
 def test_release_package_versions_match():
@@ -34,8 +35,9 @@ def test_release_package_versions_match():
     npm_version = json.loads(
         (PROJECT_ROOT / "package.json").read_text()
     )["version"]
+    lock_version = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text())["package"][0]["version"]
 
-    assert python_version == npm_version
+    assert python_version == npm_version == lock_version
 
 
 def test_npm_manifest_excludes_runtime_state():

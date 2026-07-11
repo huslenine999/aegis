@@ -17,7 +17,7 @@ completed versions in `schema_migrations`.
 For a published release image:
 
 ```bash
-export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.2.0
+export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.3.0
 docker compose pull dashboard worker
 docker compose up -d --no-build
 ```
@@ -47,6 +47,21 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Keep `AEGIS_ENABLE_DEMO_LAB=false`. The `secure` and `vulnerable` built-in
   targets are compatibility fixtures for demonstrations and tests, not
   production application routes.
+- Set `AEGIS_ARTIFACT_RETENTION_DAYS` to the approved evidence-retention
+  period. Run downloads remain authorized by project membership and include
+  SHA-256 integrity metadata.
+
+## Scanner runtime
+
+Quick and Standard scans run entirely in the worker image; the production image
+includes the Standard Semgrep dependency. Deep scans additionally require a
+reviewed Docker endpoint and Trivy executable available to the worker. A Deep
+scan fails with an operational error when either dependency is missing.
+
+Do not mount the deployment host's Docker socket into the dashboard. Provision
+a separate worker host or remote TLS-protected Docker runtime with no production
+credentials, a restricted egress policy, disposable storage, and enforced CPU,
+memory, process, and execution-time limits.
 
 ## Trust boundaries
 

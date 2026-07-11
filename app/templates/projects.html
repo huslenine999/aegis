@@ -100,9 +100,18 @@
             </label>
             <span id="preset-note" class="preset-note">Standard checks are recommended for pull requests.</span>
             <button id="start-scan" class="primary">Start scan</button>
+            <button id="save-project">Save settings</button>
+            <button id="delete-project" class="danger">Delete project</button>
           </div>
           <h3>Scan history</h3>
           <div id="scan-history"><p>No scans yet.</p></div>
+          <h3>Members</h3>
+          <form id="member-form" class="row">
+            <input id="member-username" aria-label="Member username" placeholder="username" required>
+            <select id="member-role" aria-label="Project role"><option>viewer</option><option>operator</option><option>admin</option></select>
+            <button>Add or update</button>
+          </form>
+          <div id="members"></div>
           <h3>Notifications</h3>
           <form id="notification-form" class="row">
             <input id="notification-name" aria-label="Notification name" placeholder="Security alerts" required>
@@ -194,10 +203,12 @@
       byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Local project";
       byId("project-role").textContent = selected.role;
       byId("scan-preset").value = selected.scan_preset;
+      byId("save-project").hidden = selected.role !== "admin";
+      byId("delete-project").hidden = selected.role !== "admin";
       updatePresetNote();
       updateOnboarding();
       await loadProjects();
-      await Promise.all([loadScans(), loadNotifications()]);
+      await Promise.all([loadScans(), loadMembers(), loadNotifications()]);
     }
     async function loadScans() {
       const response = await api(`/api/projects/${selected.id}/scans`);
@@ -210,6 +221,7 @@
           <div class="row">
             ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
             ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
+            ${["completed","failed"].includes(scan.state) ? `<a href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download bundle</a>` : ""}
           </div>
         </article>`).join("") : "<p>No scans yet.</p>";
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
@@ -220,6 +232,21 @@
       if (!response.ok) return message((await response.json()).detail || "Scan action failed.", true);
       message(action === "retry" ? "Retry queued." : "Cancellation requested.");
       await loadScans();
+    }
+    async function loadMembers() {
+      const response = await api(`/api/projects/${selected.id}/members`);
+      if (!response.ok) return;
+      const members = (await response.json()).members || [];
+      const canAdmin = selected.role === "admin";
+      byId("member-form").hidden = !canAdmin;
+      byId("members").innerHTML = members.map(member => `<div class="scan row spread"><span>${escapeHtml(member.username)} <small>${escapeHtml(member.role)}</small></span>${canAdmin ? `<button class="danger" data-remove-member="${member.user_id}">Remove</button>` : ""}</div>`).join("") || "<p class='muted'>No members.</p>";
+      document.querySelectorAll("[data-remove-member]").forEach(button => button.onclick = () => removeMember(button.dataset.removeMember));
+    }
+    async function removeMember(userId) {
+      const response = await api(`/api/projects/${selected.id}/members/${userId}`, {method:"DELETE"});
+      const data = await response.json();
+      if (!response.ok) return message(data.detail || "Member removal failed.", true);
+      message("Member removed."); await loadMembers();
     }
     async function loadNotifications() {
       if (!selected || selected.role !== "admin") {
@@ -283,6 +310,22 @@
       byId("project-dialog").close(); message("Project created."); await loadProjects();
     };
     byId("scan-preset").onchange = updatePresetNote;
+    byId("save-project").onclick = async () => {
+      const response = await api(`/api/projects/${selected.id}`, {method:"PATCH", body:JSON.stringify({scan_preset:byId("scan-preset").value})});
+      const data = await response.json(); if (!response.ok) return message(data.detail || "Project update failed.", true);
+      message("Project settings saved."); selected.scan_preset = data.scan_preset; await loadProjects();
+    };
+    byId("delete-project").onclick = async () => {
+      if (!confirm(`Delete ${selected.name} and all of its scan history?`)) return;
+      const response = await api(`/api/projects/${selected.id}`, {method:"DELETE"});
+      const data = await response.json(); if (!response.ok) return message(data.detail || "Project deletion failed.", true);
+      selected = null; message("Project deleted."); byId("project-detail").hidden = true; byId("empty-project").hidden = false; await loadProjects();
+    };
+    byId("member-form").onsubmit = async event => {
+      event.preventDefault(); const response = await api(`/api/projects/${selected.id}/members`, {method:"PUT", body:JSON.stringify({username:byId("member-username").value,role:byId("member-role").value})});
+      const data = await response.json(); if (!response.ok) return message(data.detail || "Member update failed.", true);
+      event.target.reset(); message("Project member updated."); await loadMembers();
+    };
     byId("notification-type").onchange = () => {
       byId("notification-destination").placeholder = byId("notification-type").value === "email" ? "security@example.com" : "HTTPS webhook URL";
     };

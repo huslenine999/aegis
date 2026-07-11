@@ -224,7 +224,9 @@ def test_database_initialization_records_schema_migration(tmp_path, monkeypatch)
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
 
-    assert rows == [(database.CURRENT_SCHEMA_VERSION, "initial_schema")]
+    assert rows == [
+        (migration.version, migration.name) for migration in database.MIGRATIONS
+    ]
 
 
 def test_completed_job_metadata_is_bounded_and_expires(monkeypatch):

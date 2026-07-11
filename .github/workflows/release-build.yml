@@ -59,6 +59,8 @@ jobs:
       - name: Run release tests
         run: |
           python -m compileall -q app policy_engine.py tests
+          ruff check app policy_engine.py tests
+          mypy
           pytest -q --timeout=60 --timeout-method=thread
 
       - name: Build wheel

@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import uuid
 import secrets
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,11 +30,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from werkzeug.utils import secure_filename
-import redis
 
 from database import (
     BASE_DIR,
-    DB_PATH,
     DOWNLOAD_DIR,
     PROJECT_ROOT,
     REDIS_AVAILABLE,
@@ -56,22 +55,31 @@ from auth import (
     hash_password,
     principal_from_request,
     require_role,
+    revoke_session,
+    revoke_user_sessions,
     websocket_principal,
 )
 from observability import ObservabilityMiddleware, configure_logging, recent_requests, render_metrics
 from rate_limit import RateLimitMiddleware, allow_websocket
-from security_middleware import SecurityHeadersMiddleware, WafASGIMiddleware
+from security_middleware import (
+    RequestBodyLimitMiddleware,
+    SecurityHeadersMiddleware,
+    WafASGIMiddleware,
+)
 from projects import (
     VALID_PRESETS,
     create_project,
     create_scan_run,
+    delete_project,
     get_project,
     get_scan_run,
     list_projects,
     list_project_members,
     list_scan_runs,
+    remove_project_member,
     require_project_role,
     set_project_member,
+    update_project,
 )
 from github_integration import (
     begin_oauth,
@@ -85,9 +93,10 @@ from notifications import CHANNEL_TYPES, create_channel, delete_channel, list_ch
 from audit import list_audit_events, record_audit
 from policy_engine import get_ruff_severity
 from sandbox import (
-    is_docker_available, scaffold_sandbox_context, build_sandbox_image,
-    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox,
-    get_active_sandbox_container, get_sandbox_stats, get_sandbox_logs
+    get_active_sandbox_container,
+    get_sandbox_logs,
+    get_sandbox_stats,
+    is_docker_available,
 )
 from reporting import (
     build_report_bundle,
@@ -103,7 +112,26 @@ app = FastAPI(title="Aegis DevSecOps Console")
 DEMO_LAB_ENABLED = os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower() in {"1", "true", "yes", "on"}
 ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
+MAX_REQUEST_BYTES = environment_positive_int(
+    "AEGIS_MAX_REQUEST_BYTES", MAX_UPLOAD_BYTES + 64 * 1024
+)
 ALLOWED_SCAN_TARGETS = {"project", "secure", "vulnerable"}
+RUN_ARTIFACTS = {
+    "report.html": "text/html; charset=utf-8",
+    "report.md": "text/markdown; charset=utf-8",
+    "sbom.json": "application/json",
+    "ruff-report.json": "application/json",
+    "semgrep-report.json": "application/json",
+    "safety-report.json": "application/json",
+    "osv-report.json": "application/json",
+    "trivy-report.json": "application/json",
+    "secrets-report.json": "application/json",
+    "yara-report.json": "application/json",
+    "clamav-report.json": "application/json",
+    "zap-report.json": "application/json",
+    "sandbox-status.json": "application/json",
+    "scan-manifest.json": "application/json",
+}
 
 # Enable CORS for convenience
 def parse_cors_origins() -> list[str]:
@@ -239,6 +267,7 @@ app.add_middleware(
     enabled=lambda: WAF_ENABLED,
     load_rules=load_waf_rules_from_db,
 )
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 
 # REST Router Endpoints
 @app.get("/", response_class=HTMLResponse)
@@ -333,8 +362,7 @@ async def complete_setup(request: Request):
         SESSION_COOKIE,
         create_session(principal),
         httponly=True,
-        secure=os.environ.get("AEGIS_ENV", "development").lower() == "production"
-        and request.url.scheme == "https",
+        secure=os.environ.get("AEGIS_ENV", "development").lower() == "production",
         samesite="strict",
         max_age=int(os.environ.get("AEGIS_SESSION_TTL_SECONDS", "28800")),
         path="/",
@@ -494,12 +522,145 @@ async def projects_create(
     return {"id": project_id, "name": name}
 
 
+@app.patch("/api/projects/{project_id}")
+async def project_update(
+    project_id: int, request: Request, principal=Depends(require_access("operator"))
+):
+    project = _project_access(project_id, principal, "admin")
+    body = await request.json()
+    name = str(body.get("name", project["name"])).strip()
+    repository_url = str(body.get("repository_url", project["repository_url"])).strip()
+    default_branch = str(body.get("default_branch", project["default_branch"])).strip()
+    preset = str(body.get("scan_preset", project["scan_preset"])).lower()
+    if not name or len(name) > 128:
+        raise HTTPException(status_code=400, detail="Project name is required.")
+    if repository_url and not repository_url.startswith("https://github.com/"):
+        raise HTTPException(status_code=400, detail="Only HTTPS GitHub repositories are supported.")
+    if not re.fullmatch(r"[A-Za-z0-9._/-]{1,255}", default_branch):
+        raise HTTPException(status_code=400, detail="Invalid default branch.")
+    try:
+        update_project(
+            project_id,
+            name=name,
+            repository_url=repository_url,
+            default_branch=default_branch,
+            scan_preset=preset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit(principal.user_id, "project.updated", "project", project_id)
+    return {"id": project_id, "name": name, "scan_preset": preset}
+
+
+@app.delete("/api/projects/{project_id}")
+def project_delete(
+    project_id: int, principal=Depends(require_access("operator"))
+):
+    _project_access(project_id, principal, "admin")
+    try:
+        job_ids = delete_project(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    runs_root = (SCANS_DIR / "runs").resolve()
+    for job_id in job_ids:
+        run_dir = (runs_root / job_id).resolve()
+        if run_dir.parent == runs_root:
+            shutil.rmtree(run_dir, ignore_errors=True)
+    record_audit(principal.user_id, "project.deleted", "project", project_id)
+    return {"status": "deleted"}
+
+
 @app.get("/api/projects/{project_id}/scans")
 def project_scans(
     project_id: int, principal=Depends(require_role("viewer"))
 ):
     _project_access(project_id, principal, "viewer")
     return {"scans": list_scan_runs(project_id)}
+
+
+def _authorized_scan(project_id: int, run_id: int, principal):
+    _project_access(project_id, principal, "viewer")
+    run = get_scan_run(run_id)
+    if not run or run["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+    return run
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@app.get("/api/projects/{project_id}/scans/{run_id}")
+def project_scan_detail(
+    project_id: int, run_id: int, principal=Depends(require_role("viewer"))
+):
+    return _authorized_scan(project_id, run_id, principal)
+
+
+@app.get("/api/projects/{project_id}/scans/{run_id}/artifacts")
+def project_scan_artifacts(
+    project_id: int, run_id: int, principal=Depends(require_role("viewer"))
+):
+    run = _authorized_scan(project_id, run_id, principal)
+    report_dir = SCANS_DIR / "runs" / run["job_id"]
+    artifacts = []
+    for name in RUN_ARTIFACTS:
+        path = report_dir / name
+        if not path.is_file():
+            continue
+        artifacts.append(
+            {
+                "name": name,
+                "url": f"/api/projects/{project_id}/scans/{run_id}/artifacts/{name}",
+                "size": path.stat().st_size,
+                "sha256": _file_sha256(path),
+            }
+        )
+    if artifacts:
+        artifacts.append(
+            {
+                "name": "report-bundle.zip",
+                "url": f"/api/projects/{project_id}/scans/{run_id}/artifacts/report-bundle.zip",
+                "size": None,
+                "sha256": None,
+            }
+        )
+    return {"artifacts": artifacts}
+
+
+@app.get("/api/projects/{project_id}/scans/{run_id}/artifacts/{artifact_name}")
+def project_scan_artifact(
+    project_id: int,
+    run_id: int,
+    artifact_name: str,
+    principal=Depends(require_role("viewer")),
+):
+    run = _authorized_scan(project_id, run_id, principal)
+    report_dir = SCANS_DIR / "runs" / run["job_id"]
+    if artifact_name == "report-bundle.zip":
+        if not (report_dir / "report.html").is_file():
+            raise HTTPException(status_code=404, detail="Report bundle is unavailable.")
+        return Response(
+            content=build_report_bundle(report_dir),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="aegis-{project_id}-{run_id}.zip"'
+            },
+        )
+    media_type = RUN_ARTIFACTS.get(artifact_name)
+    artifact_path = report_dir / artifact_name
+    if not media_type or not artifact_path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    return FileResponse(
+        str(artifact_path),
+        media_type=media_type,
+        filename=artifact_name,
+        content_disposition_type="inline" if artifact_name == "report.html" else "attachment",
+    )
 
 
 @app.get("/api/projects/{project_id}/members")
@@ -528,6 +689,24 @@ async def project_member_set(
         return member
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/projects/{project_id}/members/{user_id}")
+def project_member_remove(
+    project_id: int,
+    user_id: int,
+    principal=Depends(require_access("operator")),
+):
+    _project_access(project_id, principal, "admin")
+    try:
+        if not remove_project_member(project_id, user_id):
+            raise HTTPException(status_code=404, detail="Project member not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record_audit(
+        principal.user_id, "project.member_removed", "project", project_id, {"user_id": user_id}
+    )
+    return {"status": "removed"}
 
 
 @app.get("/api/projects/{project_id}/notifications")
@@ -696,7 +875,8 @@ async def github_import(
 
 
 @app.post("/api/auth/logout")
-def logout(principal=Depends(require_role("viewer"))):
+def logout(request: Request, principal=Depends(require_role("viewer"))):
+    revoke_session(request.cookies.get(SESSION_COOKIE, ""))
     response = JSONResponse({"status": "signed_out"})
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
@@ -754,12 +934,72 @@ async def create_user(request: Request, principal=Depends(require_access("admin"
     return {"username": username, "role": role}
 
 
+@app.patch("/api/users/{user_id}")
+async def update_user(
+    user_id: int, request: Request, principal=Depends(require_access("admin"))
+):
+    body = await request.json()
+    role = body.get("role")
+    active = body.get("active")
+    password = body.get("password")
+    if role is not None and role not in {"viewer", "operator", "admin"}:
+        raise HTTPException(status_code=400, detail="Invalid role.")
+    if active is not None and not isinstance(active, bool):
+        raise HTTPException(status_code=400, detail="active must be a boolean.")
+    if password is not None and len(str(password)) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters.")
+    if user_id == principal.user_id and (active is False or (role and role != "admin")):
+        raise HTTPException(status_code=409, detail="Administrators cannot disable or demote their current account.")
+    with get_connection() as connection:
+        user = connection.execute(
+            "SELECT username, role, active FROM auth_users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        removing_admin = user[1] == "admin" and (
+            active is False or (role is not None and role != "admin")
+        )
+        if removing_admin:
+            admin_count = connection.execute(
+                "SELECT COUNT(*) FROM auth_users WHERE role = 'admin' AND active = 1"
+            ).fetchone()[0]
+            if admin_count <= 1:
+                raise HTTPException(status_code=409, detail="At least one active administrator is required.")
+        if role is not None:
+            connection.execute("UPDATE auth_users SET role = ? WHERE id = ?", (role, user_id))
+        if active is not None:
+            connection.execute(
+                "UPDATE auth_users SET active = ? WHERE id = ?", (1 if active else 0, user_id)
+            )
+        if password is not None:
+            connection.execute(
+                "UPDATE auth_users SET password_hash = ? WHERE id = ?",
+                (hash_password(str(password)), user_id),
+            )
+        if active is False:
+            connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+    revoke_user_sessions(user_id)
+    details = {key: body[key] for key in ("role", "active") if key in body}
+    details["password_rotated"] = password is not None
+    record_audit(principal.user_id, "user.updated", "user", user_id, details)
+    return {"id": user_id, "username": user[0], **details}
+
+
 @app.post("/api/users/{user_id}/tokens", status_code=201)
 async def create_api_token(
     user_id: int, request: Request, principal=Depends(require_access("admin"))
 ):
     body = await request.json()
     name = str(body.get("name", "automation")).strip()[:128]
+    expires_at = body.get("expires_at")
+    if expires_at:
+        try:
+            parsed_expiry = datetime.fromisoformat(str(expires_at))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="expires_at must be an ISO-8601 timestamp.") from exc
+        if parsed_expiry.tzinfo is None or parsed_expiry <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="expires_at must be a future timezone-aware timestamp.")
+        expires_at = parsed_expiry.astimezone(timezone.utc).isoformat()
     token = secrets.token_urlsafe(40)
     with get_connection() as connection:
         user = connection.execute(
@@ -775,7 +1015,7 @@ async def create_api_token(
                 user_id,
                 hashlib.sha256(token.encode()).hexdigest(),
                 name or "automation",
-                body.get("expires_at"),
+                expires_at,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -846,6 +1086,11 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
         "environment": os.environ.get("AEGIS_ENV", "development"),
         "report_storage": str(SCANS_DIR),
         "demo_lab_enabled": DEMO_LAB_ENABLED,
+        "scanner_quick": "ready",
+        "scanner_standard": "ready" if shutil.which("semgrep") else "semgrep unavailable",
+        "scanner_deep": "ready"
+        if shutil.which("trivy") and is_docker_available()
+        else "requires isolated Docker and Trivy",
     }
 
 
@@ -859,14 +1104,14 @@ def admin_request_log(limit: int = 100, principal=Depends(require_access("admin"
     return {"requests": recent_requests(limit)}
 
 
-@app.get("/report", response_class=HTMLResponse, dependencies=[Depends(require_role("viewer"))])
+@app.get("/report", response_class=HTMLResponse, dependencies=[Depends(require_access("admin"))])
 def get_report():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
         return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
     return HTMLResponse(report_path.read_text())
 
-@app.get("/download-sbom", dependencies=[Depends(require_role("viewer"))])
+@app.get("/download-sbom", dependencies=[Depends(require_access("admin"))])
 def download_sbom():
     sbom_path = SCANS_DIR / "sbom.json"
     if not sbom_path.exists():
@@ -884,7 +1129,7 @@ def download_sbom():
     )
 
 
-@app.get("/download-report-bundle", dependencies=[Depends(require_role("viewer"))])
+@app.get("/download-report-bundle", dependencies=[Depends(require_access("admin"))])
 def download_report_bundle():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
@@ -948,7 +1193,7 @@ async def save_waf_rules(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/get-scan-results", dependencies=[Depends(require_role("viewer"))])
+@app.get("/get-scan-results", dependencies=[Depends(require_access("admin"))])
 def get_scan_results():
     global WAF_ENABLED
     def load_json_safe(path):
@@ -1037,7 +1282,7 @@ def get_scan_results():
         "bundle_url": "/download-report-bundle" if latest_report.exists() else None
     }
 
-@app.get("/get-dependency-graph", dependencies=[Depends(require_role("viewer"))])
+@app.get("/get-dependency-graph", dependencies=[Depends(require_access("admin"))])
 def get_dependency_graph():
     vulnerable_packages = set()
     safety_path = SCANS_DIR / "safety-report.json"
@@ -1122,7 +1367,7 @@ def get_dependency_graph():
                     "vulnerabilities": vuln_details
                 }
             
-            if link_key not in [(l["source"], l["target"]) for l in links]:
+            if link_key not in [(link["source"], link["target"]) for link in links]:
                 links.append({
                     "source": parent_id,
                     "target": pkg_key,
@@ -1239,9 +1484,20 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         await websocket.close(code=4404, reason="Scan job not found")
         return
     owner_id = int(owner.decode() if isinstance(owner, bytes) else owner)
-    if principal.role != "admin" and owner_id != principal.user_id:
-        await websocket.close(code=4403, reason="Scan job access denied")
-        return
+    if principal.role != "admin":
+        project_value = redis_client.hget(f"job:{job_id}", "project_id")
+        if project_value:
+            project_id = int(
+                project_value.decode() if isinstance(project_value, bytes) else project_value
+            )
+            try:
+                require_project_role(project_id, principal.user_id, principal.role, "viewer")
+            except PermissionError:
+                await websocket.close(code=4403, reason="Scan job access denied")
+                return
+        elif owner_id != principal.user_id:
+            await websocket.close(code=4403, reason="Scan job access denied")
+            return
     await websocket.accept()
     
     r_conn = redis_client
@@ -1534,7 +1790,7 @@ def metrics(request: Request):
     return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
 
 
-@app.get("/export-dossier", dependencies=[Depends(require_role("viewer"))])
+@app.get("/export-dossier", dependencies=[Depends(require_access("admin"))])
 def export_dossier():
     def load_json(path):
         if not path.exists():
@@ -1708,7 +1964,7 @@ def export_dossier():
             code = extra.get('lines', '')
             if code:
                 code_lines = code.strip().split('\n')
-                semgrep_findings += f"    Source:\n"
+                semgrep_findings += "    Source:\n"
                 for cl in code_lines[:3]:
                     semgrep_findings += f"      >> {cl}\n"
             semgrep_findings += "  ------------------------------------------------------------------\n"

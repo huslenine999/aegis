@@ -1,8 +1,6 @@
-import os
 import re
 import shutil
 import subprocess
-import socket
 import time
 from pathlib import Path
 from typing import List, Dict, Any
@@ -183,23 +181,28 @@ def wait_for_container(target_url: str, timeout: float = 6.0) -> bool:
 
 def run_trivy_scan(image_tag: str, output_path: Path) -> List[Dict[str, Any]]:
     """
-    Runs Trivy scanning on the container image. Falls back to empty results if Trivy is missing.
+    Runs Trivy scanning on the container image and fails when evidence is unavailable.
     """
     import json
     if not is_trivy_available():
-        output_path.write_text(json.dumps({"Results": []}))
-        return []
+        raise RuntimeError("Trivy executable is unavailable")
     try:
-        subprocess.run([
+        completed = subprocess.run([
             "trivy", "image", "--format", "json",
             "--output", str(output_path), image_tag
         ], capture_output=True, check=False, timeout=30)
-        if output_path.exists():
-            return json.loads(output_path.read_text()).get("Results", [])
-    except Exception:
-        pass
-    output_path.write_text(json.dumps({"Results": []}))
-    return []
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"Trivy exited with code {completed.returncode}: {completed.stderr.decode(errors='ignore')[-500:] if isinstance(completed.stderr, bytes) else str(completed.stderr)[-500:]}"
+            )
+        if not output_path.exists():
+            raise RuntimeError("Trivy did not produce a report")
+        report = json.loads(output_path.read_text())
+        if not isinstance(report, dict) or not isinstance(report.get("Results", []), list):
+            raise RuntimeError("Trivy produced an invalid report")
+        return report.get("Results", [])
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Trivy scan failed: {exc}") from exc
 
 def stop_and_cleanup_sandbox(container_name: str, image_tag: str):
     """
