@@ -5,6 +5,7 @@ from app import projects
 from app import main as app_main
 from app import worker
 from cryptography.fernet import Fernet
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import pytest
 
@@ -208,6 +209,15 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
         "build_sandbox_image",
         lambda *args: pytest.fail("test-mode scan attempted to build a container"),
     )
+    scanner_commands = []
+
+    def run_scanner(command, *args, **kwargs):
+        scanner_commands.append(command)
+        output_path = command[command.index("-o") + 1]
+        Path(output_path).write_text("[]")
+        return 0
+
+    monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
     worker.async_scan_task("legacy-job", "secure")
@@ -215,6 +225,7 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     manifest = (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
     assert '"policy_status": "ALLOWED"' in manifest
     assert docker_checks == [True]
+    assert scanner_commands and "--no-cache" in scanner_commands[0]
 
 
 def test_github_oauth_uses_pkce_and_encrypts_token(tmp_path, monkeypatch):

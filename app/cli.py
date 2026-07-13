@@ -679,7 +679,7 @@ def execute_scan(
     with timed_step(timings, "Ruff"):
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
         ruff_report_path = scan_dir / "ruff-report.json"
-        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
         ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
         ruff_report_path.unlink(missing_ok=True)

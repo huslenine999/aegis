@@ -534,7 +534,7 @@ def async_scan_task(
         # SAST: Ruff (SAST)
         ruff_report_path = report_dir / "ruff-report.json"
         if has_python:
-            ruff_cmd = [python_bin, "-m", "ruff", "check", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+            ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
             return_code = execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
             ruff_report = load_json_safe(ruff_report_path)

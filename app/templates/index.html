@@ -3426,6 +3426,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         const terminalHiddenInput = document.createElement('input');
         terminalHiddenInput.type = 'text';
         terminalHiddenInput.id = 'terminalHiddenInput';
+        terminalHiddenInput.setAttribute('aria-label', 'Terminal command input');
         terminalHiddenInput.style.position = 'absolute';
         terminalHiddenInput.style.opacity = '0';
         terminalHiddenInput.style.pointerEvents = 'none';
