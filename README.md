@@ -1,352 +1,334 @@
 # Aegis
 
-Security scanning, project triage, and deployment decisions in one self-hosted
-workbench.
+Private, explainable security gates for small engineering teams.
 
-Aegis combines a Python security-scanning CLI, a GitHub Action, and a web
-console for teams that want repeatable security gates without sending source
-code to a hosted third party.
+Aegis scans source code, dependencies, secrets, containers, and running test
+targets; turns the results into an allow, block, or operational-error decision;
+and keeps the evidence in a self-hosted project workspace.
 
-## Commercial direction
+Use it as:
 
-Aegis is positioned for small engineering teams that need a private, explainable
-release-security decision without buying a large AppSec platform. The public
-product overview and founding-pilot offer are available at `/welcome` when the
-workbench is running. See [docs/MONETIZATION.md](docs/MONETIZATION.md) for the
-recommended customer profile, offer ladder, and path to paid hosted plans. The
-operator workflow and measurable pilot exit criteria are in
-[docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md).
+- a local command-line scanner;
+- a pull-request security gate;
+- or a self-hosted workbench for findings, policy, evidence, and remediation.
 
-The product's primary workflow is deliberately narrow:
+> [!IMPORTANT]
+> Aegis is ready for local evaluation and controlled single-customer pilots.
+> Production deployment still requires an operator to provision secrets,
+> backups, monitoring, and—if Deep scans are enabled—an isolated Docker-capable
+> worker. This release is not presented as a public shared multi-tenant service.
 
-1. connect one approved repository;
-2. run a repeatable release policy;
-3. explain every allowed, blocked, or operational-error decision; and
-4. export signed evidence that another person can verify independently.
+## Why Aegis?
 
-The supported commercial topology is one isolated deployment per customer.
-Public shared multi-tenant hosting is not offered by this release.
+Many small teams want a dependable release-security check without sending
+private source code to another hosted platform or assembling five unrelated
+scanner reports by hand.
 
-## Highlights
+Aegis provides one workflow:
 
-- Local and CI security gates with deterministic exit codes.
-- Project workspaces, member roles, scan history, and new-finding comparison.
-- GitHub OAuth import for public and private repositories.
-- Quick, standard, and deep scan presets.
-- SAST, dependency, secret, malware, container, and dynamic checks.
-- HTML, Markdown, SARIF, SBOM, JSON, and report-bundle outputs.
-- Authenticated WebSocket scan progress and bounded worker logs.
-- Slack, Teams Workflow, email, and signed webhook notifications.
-- PostgreSQL persistence, Redis/RQ workers, Caddy TLS, and Prometheus metrics.
-- Administration for users, API tokens, audit events, WAF rules, and diagnostics.
-- Tenant-scoped authorization, scoped API tokens, login lockout, and encrypted TOTP MFA.
-- Ed25519-signed evidence manifests with independently verifiable artifact hashes.
+1. scan an approved repository;
+2. evaluate it against an explicit policy version;
+3. explain why the release passed, was blocked, or could not be evaluated;
+4. track findings until they are fixed or formally accepted;
+5. export signed evidence that can be verified independently.
 
-## Quick Start
+## Choose your path
 
-### Scan From The Terminal
+| Goal | Start here | Requirements |
+| --- | --- | --- |
+| Try the scanner | [CLI evaluation](#cli-evaluation) | Python 3.11+ |
+| Run the complete workbench locally | [Local workbench](#local-workbench) | Source checkout, Docker, Compose v2 |
+| Gate a repository in CI | [GitHub Action](#github-action) | A GitHub workflow |
+| Operate an internal pilot | [Production pilot](#production-pilot) | DNS, TLS, PostgreSQL, Redis, workers, backups |
 
-Install the CLI in an isolated environment:
+## CLI evaluation
+
+Install Aegis in an isolated environment:
 
 ```bash
 pipx install aegis-security-console
 ```
 
-Run a scan:
+Check the available scanner dependencies, then run the built-in demonstration:
 
 ```bash
-aegis scan .
+aegis doctor
+aegis demo --open
 ```
 
-Try Aegis on a generated vulnerable sample app:
+The demo creates a tiny intentionally vulnerable application. A blocked verdict
+is expected.
+
+Scan your own repository:
 
 ```bash
-aegis demo
+cd your-project
+aegis scan . --fast
 ```
 
-Generate SARIF for code-scanning platforms:
+For a release or CI gate, use strict mode so missing scanner evidence is never
+treated as a clean result:
 
 ```bash
-aegis scan . --sarif
+aegis scan . \
+  --strict \
+  --fail-on medium,high,critical \
+  --output .aegis/reports \
+  --sarif .aegis/reports/aegis.sarif
 ```
 
-Exit codes:
+Exit codes are stable and intended for automation:
 
-| Code | Meaning |
+| Code | Decision |
 | ---: | --- |
-| `0` | Deployment allowed |
-| `1` | Security policy blocked |
+| `0` | Allowed by policy |
+| `1` | Blocked by security findings |
 | `2` | Scanner, configuration, or operational failure |
 
-Reports explain what failed, why it matters, how to fix it, whether the finding
-is new, and when suppression is acceptable.
-
-Verify service-generated evidence against a pinned deployment public key:
+Other useful commands:
 
 ```bash
+aegis scan . --no-docker        # Skip Docker, Trivy, and DAST
+aegis scan . --json --quiet     # Machine-readable result
+aegis report --open             # Open the latest HTML report
+aegis install-hook              # Add a Git pre-push gate
 aegis verify-evidence ./scan-manifest.json --public-key YOUR_PINNED_KEY
 ```
 
-### Start The Workbench
+## Local workbench
 
-The complete local stack requires a source checkout, Docker, and Docker Compose
-v2:
+The full workbench is started from a source checkout because it includes the
+Compose topology and deployment configuration.
 
 ```bash
 git clone https://github.com/huslenine999/aegis.git
 cd aegis
-python3 -m pip install -e ".[dev]"
-aegis start
+
+python3 -m venv venv
+./venv/bin/python -m pip install -e ".[dev,scanner]"
+./venv/bin/aegis start
 ```
 
-`aegis start`:
+`aegis start` checks Docker and local ports, generates owner-only development
+secrets in `.env.aegis`, starts the stack, waits for readiness, and opens the
+one-time setup wizard at [http://localhost](http://localhost).
 
-1. checks Docker and required ports;
-2. creates owner-only local secrets in `.env.aegis`;
-3. starts PostgreSQL, Redis, the RQ worker, dashboard, and Caddy;
-4. waits for the health endpoint;
-5. opens the one-time setup wizard.
-
-The local workbench is available at [http://localhost](http://localhost).
-
-To start without opening a browser:
+To leave the browser closed or inspect startup directly:
 
 ```bash
-aegis start --no-open
+./venv/bin/aegis start --no-open
+./venv/bin/aegis logs --follow
 ```
 
-## Common CLI Commands
+After signing in:
+
+1. open **Projects**;
+2. create a local project or connect GitHub and import a repository;
+3. choose Quick or Standard scanning;
+4. review the policy decision and durable findings;
+5. assign owners, acknowledge or resolve findings, and create GitHub remediation
+   issues;
+6. download the report bundle and signed evidence manifest.
+
+Stop the stack without deleting its data:
 
 ```bash
-# Fast local feedback
-aegis scan . --fast
-
-# Skip Docker, Trivy, and DAST
-aegis scan . --no-docker
-
-# Machine-readable summary
-aegis scan . --json --quiet
-
-# Fail closed when a requested scanner cannot complete
-aegis scan . --strict
-
-# Write reports to a dedicated directory
-aegis scan . --output ./aegis-reports
-
-# Locate or open the latest report
-aegis report --path
-aegis report --open
+./venv/bin/aegis stop
 ```
 
-Non-strict scans can still return a policy decision from available reports, but
-the JSON summary and `scan-manifest.json` include `operational_failures` when a
-scanner fails. Use `--strict` for CI and release gates.
+## What the workbench adds
 
-## Web Workflow
+The web application turns one-off scanner output into an operational workflow:
 
-1. Complete first-run administrator setup.
-2. Open `/projects`.
-3. Create a project or connect GitHub and import a repository.
-4. Select a scan preset.
-5. Follow scanner progress and logs in real time.
-6. Review new findings and the deployment verdict.
-7. Retry, cancel, export, or notify the relevant team.
+- project workspaces with viewer, operator, and administrator roles;
+- immutable policy versions bound to individual scans;
+- durable finding fingerprints, occurrences, owners, due dates, and event history;
+- expiring accepted-risk and false-positive decisions with required rationale;
+- GitHub repository import, pull-request checks, and remediation issues;
+- cancellable Redis/RQ jobs with authenticated live progress;
+- HTML, Markdown, JSON, SARIF, CycloneDX SBOM, and ZIP evidence exports;
+- Ed25519-signed manifests and SHA-256 artifact integrity checks;
+- Slack, Teams Workflow, email, and signed webhook notifications;
+- local authentication with TOTP MFA, plus optional enterprise OIDC;
+- append-only audit-chain verification, metrics, diagnostics, and API tokens;
+- local or S3-compatible artifact storage with optional KMS and object lock.
 
-### Scan Presets
+## Scan presets
 
-| Preset | Intended use | Included checks |
+| Preset | Intended use | Runtime expectation |
 | --- | --- | --- |
-| Quick | Local and development feedback | Fast SAST and signature checks |
-| Standard | Pull-request or branch gate | Static analysis, dependencies, secrets, and malware |
-| Deep | Release audit | Standard checks plus sandbox execution, DAST, and container scanning |
+| **Quick** | Developer feedback | Fast local checks; expensive and external scanners are skipped |
+| **Standard** | Pull requests and branch gates | Static analysis, dependencies, secrets, and signature checks |
+| **Deep** | Controlled release audit | Standard checks plus sandbox execution, DAST, and container analysis |
 
-## Scanner Coverage
+Deep scans are deliberately not enabled by the default local topology. They are
+sent to a dedicated queue and require a worker that advertises the isolated
+capability and has access to a reviewed Docker runtime and Trivy. Provision that
+worker on infrastructure intended for hostile source code; do not mount a
+production host Docker socket into the dashboard.
 
-| Area | Tools and behavior |
+## Scanner coverage
+
+| Area | Implementation |
 | --- | --- |
-| Python SAST | Ruff security rules |
-| Pattern analysis | Semgrep with Aegis rules |
-| Dependencies | OSV by default; licensed Safety CLI integration is opt-in |
+| Python security analysis | Ruff security rules |
+| Pattern analysis | Semgrep and Aegis rules |
+| Dependency vulnerabilities | OSV; optional licensed Safety integration |
 | Secrets | detect-secrets |
-| Malware/signatures | YARA and ClamAV-compatible fallback checks |
-| Containers | Trivy when Docker is available |
-| Dynamic testing | Sandbox execution and DAST probes |
-| Policy | Configurable severity gate and audited suppressions |
+| Malware and signatures | YARA and ClamAV-compatible checks |
+| Containers and filesystems | Trivy when the approved Docker runtime is available |
+| Dynamic behavior | Isolated sandbox and Aegis DAST probes |
+| Correlation and gating | Versioned severity policy and audited suppressions |
 
-Scanner availability depends on the selected preset and local runtime. Requested
-scanner failures are treated as operational failures in strict mode, not as
-clean results.
+Requested scanner failures are recorded as operational failures. Use strict mode
+for any release decision.
 
-## Project Configuration
+## Project configuration
 
 Aegis discovers `aegis.yml`, `aegis.yaml`, `.aegis.yml`, or `.aegis.yaml` from
-the target directory upward.
+the scan target upward. Command-line options override file configuration.
 
 ```yaml
 scan:
   no_docker: true
   fail_on: medium,high,critical
   timeout: 120
-  sarif: aegis.sarif
+  sarif: .aegis/reports/aegis.sarif
   exclude_paths:
-    - app/demo_lab.py
+    - tests/fixtures
   suppressions:
     - tool: Ruff
       rule: S103
       path: app/cli.py
-      reason: Reviewed executable hook creation.
+      reason: Required executable permission for the generated Git hook.
       approved_by: application-security
       ticket: SEC-123
       expires_at: 2027-07-20
 ```
 
-CLI options override configuration-file values. A suppression is active only
-when it has a meaningful reason, approver, tracking ticket, and future ISO-8601
-expiry. Applied, expired, and invalid exceptions are written to the versioned
-`suppressions-report.json`; expired or malformed entries never hide findings.
+A suppression is active only when it includes a meaningful reason, approver,
+tracking ticket, and future ISO-8601 expiry. Applied, invalid, and expired
+exceptions are written to `suppressions-report.json`; malformed exceptions never
+hide findings.
 
-## Architecture
+## GitHub Action
 
-```mermaid
-flowchart LR
-    User["Browser / CLI"] --> Caddy["Caddy TLS proxy"]
-    Caddy --> API["FastAPI dashboard"]
-    API --> Postgres["PostgreSQL"]
-    API --> Redis["Redis"]
-    Redis --> Worker["RQ scan worker"]
-    Worker --> Sandbox["Docker sandbox and scanners"]
-    Worker --> Postgres
-    API --> Metrics["Prometheus metrics"]
-    Worker --> Notify["Slack / Teams / Email / Webhooks"]
+Use the repository Action as a fail-closed pull-request gate:
+
+```yaml
+name: security
+
+on:
+  pull_request:
+
+jobs:
+  aegis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<reviewed-commit-sha>
+      - name: Aegis security gate
+        uses: huslenine999/aegis@<reviewed-commit-sha>
+        with:
+          scan-target: .
+          no-docker: "true"
+          fail-on: medium,high,critical
 ```
 
-Production services:
+Pin Aegis and every third-party Action to reviewed immutable commit SHAs in a
+protected production workflow.
 
-- **Caddy** terminates TLS and proxies HTTP/WebSocket traffic.
-- **FastAPI** provides authentication, RBAC, APIs, reports, and the UI.
-- **PostgreSQL** stores users, projects, scan history, encrypted integrations,
-  notification channels, audit events, WAF rules, and application state.
-- **Redis/RQ** provides queues, rate limits, live job state, and bounded logs.
-- **Worker** clones repositories and executes scanner pipelines.
+For repository import, exact-head pull-request checks, and remediation tickets,
+follow the [GitHub integration guide](docs/GITHUB.md).
 
-## Security Model
+## Production pilot
 
-Global and project roles:
+The supported production shape is one isolated Aegis deployment per customer or
+trust boundary.
 
-| Role | Capabilities |
-| --- | --- |
-| Viewer | Read project results, reports, SBOMs, and scan streams |
-| Operator | Viewer access plus start, cancel, and retry scans |
-| Admin | User, token, membership, notification, WAF, and operations administration |
-
-Security controls include:
-
-- PBKDF2 password hashes;
-- revocable server-side HTTP-only sessions that honor current account state;
-- secure `SameSite` cookies in production;
-- CSRF validation for session mutations;
-- bearer API tokens with revocation;
-- project membership checks;
-- per-job WebSocket ownership;
-- Redis-backed request and connection rate limits;
-- encrypted GitHub and notification credentials;
-- project/run-scoped artifacts with membership checks and integrity hashes;
-- fail-closed worker decisions when required scanner evidence is unavailable;
-- explicit production host and CORS allowlists.
-
-## GitHub Integration
-
-Create a GitHub OAuth app with this callback:
-
-```text
-https://aegis.example.com/api/github/callback
-```
-
-Configure:
-
-```bash
-AEGIS_GITHUB_CLIENT_ID=...
-AEGIS_GITHUB_CLIENT_SECRET=...
-AEGIS_GITHUB_CALLBACK_URL=https://aegis.example.com/api/github/callback
-AEGIS_ENCRYPTION_KEY=...
-```
-
-Generate a valid encryption key:
-
-```bash
-python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
-```
-
-The OAuth flow uses PKCE and expiring state. Access tokens are encrypted in
-PostgreSQL. Git clone credentials are passed through process environment
-configuration rather than command arguments or logs.
-
-See [GitHub integration setup](docs/GITHUB.md).
-
-## Notifications
-
-Project administrators can subscribe channels to `completed`, `blocked`,
-`failed`, and `cancelled` events.
-
-Supported destinations:
-
-- Slack incoming webhooks;
-- Microsoft Teams Workflow webhooks;
-- generic HTTPS webhooks with optional HMAC signatures;
-- SMTP email.
-
-Webhook destinations must resolve to public addresses. Notification delivery
-failure is recorded but does not convert a completed scan into a failed scan.
-
-See [operations and notifications](docs/OPERATIONS.md).
-
-## Production Deployment
-
-Copy the environment template:
+Start with the environment template:
 
 ```bash
 cp .env.production.example .env
 ```
 
-Replace every placeholder, point `AEGIS_DOMAIN` DNS at the deployment host, and
-start the stack:
+Replace every placeholder, point `AEGIS_DOMAIN` at the host, and validate the
+configuration before exposing the service:
 
 ```bash
+docker compose config
 docker compose up --build -d
+
+curl https://aegis.example.com/health
+curl https://aegis.example.com/ready
 ```
 
-Production startup fails closed unless authentication, PostgreSQL, Redis,
-workers, explicit host/origin allowlists, and required secrets are configured.
+Production mode fails closed when required authentication, PostgreSQL, Redis,
+workers, notifier, host/origin allowlists, or secrets are missing.
 
-Health endpoints:
+Before giving a team access, complete all of the following:
 
-| Endpoint | Purpose |
-| --- | --- |
-| `/health` | Process liveness |
-| `/ready` | PostgreSQL, Redis, and worker readiness |
-| `/metrics` | Authenticated Prometheus metrics |
+- run a real backup and restore rehearsal;
+- run `scripts/pilot_readiness.py` and a canary repository scan;
+- configure metrics, logs, queue-age alerts, and notification failure alerts;
+- pin and escrow the evidence-signing and encryption keys;
+- verify GitHub permissions using known safe and vulnerable pull requests;
+- configure S3/KMS/object lock if local artifact storage is not acceptable;
+- configure and test OIDC and a break-glass administrator procedure if required;
+- provision an isolated deep worker before enabling `AEGIS_ALLOW_DEEP_SCANS`.
 
-Deploy a published image:
+S3 and OIDC adapters are included, but Aegis does not provision the provider,
+bucket, KMS policy, DNS, TLS, Docker isolation, or disaster-recovery environment
+for you. Those controls must be configured and reviewed in the deployment where
+Aegis runs.
 
-```bash
-export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.3.0
-docker compose pull dashboard worker
-docker compose up -d --no-build
+See the [production guide](docs/PRODUCTION.md), [operations and recovery
+runbook](docs/OPERATIONS.md), and [controlled pilot runbook](docs/PILOT_RUNBOOK.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    User["Browser / API"] --> Proxy["Caddy TLS proxy"]
+    GitHub["GitHub App / OAuth"] --> Proxy
+    Proxy --> API["FastAPI dashboard"]
+    API --> DB["PostgreSQL"]
+    API --> Redis["Redis queues and live state"]
+    Redis --> Worker["Standard scan worker"]
+    Redis --> Deep["Isolated deep worker"]
+    Redis --> Notifier["Notifier worker"]
+    Worker --> Evidence["Local or S3 evidence"]
+    Deep --> Evidence
+    API --> Evidence
+    Notifier --> Channels["Slack / Teams / Email / Webhooks"]
 ```
 
-See [production deployment](docs/PRODUCTION.md).
+The dashboard authorizes users and projects. Scanner workers process untrusted
+source. The notifier owns outbound notification credentials. PostgreSQL stores
+identity, project, policy, finding, audit, and scan metadata. Redis contains
+bounded transient job state rather than authoritative evidence.
+
+## Security model
+
+Important controls include:
+
+- project-scoped RBAC and tenant consistency guards;
+- revocable server-side sessions, CSRF checks, login lockout, and TOTP MFA;
+- OIDC authorization code flow with PKCE, state, nonce, issuer, audience, and
+  signing-key validation;
+- encrypted GitHub and notification credentials;
+- replay-resistant GitHub webhooks and exact-head check runs;
+- request limits, scanner deadlines, workspace limits, and fail-closed evidence;
+- signed manifests, artifact hashes, and append-only audit-chain verification;
+- a separate notifier process that does not expose SMTP credentials to scanners;
+- production host and CORS allowlists with no wildcard defaults.
+
+Aegis still executes security tooling against untrusted source. Treat worker
+compromise as a realistic threat, keep production credentials out of workers,
+and review the [threat model](docs/THREAT_MODEL.md) before deployment.
 
 ## Operations
 
-Open `/admin` for:
-
-- user and role management;
-- API-token issuance and revocation;
-- PostgreSQL, Redis, worker, GitHub, and SMTP diagnostics;
-- durable audit events;
-- recent request IDs, statuses, and latency.
-
-Lifecycle commands:
+Common stack commands:
 
 ```bash
 aegis logs --follow
@@ -356,29 +338,21 @@ aegis upgrade
 aegis stop
 ```
 
-Backups contain a clean PostgreSQL dump, generated reports, and a versioned
-manifest. Redis job events are bounded transient state and are not backed up.
+Health and monitoring endpoints:
 
-Prometheus and Grafana examples are available in [`deploy/`](deploy/).
+| Endpoint | Purpose |
+| --- | --- |
+| `/health` | Process liveness |
+| `/ready` | Database, Redis, standard worker, notifier, and enabled deep-worker readiness |
+| `/metrics` | Bearer-protected Prometheus metrics |
 
-## GitHub Action
+Open `/admin` for users, roles, API tokens, audit verification, diagnostics, and
+recent request telemetry. Redis events are transient and are not included in
+backups.
 
-Aegis can block a workflow using the repository Action:
+## Verification and development
 
-```yaml
-- name: Aegis security gate
-  uses: huslenine999/aegis@<reviewed-commit-sha>
-  with:
-    scan-target: .
-    no-docker: "true"
-    fail-on: medium,high,critical
-```
-
-Pin the Action to a reviewed immutable commit SHA.
-
-## Development
-
-Install development dependencies:
+Install development and browser dependencies:
 
 ```bash
 python3 -m venv venv
@@ -387,7 +361,7 @@ npm ci
 npx playwright install chromium
 ```
 
-Run verification:
+Run the complete repository readiness gate:
 
 ```bash
 ./venv/bin/python scripts/pilot_readiness.py \
@@ -396,48 +370,28 @@ npm run test:e2e
 git diff --check
 ```
 
-Current baseline: **185 Python tests**, a **30-case scanner benchmark**, and
-**7 Playwright/axe browser tests**.
-CI also enforces focused type checks, full Ruff linting, browser authentication
-flows, and serious/critical accessibility checks.
+The current baseline is:
 
-The intentionally vulnerable demo routes are disabled by default. Enable them
-only for isolated training:
+- 185 Python tests;
+- 30 balanced scanner benchmark cases;
+- 7 Playwright and axe accessibility tests;
+- Ruff, mypy, package, Compose, and migration validation in CI.
 
-```bash
-AEGIS_ENABLE_DEMO_LAB=true ./venv/bin/python -m uvicorn app.main:app \
-  --host 127.0.0.1 --port 5001
-```
-
-## Production Readiness
-
-Aegis is suitable for a controlled internal production pilot after a real Docker
-deployment rehearsal and backup/restore drill.
-
-The application now includes durable finding lifecycles, immutable project policy
-versions, GitHub remediation issue handoff, optional OIDC, and an S3-compatible
-artifact backend with KMS/object-lock controls. Before operating it as a public
-multi-tenant SaaS:
-
-- configure and independently review the S3, KMS, object-lock, and OIDC adapters;
-- operate and test recovery using [docs/OPERATIONS.md](docs/OPERATIONS.md);
-- add password recovery and a break-glass identity procedure;
-- move private-repository credential minting behind a short-lived broker;
-- run scanners in an ephemeral fleet with deny-by-default egress;
-- run load, failover, penetration, and disaster-recovery testing;
-- connect logs, metrics, errors, and alerts to production systems.
+The benchmark is useful regression evidence, not an independent certification or
+a substitute for testing Aegis against representative repositories.
 
 ## Documentation
 
 - [Quick start](docs/QUICKSTART.md)
 - [Production deployment](docs/PRODUCTION.md)
 - [GitHub integration](docs/GITHUB.md)
-- [Operations and notifications](docs/OPERATIONS.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Operations and recovery](docs/OPERATIONS.md)
 - [Controlled pilot runbook](docs/PILOT_RUNBOOK.md)
-- [Hardening baseline](docs/HARDENING.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Architecture](docs/ARCHITECTURE.md)
 - [Threat model](docs/THREAT_MODEL.md)
+- [Hardening baseline](docs/HARDENING.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 
