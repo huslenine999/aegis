@@ -1,21 +1,40 @@
+# Python environments and generated metadata
 venv/
 .venv/
 scanner-venv/
 __pycache__/
-*.pyc
-*.db
-scans/
-.aegis/
-.antigravitycli/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
 .ruff_cache/
 .pytest_cache/
 build/
 dist/
-*.egg-info/
+
+# Runtime state and private configuration
+.aegis/
+.antigravitycli/
+.e2e-data/
+scans/
+aegis-reports/
+backups/
+*.db
+*.zip
+*.tgz
+benchmark-results.json
+pilot-readiness*.json
+pilot-rehearsal*.json
 .env
 .env.aegis
-.e2e-data/
-.DS_Store
+
+# JavaScript and browser-test output
 node_modules/
 test-results/
 playwright-report/
+
+# Coverage, logs, and operating-system files
+.coverage
+coverage.xml
+htmlcov/
+*.log
+.DS_Store

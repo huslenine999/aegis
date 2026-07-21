@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aegis-security-console"
 version = "2.3.0"
-description = "Aegis DevSecOps security console and CLI scanner"
+description = "Private, explainable release-security scanner and self-hosted workbench"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

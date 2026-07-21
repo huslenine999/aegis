@@ -1,5 +1,20 @@
 # Changelog
 
+All notable changes to the Aegis project will be documented in this file.
+
+## [Unreleased]
+
+### Changed
+
+- Added a reproducible controlled-pilot readiness and recovery rehearsal.
+- Tightened scanner/notifier secret boundaries and local artifact-backend claims.
+- Consolidated development verification and current production limitations.
+
+### Removed
+
+- Removed the stale delivery handoff, unsupported Vercel target, and duplicate
+  legacy setup script.
+
 ## [2.3.0] - 2026-07-10
 
 ### Changed
@@ -10,10 +25,6 @@
 - Added project update/deletion, member removal, user disable/role rotation, database indexes, and fresh-install constraints.
 - Hardened DAST fallback behavior, request-body limits, webhook redirects/retries, API-token expiry validation, linting, and focused type checks.
 - Made the GitHub Action install the full standard scanner extra and included Semgrep in the production worker image.
-
-All notable changes to the Aegis project will be documented in this file.
-
-## [Unreleased]
 
 ## [2.2.0] - 2026-06-30
 

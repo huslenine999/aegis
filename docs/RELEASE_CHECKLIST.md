@@ -5,11 +5,16 @@ Use this checklist before tagging a public release.
 Start by generating the consolidated repository-side evidence:
 
 ```bash
-python scripts/pilot_readiness.py --output pilot-readiness.json
+python scripts/pilot_readiness.py --output .aegis/pilot-readiness.json
 ```
 
-On a clean Docker-capable rehearsal host with ports 80 and 443 available, run
-`python scripts/pilot_readiness.py --docker-smoke --output pilot-rehearsal.json`.
+On a clean Docker-capable rehearsal host with ports 80 and 443 available, run:
+
+```bash
+python scripts/pilot_readiness.py --docker-smoke \
+  --output .aegis/pilot-rehearsal.json
+```
+
 The Docker mode uses a unique Compose project, rehearses database recovery and
 service restart, then removes only its temporary containers and volumes.
 

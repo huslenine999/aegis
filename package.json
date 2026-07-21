@@ -1,7 +1,7 @@
 {
   "name": "aegis",
   "version": "2.3.0",
-  "description": "Aegis retro CRT DevSecOps console for static code scanning and threat simulation",
+  "description": "Private, explainable release-security scanner and self-hosted workbench",
   "main": "bin/cli.js",
   "bin": {
     "aegis": "./bin/cli.js"
@@ -27,9 +27,8 @@
     "devsecops",
     "sast",
     "sca",
-    "waf",
-    "retro",
-    "crt",
+    "release-security",
+    "policy-gate",
     "console",
     "terminal"
   ],

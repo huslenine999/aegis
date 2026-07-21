@@ -12,7 +12,8 @@ not combine customer data or present this pilot as shared multi-tenant SaaS.
 
 Do not schedule customer onboarding until all of the following are true:
 
-- `python scripts/pilot_readiness.py --output pilot-readiness.json` passes;
+- `python scripts/pilot_readiness.py --output .aegis/pilot-readiness.json`
+  passes;
 - the Docker rehearsal has passed on the intended deployment class;
 - a backup has been restored into a separate rehearsal project;
 - the deployment public key used for evidence verification is pinned outside

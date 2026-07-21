@@ -382,21 +382,21 @@ Install development dependencies:
 
 ```bash
 python3 -m venv venv
-./venv/bin/python -m pip install -e ".[dev]"
-npm install
+./venv/bin/python -m pip install -e ".[dev,scanner]"
+npm ci
 npx playwright install chromium
 ```
 
 Run verification:
 
 ```bash
-./venv/bin/python -m compileall -q app policy_engine.py tests
-./venv/bin/python -m pytest -q
+./venv/bin/python scripts/pilot_readiness.py \
+  --output .aegis/pilot-readiness.json
 npm run test:e2e
 git diff --check
 ```
 
-Current baseline: **138 Python tests** and **6 Playwright/axe browser tests**.
+Current baseline: **180 Python tests** and **7 Playwright/axe browser tests**.
 CI also enforces focused type checks, full Ruff linting, browser authentication
 flows, and serious/critical accessibility checks.
 
@@ -404,7 +404,8 @@ The intentionally vulnerable demo routes are disabled by default. Enable them
 only for isolated training:
 
 ```bash
-AEGIS_ENABLE_DEMO_LAB=true ./setup.sh
+AEGIS_ENABLE_DEMO_LAB=true ./venv/bin/python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port 5001
 ```
 
 ## Production Readiness
@@ -415,13 +416,11 @@ deployment rehearsal and backup/restore drill.
 Before operating it as a public multi-tenant SaaS:
 
 - move the run-scoped local artifact backend to tenant-scoped object storage;
-- add MFA, password reset, and enterprise identity federation;
-- replace broad GitHub OAuth scope with a fine-grained GitHub App;
-- add automated pull-request checks and review comments;
+- add password recovery and enterprise identity federation;
+- move private-repository credential minting behind a short-lived broker;
+- run scanners in an ephemeral fleet with deny-by-default egress;
 - run load, failover, penetration, and disaster-recovery testing;
 - connect logs, metrics, errors, and alerts to production systems.
-
-See [the delivery handoff](handoff.md) for the detailed assessment.
 
 ## Documentation
 
@@ -431,6 +430,8 @@ See [the delivery handoff](handoff.md) for the detailed assessment.
 - [Operations and notifications](docs/OPERATIONS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Controlled pilot runbook](docs/PILOT_RUNBOOK.md)
+- [Hardening baseline](docs/HARDENING.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
