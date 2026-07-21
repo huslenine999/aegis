@@ -8,6 +8,9 @@ import subprocess
 import time
 import re
 import base64
+import hashlib
+import queue as thread_queue
+import threading
 from pathlib import Path
 
 # Add project root to sys.path
@@ -19,26 +22,101 @@ from config import environment_positive_int
 try:
     from .dependencies import discover_dependency_manifests, first_requirements_manifest
 except ImportError:
-    from dependencies import discover_dependency_manifests, first_requirements_manifest
+    from dependencies import (  # type: ignore[no-redef]
+        discover_dependency_manifests,
+        first_requirements_manifest,
+    )
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
 from scan_status import ToolStatusTracker
 from scanners import run_clamav_scan as shared_run_clamav_scan
+from scanners import run_dast_scan as shared_run_dast_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import DEFAULT_IGNORED_DIRS
 from scanners import configure_semgrep_environment
+from scanners import scanner_subprocess_environment
 from scanners import write_semgrep_rules
-from projects import get_project, update_scan_run
-from github_integration import github_token
-from notifications import send_project_notification
+from projects import get_project, get_scan_run, record_scan_artifacts, update_scan_run
+from evidence import canonical_json, sign_manifest
+from artifact_storage import run_directory
+from github_integration import complete_check_run, github_installation_token, github_token
+from notifications import queue_project_notification
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
-    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox
+    create_sandbox_network, run_sandbox_container, wait_for_container,
+    run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
 )
 
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
 JOB_LOG_LIMIT = environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
 JOB_RETENTION_SECONDS = environment_positive_int("AEGIS_JOB_RETENTION_SECONDS", 86400)
 ARTIFACT_RETENTION_DAYS = environment_positive_int("AEGIS_ARTIFACT_RETENTION_DAYS", 30)
+SCANNER_TIMEOUT_SECONDS = environment_positive_int(
+    "AEGIS_SCANNER_TIMEOUT_SECONDS", 300
+)
+RECORDED_ARTIFACT_NAMES = {
+    "report.html",
+    "report.md",
+    "sbom.json",
+    "ruff-report.json",
+    "semgrep-report.json",
+    "safety-report.json",
+    "osv-report.json",
+    "trivy-report.json",
+    "secrets-report.json",
+    "yara-report.json",
+    "clamav-report.json",
+    "zap-report.json",
+    "sandbox-status.json",
+    "scan-manifest.json",
+}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_inventory(report_dir: Path) -> list[dict]:
+    inventory = []
+    for name in sorted(RECORDED_ARTIFACT_NAMES - {"scan-manifest.json"}):
+        path = report_dir / name
+        if path.is_file():
+            inventory.append(
+                {
+                    "name": name,
+                    "size": path.stat().st_size,
+                    "sha256": _sha256_file(path),
+                }
+            )
+    return inventory
+
+
+def _source_revision(target_path: str | Path) -> str:
+    path = Path(target_path)
+    working_directory = path if path.is_dir() else path.parent
+    git = shutil.which("git")
+    if git:
+        try:
+            result = subprocess.run(
+                [git, "rev-parse", "HEAD"],
+                cwd=working_directory,
+                env=scanner_subprocess_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            revision = result.stdout.strip().lower()
+            if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", revision):
+                return revision
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if path.is_file():
+        return f"sha256:{_sha256_file(path)}"
+    return "unavailable"
 
 
 def add_semgrep_excludes(command: list[str]) -> list[str]:
@@ -113,108 +191,76 @@ def run_yara_scan(target_path: str, job_id: str):
 def run_clamav_scan(target_path: str, job_id: str):
     return shared_run_clamav_scan(target_path, log=job_log_callback(job_id))
 
-def run_dast_scan(target_url: str = None, job_id: str = None, waf_enabled: bool = None):
-    findings = []
-    test_cases = [
-        {
-            "vuln_type": "SQL Injection",
-            "route": "/user",
-            "method": "GET",
-            "params": {"name": "admin' OR '1'='1"},
-            "payload": "admin' OR '1'='1",
-            "description": "Active SQL injection vulnerability in user lookup endpoint."
-        },
-        {
-            "vuln_type": "Remote Code Execution",
-            "route": "/ping",
-            "method": "GET",
-            "params": {"host": "127.0.0.1; cat /etc/passwd"},
-            "payload": "127.0.0.1; cat /etc/passwd",
-            "description": "Command injection vulnerability in ping routing."
-        },
-        {
-            "vuln_type": "Unsafe Eval Injection",
-            "route": "/calculate",
-            "method": "GET",
-            "params": {"expr": "__import__('os').system('id')"},
-            "payload": "__import__('os').system('id')",
-            "description": "Arbitrary Python execution via unsafe eval expression injection."
-        },
-        {
-            "vuln_type": "Path Traversal (LFI)",
-            "route": "/download",
-            "method": "GET",
-            "params": {"file": "../requirements.txt"},
-            "payload": "../requirements.txt",
-            "description": "Local File Inclusion / Path Traversal vulnerability."
-        },
-        {
-            "vuln_type": "Cross-Site Scripting (XSS)",
-            "route": "/xss",
-            "method": "GET",
-            "params": {"msg": "<script>alert('XSS')</script>"},
-            "payload": "<script>alert('XSS')</script>",
-            "description": "Reflected Cross-Site Scripting vulnerability."
-        },
-        {
-            "vuln_type": "Server-Side Request Forgery (SSRF)",
-            "route": "/ssrf",
-            "method": "GET",
-            "params": {"url": "http://169.254.169.254/latest/meta-data/"},
-            "payload": "http://169.254.169.254/latest/meta-data/",
-            "description": "Server-Side Request Forgery vulnerability exposing cloud metadata."
-        }
-    ]
+def run_dast_scan(
+    target_url: str | None = None,
+    job_id: str | None = None,
+    waf_enabled: bool | None = None,
+    *,
+    internal_port: int = 5001,
+):
+    del waf_enabled
+    return shared_run_dast_scan(
+        target_url,
+        internal_port=internal_port,
+        log=job_log_callback(job_id) if job_id else None,
+    )
 
-    import requests
-    if target_url:
-        for tc in test_cases:
-            url = f"{target_url}{tc['route']}"
-            publish_job_event(job_id, "log", {"text": f"[DAST] Scanning route: {tc['route']} with payload: {tc['payload']}", "color": "var(--text-muted)"})
-            try:
-                res = requests.get(url, params=tc["params"], timeout=3)
-                status_code = res.status_code
-            except Exception:
-                status_code = 500
-            
-            if 200 <= status_code < 400:
-                status = "EXPOSED"
-            elif status_code in {401, 403}:
-                status = "MITIGATED"
-            elif status_code in {404, 405}:
-                status = "NOT_APPLICABLE"
-            else:
-                status = "ERROR"
-            color = "var(--danger)" if status == "EXPOSED" else "var(--primary)"
-            publish_job_event(job_id, "log", {"text": f"[DAST] Result for {tc['vuln_type']}: {status} (HTTP {status_code})", "color": color})
-            
-            findings.append({
-                "vuln_type": tc["vuln_type"],
-                "route": tc["route"],
-                "payload": tc["payload"],
-                "description": tc["description"],
-                "status": status,
-                "response_code": status_code
-            })
-    else:
-        publish_job_event(
-            job_id,
-            "log",
-            {
-                "text": "[DAST] Skipped: no isolated target URL was available.",
-                "color": "var(--text-muted)",
-            },
-        )
-    return findings
-
-def execute_subprocess_log(cmd, cwd, job_id, tool_name, env=None):
+def execute_subprocess_log(
+    cmd, cwd, job_id, tool_name, env=None, timeout: int = SCANNER_TIMEOUT_SECONDS
+):
     publish_job_event(job_id, "log", {"text": f"[{tool_name}] Executing: {' '.join(cmd)}", "color": "var(--text-muted)"})
     try:
-        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-        for line in p.stdout:
+        p = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env or scanner_subprocess_environment(),
+            start_new_session=os.name != "nt",
+        )
+        output: thread_queue.Queue[str | None] = thread_queue.Queue()
+
+        def read_output() -> None:
+            if p.stdout is not None:
+                for line in p.stdout:
+                    output.put(line)
+            output.put(None)
+
+        threading.Thread(target=read_output, daemon=True).start()
+        deadline = time.monotonic() + timeout
+        while True:
+            _check_cancelled(job_id)
+            if time.monotonic() >= deadline:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                publish_job_event(
+                    job_id,
+                    "log",
+                    {
+                        "text": f"[{tool_name} Error] Timed out after {timeout}s.",
+                        "color": "var(--danger)",
+                    },
+                )
+                return -1
+            try:
+                line = output.get(timeout=0.25)
+            except thread_queue.Empty:
+                if p.poll() is not None:
+                    break
+                continue
+            if line is None:
+                break
             publish_job_event(job_id, "log", {"text": f"[{tool_name}] {line.strip()}", "color": "var(--text-main)"})
-        p.wait()
+        p.wait(timeout=5)
         return p.returncode
+    except ScanCancelled:
+        if "p" in locals() and p.poll() is None:
+            p.terminate()
+        raise
     except Exception as e:
         publish_job_event(job_id, "log", {"text": f"[{tool_name} Error] Failed to run command: {e}", "color": "var(--danger)"})
         return -1
@@ -235,13 +281,23 @@ def _check_cancelled(job_id: str) -> None:
         raise ScanCancelled()
 
 
-def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tuple[str, Path]:
+def _clone_github_project(
+    project: dict,
+    requested_by: int,
+    job_id: str,
+    installation_id: int | None = None,
+    revision: str | None = None,
+) -> tuple[str, Path]:
     destination = SCANS_DIR / "workspaces" / job_id
     destination.parent.mkdir(parents=True, exist_ok=True)
-    token = github_token(requested_by)
+    if revision and not re.fullmatch(r"[0-9a-f]{40,64}", revision):
+        raise RuntimeError("GitHub source revision is invalid.")
+    token = github_installation_token(installation_id) if installation_id else None
+    if not token:
+        token = github_token(requested_by)
     if not token and requested_by != project["created_by"]:
         token = github_token(project["created_by"])
-    environment = os.environ.copy()
+    environment = scanner_subprocess_environment()
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         environment.update(
@@ -254,19 +310,14 @@ def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tupl
     git_executable = shutil.which("git")
     if not git_executable:
         raise RuntimeError("git executable is required to clone GitHub projects")
+    clone_command = [git_executable, "clone", "--depth", "1"]
+    if revision:
+        clone_command.append("--no-checkout")
+    else:
+        clone_command.extend(["--single-branch", "--branch", project["default_branch"]])
+    clone_command.extend(["--", project["repository_url"], str(destination)])
     result = subprocess.run(
-        [
-            git_executable,
-            "clone",
-            "--depth",
-            "1",
-            "--single-branch",
-            "--branch",
-            project["default_branch"],
-            "--",
-            project["repository_url"],
-            str(destination),
-        ],
+        clone_command,
         env=environment,
         capture_output=True,
         text=True,
@@ -276,7 +327,142 @@ def _clone_github_project(project: dict, requested_by: int, job_id: str) -> tupl
     if result.returncode != 0:
         shutil.rmtree(destination, ignore_errors=True)
         raise RuntimeError(f"Repository clone failed: {result.stderr[-500:]}")
+    if revision:
+        fetch = subprocess.run(
+            [git_executable, "-C", str(destination), "fetch", "--depth", "1", "origin", revision],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        checkout = subprocess.run(
+            [git_executable, "-C", str(destination), "checkout", "--detach", revision],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if fetch.returncode != 0 or checkout.returncode != 0:
+            shutil.rmtree(destination, ignore_errors=True)
+            detail = fetch.stderr if fetch.returncode else checkout.stderr
+            raise RuntimeError(f"Repository revision checkout failed: {detail[-500:]}")
     return str(destination), destination
+
+
+def _complete_github_scan_check(
+    scan_run_id: int | None,
+    project: dict | None,
+    conclusion: str,
+    summary: str,
+    annotations: list[dict] | None = None,
+) -> None:
+    if not scan_run_id or not project:
+        return
+    run = get_scan_run(scan_run_id)
+    if not run or not all(
+        (run.get("github_installation_id"), run.get("github_check_run_id"), project.get("github_full_name"))
+    ):
+        return
+    details_base = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
+    details_url = f"{details_base}/projects" if details_base.startswith("https://") else ""
+    try:
+        complete_check_run(
+            run["github_installation_id"],
+            project["github_full_name"],
+            run["github_check_run_id"],
+            conclusion=conclusion,
+            title="Aegis security gate passed" if conclusion == "success" else "Aegis security gate blocked",
+            summary=summary,
+            details_url=details_url,
+            annotations=annotations,
+        )
+    except Exception as exc:
+        publish_job_event(
+            run["job_id"],
+            "log",
+            {"text": f"[GITHUB] Check-run update failed: {str(exc)[:300]}", "color": "var(--warning)"},
+        )
+
+
+def _github_annotation_path(filename: object, target_path: str | Path) -> str | None:
+    if not filename:
+        return None
+    base = Path(target_path).resolve()
+    if base.is_file():
+        base = base.parent
+    candidate = Path(str(filename))
+    if candidate.is_absolute():
+        try:
+            candidate = candidate.resolve().relative_to(base)
+        except ValueError:
+            return None
+    clean = candidate.as_posix().removeprefix("./")
+    if not clean or clean == ".." or clean.startswith("../"):
+        return None
+    return clean[:4096]
+
+
+def _github_check_annotations(
+    result: dict, target_path: str | Path, limit: int = 50
+) -> list[dict]:
+    """Translate line-addressable scanner findings into GitHub check annotations."""
+    annotations: list[dict] = []
+
+    def add(
+        filename: object,
+        line: object,
+        message: object,
+        title: object,
+        level: str = "warning",
+    ) -> None:
+        if len(annotations) >= min(max(limit, 0), 50):
+            return
+        path = _github_annotation_path(filename, target_path)
+        if not path:
+            return
+        try:
+            start_line = max(1, int(str(line or 1)))
+        except (TypeError, ValueError):
+            start_line = 1
+        annotations.append({
+            "path": path,
+            "start_line": start_line,
+            "end_line": start_line,
+            "annotation_level": level if level in {"notice", "warning", "failure"} else "warning",
+            "message": str(message or "Aegis security finding")[:65000],
+            "title": str(title or "Aegis finding")[:255],
+        })
+
+    for item in result.get("ruff") or []:
+        location = item.get("location") or {}
+        add(
+            item.get("filename"),
+            location.get("row"),
+            item.get("message"),
+            f"Ruff {item.get('code') or 'security finding'}",
+        )
+    for item in (result.get("semgrep") or {}).get("results", []) or []:
+        extra = item.get("extra") or {}
+        severity = str(extra.get("severity") or "WARNING").upper()
+        add(
+            item.get("path"),
+            (item.get("start") or {}).get("line"),
+            extra.get("message"),
+            f"Semgrep {item.get('check_id') or 'security finding'}",
+            "failure" if severity == "ERROR" else "warning" if severity == "WARNING" else "notice",
+        )
+    for filename, items in (result.get("secrets") or {}).get("results", {}).items():
+        for item in items or []:
+            add(
+                filename,
+                item.get("line_number"),
+                "Potential secret detected. Rotate it if it was ever valid.",
+                f"Secret: {item.get('type') or 'credential'}",
+                "failure",
+            )
+    return annotations
 
 
 def _target_requirements_file(target_path: str | Path) -> Path | None:
@@ -298,36 +484,65 @@ def _mirror_latest_reports(source_dir: Path) -> None:
 
 
 def _cleanup_expired_artifacts(current_job_id: str) -> None:
-    runs_root = SCANS_DIR / "runs"
-    if not runs_root.is_dir():
-        return
     cutoff = time.time() - ARTIFACT_RETENTION_DAYS * 86400
-    for run_dir in runs_root.iterdir():
-        if not run_dir.is_dir() or run_dir.name == current_job_id:
+    roots = [SCANS_DIR / "runs"]
+    tenant_root = SCANS_DIR / "tenants"
+    if tenant_root.is_dir():
+        roots.extend(tenant_root.glob("*/projects/*/runs"))
+    for runs_root in roots:
+        if not runs_root.is_dir():
             continue
-        try:
-            state = redis_client.hget(f"job:{run_dir.name}", "state")
-            state_text = state.decode() if isinstance(state, bytes) else str(state or "")
-            if state_text and state_text not in {"completed", "failed", "cancelled"}:
+        for run_dir in runs_root.iterdir():
+            if not run_dir.is_dir() or run_dir.name == current_job_id:
                 continue
-            if run_dir.stat().st_mtime < cutoff:
-                shutil.rmtree(run_dir, ignore_errors=True)
-        except OSError:
+            try:
+                state = redis_client.hget(f"job:{run_dir.name}", "state")
+                state_text = state.decode() if isinstance(state, bytes) else str(state or "")
+                if state_text and state_text not in {"completed", "failed", "cancelled"}:
+                    continue
+                if run_dir.stat().st_mtime < cutoff:
+                    shutil.rmtree(run_dir, ignore_errors=True)
+            except OSError:
+                continue
+
+
+def _finalize_artifacts(scan_run_id: int, report_dir: Path) -> None:
+    artifacts = []
+    for name in sorted(RECORDED_ARTIFACT_NAMES):
+        path = report_dir / name
+        if not path.is_file():
             continue
+        digest = hashlib.sha256()
+        with path.open("rb") as artifact:
+            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                digest.update(chunk)
+        artifacts.append(
+            {"name": name, "size": path.stat().st_size, "sha256": digest.hexdigest()}
+        )
+    record_scan_artifacts(scan_run_id, artifacts)
 
 
 def async_scan_task(
     job_id: str,
     target: str,
-    custom_file_path: str = None,
+    custom_file_path: str | None = None,
     waf_enabled: bool = False,
-    scan_run_id: int = None,
-    project_id: int = None,
-    requested_by: int = None,
+    scan_run_id: int | None = None,
+    project_id: int | None = None,
+    requested_by: int | None = None,
     preset: str = "standard",
+    source_revision: str | None = None,
+    github_installation_id: int | None = None,
 ):
     external_project_dir = None
-    report_dir = SCANS_DIR / "runs" / job_id
+    project = get_project(project_id) if project_id else None
+    report_dir = run_directory(
+        SCANS_DIR,
+        job_id,
+        tenant_id=project["tenant_id"] if project else None,
+        project_id=project_id,
+        create=True,
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
     _cleanup_expired_artifacts(job_id)
     tool_statuses = ToolStatusTracker()
@@ -357,9 +572,17 @@ def async_scan_task(
         enable_dynamic_scanners = preset == "deep" or (
             scan_run_id is None and not skip_external_scanners
         )
+        if (
+            preset == "deep"
+            and os.environ.get("AEGIS_ENV", "development").lower() == "production"
+            and os.environ.get("AEGIS_ALLOW_DEEP_SCANS", "").lower()
+            not in {"1", "true", "yes", "on"}
+        ):
+            raise RuntimeError(
+                "Deep scans are disabled in production until an isolated worker is explicitly configured."
+            )
 
         if project_id:
-            project = get_project(project_id)
             if not project:
                 raise RuntimeError("Project no longer exists.")
             if project["repository_url"]:
@@ -368,7 +591,11 @@ def async_scan_task(
                     "color": "var(--text-muted)",
                 })
                 target_path, external_project_dir = _clone_github_project(
-                    project, requested_by or project["created_by"], job_id
+                    project,
+                    requested_by or project["created_by"],
+                    job_id,
+                    github_installation_id,
+                    source_revision,
                 )
                 target = "project"
         
@@ -380,7 +607,10 @@ def async_scan_task(
         publish_job_event(job_id, "log", {"text": f"[SYSTEM] Job claimed by worker. Job ID: {job_id}", "color": "var(--primary)"})
         
         if is_custom_scan:
+            if custom_file_path is None:
+                raise RuntimeError("Custom scans require a target file path.")
             target_path = custom_file_path
+            workspace_limits = validate_untrusted_tree(Path(target_path))
             dependency_manifests = discover_dependency_manifests(target_path)
             # Empty placeholders for custom scans
             with open(report_dir / "safety-report.json", "w") as f:
@@ -399,24 +629,45 @@ def async_scan_task(
             elif not external_project_dir:
                 target_path = str(PROJECT_ROOT)
 
+            if target_path is None:
+                raise RuntimeError("Unable to resolve the scan target path.")
+            workspace_limits = validate_untrusted_tree(Path(target_path))
             dependency_manifests = discover_dependency_manifests(target_path)
                 
             # Run Safety SCA
-            if skip_external_scanners:
+            safety_enabled = os.environ.get("AEGIS_ENABLE_SAFETY", "").lower() in {
+                "1", "true", "yes", "on"
+            }
+            if skip_external_scanners or not safety_enabled:
                 write_json(report_dir / "safety-report.json", [])
-                mark_tool("Safety", "skipped", detail="scanner configuration")
-                publish_job_event(job_id, "log", {"text": "[SCA] Safety skipped by scanner configuration.", "color": "var(--text-muted)"})
+                detail = "scanner configuration" if skip_external_scanners else "optional licensed scanner disabled"
+                mark_tool("Safety", "skipped", detail=detail)
+                publish_job_event(job_id, "log", {"text": f"[SCA] Safety skipped: {detail}.", "color": "var(--text-muted)"})
             else:
                 publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
                 requirements_manifest = first_requirements_manifest(dependency_manifests)
                 if requirements_manifest:
                     requirements_file = requirements_manifest.path
-                    safety_cmd = [python_bin, "-m", "safety", "check", "-r", str(requirements_file), "--save-json", str(report_dir / "safety-report.json")]
+                    safety_cmd = [
+                        python_bin,
+                        "-m",
+                        "safety",
+                        "scan",
+                        "--target",
+                        str(requirements_file.parent),
+                        "--save-as",
+                        "json",
+                        str(report_dir / "safety-report.json"),
+                    ]
+                    safety_environment = scanner_subprocess_environment()
+                    if os.environ.get("SAFETY_API_KEY"):
+                        safety_environment["SAFETY_API_KEY"] = os.environ["SAFETY_API_KEY"]
                     completed = subprocess.run(
                         safety_cmd,
                         cwd=requirements_file.parent,
                         check=False,
                         timeout=120,
+                        env=safety_environment,
                     )
                     safety_report = load_json_safe(report_dir / "safety-report.json")
                     if isinstance(safety_report, (dict, list)):
@@ -459,6 +710,21 @@ def async_scan_task(
                 with open(trivy_path, "w") as f:
                     json.dump({"Results": []}, f)
 
+        if target_path is None:
+            raise RuntimeError("Unable to resolve the scan target path.")
+
+        publish_job_event(
+            job_id,
+            "log",
+            {
+                "text": (
+                    "[SOURCE] Workspace accepted: "
+                    f"{workspace_limits['files']} files, {workspace_limits['bytes']} bytes."
+                ),
+                "color": "var(--text-muted)",
+            },
+        )
+
         # Check Python targets and Docker daemon sandbox
         target_ext = Path(target_path).suffix.lower()
         is_dir = Path(target_path).is_dir()
@@ -476,6 +742,7 @@ def async_scan_task(
         sandbox_uuid = uuid.uuid4().hex
         sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
         sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
+        sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
         sandbox_temp_dir = report_dir / "sandbox" / sandbox_uuid
         host_port = None
 
@@ -494,8 +761,18 @@ def async_scan_task(
                 
                 if build_sandbox_image(sandbox_temp_dir, sandbox_image):
                     publish_job_event(job_id, "log", {"text": f"[SANDBOX] Built image {sandbox_image}", "color": "var(--primary)"})
-                    
-                    if run_sandbox_container(sandbox_image, sandbox_container, host_port, container_port, waf_enabled):
+
+                    if not create_sandbox_network(sandbox_network):
+                        raise RuntimeError("failed to create isolated sandbox network")
+
+                    if run_sandbox_container(
+                        sandbox_image,
+                        sandbox_container,
+                        host_port,
+                        container_port,
+                        waf_enabled,
+                        sandbox_network,
+                    ):
                         publish_job_event(job_id, "log", {"text": f"[SANDBOX] Running container at 127.0.0.1:{host_port}", "color": "var(--primary)"})
                         
                         target_url = f"http://127.0.0.1:{host_port}"
@@ -562,11 +839,18 @@ def async_scan_task(
                     semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
                 else:
                     semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json"]
-                configure_semgrep_environment()
+                semgrep_environment = scanner_subprocess_environment()
+                configure_semgrep_environment(semgrep_environment)
                 semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]
                 add_semgrep_excludes(semgrep_cmd)
                 semgrep_cmd.extend(["-o", str(semgrep_report_path), target_path])
-                return_code = execute_subprocess_log(semgrep_cmd, PROJECT_ROOT, job_id, "SAST:Semgrep")
+                return_code = execute_subprocess_log(
+                    semgrep_cmd,
+                    PROJECT_ROOT,
+                    job_id,
+                    "SAST:Semgrep",
+                    env=semgrep_environment,
+                )
                 semgrep_report = load_json_safe(semgrep_report_path)
                 if return_code == 0 and isinstance(semgrep_report, dict):
                     mark_tool("Semgrep", "completed", return_code=return_code)
@@ -604,6 +888,7 @@ def async_scan_task(
                         check=False,
                         stdout=report_file,
                         timeout=120,
+                        env=scanner_subprocess_environment(),
                     )
                 secrets_report = load_json_safe(secrets_report_path)
                 if completed.returncode == 0 and isinstance(secrets_report, dict):
@@ -655,7 +940,11 @@ def async_scan_task(
                 mark_tool("DAST", "skipped", detail="scan preset")
             elif sandbox_active:
                 publish_job_event(job_id, "log", {"text": "[DAST] Running active probes against the isolated target...", "color": "var(--text-muted)"})
-                zap_findings = run_dast_scan(f"http://127.0.0.1:{host_port}", job_id)
+                zap_findings = run_dast_scan(
+                    f"http://127.0.0.1:{host_port}",
+                    job_id,
+                    internal_port=container_port,
+                )
                 mark_tool("DAST", "completed")
             elif scan_run_id is None:
                 zap_findings = []
@@ -738,7 +1027,9 @@ def async_scan_task(
         if sandbox_image and sandbox_container:
             try:
                 publish_job_event(job_id, "log", {"text": "[SANDBOX] Cleaning up ephemeral Docker sandbox...", "color": "var(--text-muted)"})
-                stop_and_cleanup_sandbox(sandbox_container, sandbox_image)
+                stop_and_cleanup_sandbox(
+                    sandbox_container, sandbox_image, sandbox_network
+                )
             except Exception as e:
                 publish_job_event(job_id, "log", {"text": f"[SANDBOX Cleanup Error] {e}", "color": "var(--danger)"})
         if sandbox_temp_dir and sandbox_temp_dir.exists():
@@ -783,24 +1074,39 @@ def async_scan_task(
             "sandbox_status": "active" if sandbox_active else "unavailable",
             "artifact_base": f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts" if project_id and scan_run_id else None,
         }
+        policy_digest = hashlib.sha256(canonical_json(policy_summary)).hexdigest()
+        target_identity = (
+            project["github_full_name"] or project["repository_url"]
+            if project
+            else "uploaded-file" if is_custom_scan else str(target)
+        )
         write_json(
             report_dir / "scan-manifest.json",
-            {
-                "schema_version": 1,
+            sign_manifest({
+                "schema_version": 2,
                 "job_id": job_id,
                 "project_id": project_id,
                 "scan_run_id": scan_run_id,
-                "target": str(target_path),
+                "tenant_id": project["tenant_id"] if project else None,
+                "source": {
+                    "identity": target_identity,
+                    "revision": _source_revision(target_path),
+                    "branch": project["default_branch"] if project else None,
+                },
                 "preset": preset,
                 "policy_status": final_status,
                 "policy_exit_code": policy_exit_code,
+                "policy_sha256": policy_digest,
                 "operational_failures": operational_failures,
                 "tools": [dict(item) for item in tool_statuses.records],
-            },
+                "artifacts": _artifact_inventory(report_dir),
+            }),
         )
 
         if scan_run_id is None:
             _mirror_latest_reports(report_dir)
+        else:
+            _finalize_artifacts(scan_run_id, report_dir)
 
         if final_status == "ERROR":
             raise ScanOperationalFailure(policy_summary.get("reason", "Scanner operational failure"), result_payload)
@@ -810,9 +1116,20 @@ def async_scan_task(
             update_scan_run(
                 scan_run_id, state="completed", progress=100, result=result_payload
             )
+        _complete_github_scan_check(
+            scan_run_id,
+            project,
+            "failure" if result_payload["is_blocked"] else "success",
+            (
+                f"Policy status: {final_status}. New findings: "
+                f"{result_payload.get('new_findings', 0)}. Blocking tools: "
+                f"{', '.join(blocking_tools) or 'none'}."
+            ),
+            _github_check_annotations(result_payload, target_path),
+        )
         if project_id:
             project = get_project(project_id)
-            send_project_notification(
+            queue_project_notification(
                 project_id,
                 "blocked" if result_payload["is_blocked"] else "completed",
                 {
@@ -830,24 +1147,26 @@ def async_scan_task(
     except ScanCancelled:
         if scan_run_id:
             update_scan_run(scan_run_id, state="cancelled", progress=100)
+        _complete_github_scan_check(scan_run_id, project, "cancelled", "The Aegis scan was cancelled.")
         publish_job_event(job_id, "state", {"state": "cancelled", "progress": 100})
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Scan cancelled by user.", "color": "var(--secondary)"})
         if project_id:
             project = get_project(project_id)
-            send_project_notification(project_id, "cancelled", {
+            queue_project_notification(project_id, "cancelled", {
                 "project_name": project["name"] if project else "Project",
                 "job_id": job_id,
             })
     except ScanOperationalFailure as exc:
         if scan_run_id:
             update_scan_run(scan_run_id, state="failed", progress=100, result=exc.result)
+        _complete_github_scan_check(scan_run_id, project, "failure", f"Scanner evidence was incomplete: {str(exc)[:500]}")
         publish_job_event(job_id, "result", {"result": exc.result})
         publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
         publish_job_event(job_id, "log", {"text": f"[ERROR] Security evidence is incomplete: {exc}", "color": "var(--danger)"})
         redis_client.hset(f"job:{job_id}", "error", str(exc))
         if project_id:
             project = get_project(project_id)
-            send_project_notification(project_id, "failed", {
+            queue_project_notification(project_id, "failed", {
                 "project_name": project["name"] if project else "Project",
                 "job_id": job_id,
                 "error": str(exc)[:500],
@@ -856,12 +1175,13 @@ def async_scan_task(
     except Exception as e:
         if scan_run_id:
             update_scan_run(scan_run_id, state="failed", progress=100)
+        _complete_github_scan_check(scan_run_id, project, "failure", f"Scan execution failed: {str(e)[:500]}")
         publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
         publish_job_event(job_id, "log", {"text": f"[FATAL] Scan job execution failed: {e}", "color": "var(--danger)"})
         redis_client.hset(f"job:{job_id}", "error", str(e))
         if project_id:
             project = get_project(project_id)
-            send_project_notification(project_id, "failed", {
+            queue_project_notification(project_id, "failed", {
                 "project_name": project["name"] if project else "Project",
                 "job_id": job_id,
                 "error": str(e)[:500],

@@ -31,19 +31,35 @@ and prevent one project from reading another project's results.
 | Webhook targets an internal service | HTTPS/public-address validation, redirect denial, bounded timeout, and bounded retries. |
 | Deep scan runs on the dashboard host | Deep evidence fails closed unless an isolated Docker and Trivy runtime is available. |
 | Malicious regex blocks the service | WAF rules are administrator-only, length-bounded, and syntax validated; deployment monitoring remains required. |
+| Tenant administrator accesses another company | Tenant IDs are carried by principals and enforced in project, user, token, scan, artifact, membership, and audit queries; cross-tenant tests exercise denial paths. |
+| Database token hashes are cracked offline | API tokens use a server-keyed HMAC, explicit scopes, expiry, revocation, and last-used tracking. |
+| Scan evidence is changed after completion | Ed25519-signed manifests bind source identity, policy digest, scanner state, and artifact SHA-256 hashes. |
+| GitHub retries or an attacker replays a webhook | HMAC-SHA-256 verification and persisted delivery IDs authenticate and deduplicate deliveries. |
+| Pull request changes while a scan is queued | The webhook persists the head SHA; the worker fetches and checks out that exact detached revision and binds the check run to it. |
+| Cross-tenant row is written outside application authorization | Database triggers validate project, member, and scan tenant relationships on inserts and updates and make tenant IDs immutable. |
+| A stale exception permanently hides a finding | Suppressions require approval metadata and a future expiry; expired or invalid entries remain reported and do not match findings. |
+| Repository escapes through symlinks or special files | Source validation rejects symlinks, non-regular files, excessive files, and oversized workspaces before scanning. |
+| Stolen old browser session changes identity or deletes evidence | Sensitive operations require recent password/MFA authentication; scoped machine tokens require admin scope. |
+| TOTP code is reused within its validity window | The last accepted TOTP counter is atomically recorded and older or equal counters are denied. |
+| Audit rows are silently rewritten | Per-tenant HMAC chaining detects tampering and database triggers reject updates and deletes. |
 
 ## Residual risks
 
-- The local artifact backend is suitable for a single controlled deployment,
-  not an untrusted public multi-tenant service. Public operation should use an
+- The tenant-scoped local artifact backend is suitable for one tenant per
+  controlled deployment, not an untrusted public multi-tenant service. Public operation should use an
   object store with per-tenant keys, encryption, quotas, and lifecycle rules.
-- GitHub OAuth currently requests repository scope. A fine-grained GitHub App
-  is preferred for organization-wide deployment and automated pull-request
-  checks.
-- MFA, password recovery, and enterprise identity federation are not yet
-  implemented.
+- GitHub OAuth still requests repository scope for interactive imports. The
+  GitHub App uses narrower installation permissions for automated pull-request
+  checks, but its private key is currently present in both dashboard and worker;
+  a production scanner fleet should obtain clone tokens from a broker instead.
+- TOTP MFA is implemented. Self-service password recovery, WebAuthn, and
+  enterprise identity federation still require a reviewed identity workflow.
 - The bundled DAST probes are intentionally narrow and Python-oriented; they do
   not replace a general web application scanner or penetration test.
+- A database superuser can disable triggers or replace both audit data and the
+  application-held audit key. Export chain heads and structured events to an
+  independently administered SIEM before relying on them for regulated
+  non-repudiation.
 
 Review this model whenever a scanner, integration, artifact backend,
 authentication method, or network boundary changes.

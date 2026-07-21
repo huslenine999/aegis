@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "description": "Balanced Aegis release smoke corpus for Python security controls.",
+  "cases": [
+    {"name":"safe-arithmetic","category":"clean","vulnerable":false,"source":"def add(left: int, right: int) -> int:\n    return left + right\n"},
+    {"name":"safe-literal-parser","category":"injection","vulnerable":false,"source":"import ast\n\ndef parse(value: str):\n    return ast.literal_eval(value)\n"},
+    {"name":"safe-json-parser","category":"deserialization","vulnerable":false,"source":"import json\n\ndef parse(value: str):\n    return json.loads(value)\n"},
+    {"name":"safe-command-allowlist","category":"command-execution","vulnerable":false,"source":"ALLOWED_COMMANDS = {\"status\": (\"git\", \"status\")}\n\ndef command(name: str):\n    return ALLOWED_COMMANDS[name]\n"},
+    {"name":"safe-yaml","category":"deserialization","vulnerable":false,"source":"import yaml\n\ndef parse(value: str):\n    return yaml.safe_load(value)\n"},
+    {"name":"safe-sha256","category":"cryptography","vulnerable":false,"source":"import hashlib\n\ndef digest(value: bytes) -> str:\n    return hashlib.sha256(value).hexdigest()\n"},
+    {"name":"safe-temporary-file","category":"filesystem","vulnerable":false,"source":"import tempfile\n\ndef temporary():\n    return tempfile.NamedTemporaryFile(delete=True)\n"},
+    {"name":"safe-tls-request","category":"transport","vulnerable":false,"source":"import requests\n\ndef fetch(url: str):\n    return requests.get(url, timeout=5)\n"},
+    {"name":"unsafe-eval","category":"injection","vulnerable":true,"source":"def calculate(user_input: str):\n    return eval(user_input)\n"},
+    {"name":"unsafe-pickle","category":"deserialization","vulnerable":true,"source":"import pickle\n\ndef parse(value: bytes):\n    return pickle.loads(value)\n"},
+    {"name":"unsafe-shell","category":"command-execution","vulnerable":true,"source":"import subprocess\n\ndef execute(command: str):\n    return subprocess.run(command, shell=True)\n"},
+    {"name":"unsafe-yaml","category":"deserialization","vulnerable":true,"source":"import yaml\n\ndef parse(value: str):\n    return yaml.load(value, Loader=yaml.Loader)\n"},
+    {"name":"unsafe-md5","category":"cryptography","vulnerable":true,"source":"import hashlib\n\ndef digest(value: bytes) -> str:\n    return hashlib.md5(value).hexdigest()\n"},
+    {"name":"unsafe-mktemp","category":"filesystem","vulnerable":true,"source":"import tempfile\n\ndef temporary():\n    return tempfile.mktemp()\n"},
+    {"name":"unsafe-tls-disabled","category":"transport","vulnerable":true,"source":"import requests\n\ndef fetch(url: str):\n    return requests.get(url, verify=False, timeout=5)\n"},
+    {"name":"unsafe-hardcoded-password","category":"secrets","vulnerable":true,"source":"def connect():\n    password = \"bank-production-password\"\n    return password\n"},
+    {"name":"safe-parameterized-sql","category":"sql-injection","vulnerable":false,"source":"def lookup(cursor, username: str):\n    return cursor.execute(\"SELECT id FROM users WHERE username = ?\", (username,))\n"},
+    {"name":"unsafe-interpolated-sql","category":"sql-injection","vulnerable":true,"source":"def lookup(cursor, username: str):\n    return cursor.execute(f\"SELECT id FROM users WHERE username = '{username}'\")\n"}
+  ]
+}

@@ -25,13 +25,24 @@ def local_environment_values() -> dict[str, str]:
         "AEGIS_REQUIRE_AUTH": "true",
         "AEGIS_ADMIN_TOKEN": secrets.token_urlsafe(40),
         "AEGIS_SESSION_SECRET": secrets.token_urlsafe(48),
+        "AEGIS_TOKEN_PEPPER": secrets.token_urlsafe(48),
+        "AEGIS_AUDIT_HMAC_KEY": secrets.token_urlsafe(48),
         "AEGIS_BOOTSTRAP_ADMIN_USERNAME": "admin",
         "AEGIS_BOOTSTRAP_ADMIN_PASSWORD": secrets.token_urlsafe(24),
         "AEGIS_METRICS_TOKEN": secrets.token_urlsafe(40),
         "AEGIS_SETUP_TOKEN": secrets.token_urlsafe(48),
         "AEGIS_ENCRYPTION_KEY": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
+        "AEGIS_EVIDENCE_SIGNING_KEY": base64.urlsafe_b64encode(
+            secrets.token_bytes(32)
+        ).decode().rstrip("="),
+        "AEGIS_GITHUB_WEBHOOK_SECRET": secrets.token_urlsafe(40),
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
         "AEGIS_SKIP_EXTERNAL_SCANNERS": "false",
+        "AEGIS_ALLOW_DEEP_SCANS": "false",
+        "AEGIS_ISOLATED_WORKER": "false",
+        "AEGIS_MULTI_TENANT": "false",
+        "AEGIS_REQUIRE_NOTIFIER": "true",
+        "AEGIS_SECURITY_PROFILE": "standard",
     }
 
 
@@ -141,14 +152,21 @@ def run_start(
         "AEGIS_SETUP_TOKEN",
         "POSTGRES_PASSWORD",
         "AEGIS_SESSION_SECRET",
+        "AEGIS_TOKEN_PEPPER",
+        "AEGIS_AUDIT_HMAC_KEY",
         "AEGIS_ENCRYPTION_KEY",
+        "AEGIS_EVIDENCE_SIGNING_KEY",
     }
-    if not required.issubset(values):
+    missing = required - values.keys()
+    if missing:
+        generated = local_environment_values()
+        for key in missing:
+            values[key] = generated[key]
+        write_environment_file(local_env_file, values)
         print(
-            f"{local_env_file} is incomplete. Use `aegis start --regenerate-secrets` to replace it.",
-            file=sys.stderr,
+            "Added newly required private configuration values: "
+            + ", ".join(sorted(missing))
         )
-        return EXIT_OPERATIONAL_ERROR
 
     running = subprocess_module.run(
         docker_compose_command(project_root, local_env_file, "ps", "--status", "running", "--quiet"),

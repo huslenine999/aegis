@@ -7,6 +7,7 @@ import socket
 import subprocess
 import contextlib
 import importlib.metadata
+import hashlib
 import re
 import time
 import webbrowser
@@ -22,15 +23,18 @@ from policy_engine import run_policy_engine, query_osv_vulnerabilities
 from config import config_bool, config_list, load_config
 from dependencies import discover_dependency_manifests, first_requirements_manifest
 from scanners import run_clamav_scan as shared_run_clamav_scan
+from scanners import run_dast_scan as shared_run_dast_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import configure_semgrep_environment
 from scanners import write_semgrep_rules
 from scan_status import ToolStatusTracker
 from cli_output import print_ascii_report, print_timing_summary
 import cli_stack
+from evidence import canonical_json, sign_manifest, verify_manifest
 from sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
-    run_sandbox_container, wait_for_container, run_trivy_scan, stop_and_cleanup_sandbox
+    create_sandbox_network, run_sandbox_container, wait_for_container,
+    run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
 )
 
 DEFAULT_TOOL_TIMEOUT = int(os.environ.get("AEGIS_CLI_TOOL_TIMEOUT", "120"))
@@ -135,22 +139,61 @@ def normalize_suppressions(config: dict, target_path: Path) -> list[dict]:
     for item in raw_items:
         if not isinstance(item, dict):
             continue
+        reason = str(item.get("reason", "")).strip()
+        approved_by = str(item.get("approved_by", "")).strip()
+        ticket = str(item.get("ticket", "")).strip()
+        expires_at = str(item.get("expires_at", "")).strip()
+        validation_errors = []
+        expires_at_utc = None
+        if len(reason) < 12:
+            validation_errors.append("reason must contain at least 12 characters")
+        if not approved_by:
+            validation_errors.append("approved_by is required")
+        if not ticket:
+            validation_errors.append("ticket is required")
+        if not expires_at:
+            validation_errors.append("expires_at is required")
+        else:
+            try:
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", expires_at):
+                    expires_at_utc = datetime.fromisoformat(
+                        f"{expires_at}T23:59:59.999999+00:00"
+                    )
+                else:
+                    expires_at_utc = datetime.fromisoformat(
+                        expires_at.replace("Z", "+00:00")
+                    )
+                    if expires_at_utc.tzinfo is None:
+                        expires_at_utc = expires_at_utc.replace(tzinfo=timezone.utc)
+                    expires_at_utc = expires_at_utc.astimezone(timezone.utc)
+            except ValueError:
+                validation_errors.append("expires_at must be an ISO-8601 date or timestamp")
         path_value = item.get("path")
         resolved_path = None
         if path_value:
             path_obj = Path(str(path_value))
             resolved_path = str(path_obj.resolve() if path_obj.is_absolute() else (base / path_obj).resolve())
+        status = "invalid" if validation_errors else "active"
+        if expires_at_utc and expires_at_utc <= datetime.now(timezone.utc):
+            status = "expired"
         normalized.append({
             "tool": str(item.get("tool", "")).lower(),
             "rule": str(item.get("rule", "")).lower(),
             "path": str(path_value) if path_value else "",
             "resolved_path": resolved_path,
-            "reason": str(item.get("reason", "No reason provided.")),
+            "reason": reason,
+            "approved_by": approved_by,
+            "ticket": ticket,
+            "expires_at": expires_at,
+            "status": status,
+            "validation_errors": validation_errors,
         })
     return normalized
 
 
 def suppression_matches(suppression: dict, *, tool: str, rule: str = "", path: str = "") -> bool:
+    if suppression.get("status") != "active":
+        return False
     tool_value = tool.lower()
     rule_value = str(rule or "").lower()
     path_value = str(path or "")
@@ -174,6 +217,22 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
         return
 
     applied = []
+    expired = []
+    invalid = []
+    for suppression in suppressions:
+        evidence = {
+            "tool": suppression["tool"],
+            "rule": suppression["rule"],
+            "path": suppression["path"],
+            "reason": suppression["reason"],
+            "approved_by": suppression["approved_by"],
+            "ticket": suppression["ticket"],
+            "expires_at": suppression["expires_at"],
+        }
+        if suppression["status"] == "expired":
+            expired.append(evidence)
+        elif suppression["status"] == "invalid":
+            invalid.append({**evidence, "validation_errors": suppression["validation_errors"]})
 
     def suppress_item(tool: str, item: dict, *, rule_keys: tuple[str, ...], path_keys: tuple[str, ...]) -> bool:
         rule = next((item.get(key) for key in rule_keys if item.get(key)), "")
@@ -185,6 +244,9 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                     "rule": rule,
                     "path": path,
                     "reason": suppression["reason"],
+                    "approved_by": suppression["approved_by"],
+                    "ticket": suppression["ticket"],
+                    "expires_at": suppression["expires_at"],
                 })
                 return True
         return False
@@ -244,7 +306,30 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                     del results[filename]
             write_json(secrets_path, secrets)
 
-    write_json(scan_dir / "suppressions-report.json", applied)
+    osv_path = scan_dir / "osv-report.json"
+    if osv_path.exists():
+        osv = json.loads(osv_path.read_text())
+        if isinstance(osv, list):
+            osv = [
+                item for item in osv
+                if not suppress_item(
+                    "OSV Dependency Audit",
+                    item,
+                    rule_keys=("id",),
+                    path_keys=(),
+                )
+            ]
+            write_json(osv_path, osv)
+
+    write_json(
+        scan_dir / "suppressions-report.json",
+        {
+            "schema_version": 2,
+            "applied": applied,
+            "expired": expired,
+            "invalid": invalid,
+        },
+    )
 
 
 def write_sarif_report(path: Path, results: list[dict], base_path: Path | None = None):
@@ -255,7 +340,7 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
         "LOW": "note",
     }
     sarif_results = []
-    rules = {}
+    rules: dict[str, dict] = {}
 
     for tool_result in results or []:
         tool_name = tool_result.get("tool", "Aegis")
@@ -388,10 +473,12 @@ def set_fail_on_env(severities: str):
     }
     normalized = ",".join(sorted(severity_set))
     if normalized:
+        os.environ["FAIL_ON"] = normalized
         os.environ["FAIL_ON_RUFF"] = normalized
         os.environ["FAIL_ON_SEMGREP"] = normalized
         os.environ["FAIL_ON_TRIVY"] = normalized
         import policy_engine
+        policy_engine.FAIL_ON_SEVERITIES = severity_set
         policy_engine.FAIL_ON_RUFF_SEVERITIES = severity_set
         policy_engine.FAIL_ON_SEMGREP_SEVERITIES = severity_set
         policy_engine.FAIL_ON_TRIVY_SEVERITIES = severity_set
@@ -414,6 +501,40 @@ def build_scan_summary(target_path: Path, scan_dir: Path, exit_code: int, policy
         "timings": timings or [],
         **policy_summary,
     }
+
+
+def _cli_evidence_artifacts(scan_dir: Path) -> list[dict]:
+    names = {
+        "report.html",
+        "report.md",
+        "aegis.sarif",
+        "sbom.json",
+        "suppressions-report.json",
+        "ruff-report.json",
+        "semgrep-report.json",
+        "safety-report.json",
+        "osv-report.json",
+        "trivy-report.json",
+        "secrets-report.json",
+        "yara-report.json",
+        "clamav-report.json",
+        "zap-report.json",
+        "sandbox-status.json",
+    }
+    artifacts = []
+    for name in sorted(names):
+        path = scan_dir / name
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        artifacts.append(
+            {
+                "name": name,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    return artifacts
 
 
 def find_free_host_port() -> int:
@@ -452,116 +573,45 @@ def log_scanner_event(message: str, level: str = "info"):
     reset = "\033[0m" if color else ""
     print(f"  {color}{message}{reset}")
 
-def run_dast_scan(target_url: str = None):
-    findings = []
-    test_cases = [
-        {
-            "vuln_type": "SQL Injection",
-            "route": "/user",
-            "method": "GET",
-            "params": {"name": "admin' OR '1'='1"},
-            "payload": "admin' OR '1'='1",
-            "description": "Active SQL injection vulnerability in user lookup endpoint."
-        },
-        {
-            "vuln_type": "Remote Code Execution",
-            "route": "/ping",
-            "method": "GET",
-            "params": {"host": "127.0.0.1; cat /etc/passwd"},
-            "payload": "127.0.0.1; cat /etc/passwd",
-            "description": "Command injection vulnerability in ping routing."
-        },
-        {
-            "vuln_type": "Unsafe Eval Injection",
-            "route": "/calculate",
-            "method": "GET",
-            "params": {"expr": "__import__('os').system('id')"},
-            "payload": "__import__('os').system('id')",
-            "description": "Arbitrary Python execution via unsafe eval expression injection."
-        },
-        {
-            "vuln_type": "Path Traversal (LFI)",
-            "route": "/download",
-            "method": "GET",
-            "params": {"file": "../requirements.txt"},
-            "payload": "../requirements.txt",
-            "description": "Local File Inclusion / Path Traversal vulnerability."
-        },
-        {
-            "vuln_type": "Cross-Site Scripting (XSS)",
-            "route": "/xss",
-            "method": "GET",
-            "params": {"msg": "<script>alert('XSS')</script>"},
-            "payload": "<script>alert('XSS')</script>",
-            "description": "Reflected Cross-Site Scripting vulnerability."
-        },
-        {
-            "vuln_type": "Server-Side Request Forgery (SSRF)",
-            "route": "/ssrf",
-            "method": "GET",
-            "params": {"url": "http://169.254.169.254/latest/meta-data/"},
-            "payload": "http://169.254.169.254/latest/meta-data/",
-            "description": "Server-Side Request Forgery vulnerability exposing cloud metadata."
-        }
-    ]
-
-    import requests
-    if target_url:
-        for tc in test_cases:
-            url = f"{target_url}{tc['route']}"
-            print(f"  [DAST] Scanning route: {tc['route']} with payload: {tc['payload']}")
-            try:
-                res = requests.get(url, params=tc["params"], timeout=3)
-                status_code = res.status_code
-            except Exception:
-                status_code = 500
-            
-            status = "MITIGATED" if status_code == 403 else "EXPOSED"
-            color = "\033[92m" if status_code == 403 else "\033[91m"
-            print(f"  [DAST] Result for {tc['vuln_type']}: {color}{status}\033[0m (HTTP {status_code})")
-            
-            findings.append({
-                "vuln_type": tc["vuln_type"],
-                "route": tc["route"],
-                "payload": tc["payload"],
-                "description": tc["description"],
-                "status": status,
-                "response_code": status_code
-            })
-    return findings
+def run_dast_scan(target_url: str | None = None, *, internal_port: int = 5001):
+    return shared_run_dast_scan(
+        target_url, internal_port=internal_port, log=log_scanner_event
+    )
 
 def execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
     tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
-    output_dir: str = None,
+    output_dir: str | None = None,
     json_output: bool = False,
     quiet: bool = False,
-    fail_on: str = None,
+    fail_on: str | None = None,
     fast: bool = False,
-    config_path: str = None,
+    config_path: str | None = None,
     sarif: str | bool | None = None,
     strict: bool | None = None,
     return_summary: bool = False,
 ):
-    timings = []
+    timings: list[dict] = []
     total_start = time.perf_counter()
     started_at = utc_timestamp()
     tool_statuses = ToolStatusTracker()
     mark_tool = tool_statuses.mark
 
-    target_path = Path(target_path_str).resolve()
-    if not target_path.exists():
-        print(f"❌ Error: Path '{target_path}' does not exist.")
+    submitted_target = Path(target_path_str).expanduser().absolute()
+    if not submitted_target.exists():
+        print(f"❌ Error: Path '{submitted_target}' does not exist.")
         if return_summary:
             return {
-                "target": str(target_path),
+                "target": str(submitted_target),
                 "exit_code": EXIT_OPERATIONAL_ERROR,
                 "status": "error",
                 "error": "target_not_found",
             }
         return EXIT_OPERATIONAL_ERROR
+    validate_untrusted_tree(submitted_target, ignored_names=IGNORED_DIRS)
+    target_path = submitted_target.resolve()
 
     if config_path and not Path(config_path).expanduser().is_file():
         raise ValueError(f"Config file does not exist: {Path(config_path).expanduser()}")
@@ -587,6 +637,11 @@ def execute_scan(
     if tool_timeout <= 0:
         raise ValueError("--timeout must be greater than zero.")
     strict = bool(strict)
+    safety_enabled = config_bool(
+        get_config_section(config),
+        "safety",
+        config_bool(config, "safety", os.environ.get("AEGIS_ENABLE_SAFETY", "").lower() in {"1", "true", "yes", "on"}),
+    )
     fail_on = validate_fail_on(fail_on)
     if fail_on:
         set_fail_on_env(str(fail_on))
@@ -640,8 +695,19 @@ def execute_scan(
             
             # Safety Scan
             safety_report_path = scan_dir / "safety-report.json"
-            if req_file:
-                safety_cmd = [sys.executable, "-m", "safety", "check", "-r", str(req_file), "--save-json", str(safety_report_path)]
+            if req_file and safety_enabled:
+                safety_target = target_path if target_path.is_dir() else target_path.parent
+                safety_cmd = [
+                    sys.executable,
+                    "-m",
+                    "safety",
+                    "scan",
+                    "--target",
+                    str(safety_target),
+                    "--save-as",
+                    "json",
+                    str(safety_report_path),
+                ]
                 safety_report_path.unlink(missing_ok=True)
                 safety_return_code = run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
                 safety_report = read_json(safety_report_path)
@@ -655,6 +721,9 @@ def execute_scan(
                         detail="scanner did not produce a valid JSON report",
                         return_code=safety_return_code,
                     )
+            elif not safety_enabled:
+                write_json(safety_report_path, [])
+                mark_tool("Safety", "skipped", detail="optional licensed scanner disabled")
             else:
                 write_json(safety_report_path, [])
                 mark_tool("Safety", "skipped", detail="no requirements.txt manifest")
@@ -844,6 +913,7 @@ def execute_scan(
             sandbox_uuid = uuid.uuid4().hex
             sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
             sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
+            sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
             sandbox_temp_dir = scan_dir / "sandbox" / sandbox_uuid
             
             try:
@@ -856,7 +926,17 @@ def execute_scan(
                 if not build_sandbox_image(sandbox_temp_dir, sandbox_image):
                     raise RuntimeError("failed to build sandbox image")
 
-                if not run_sandbox_container(sandbox_image, sandbox_container, host_port, container_port, waf_enabled):
+                if not create_sandbox_network(sandbox_network):
+                    raise RuntimeError("failed to create isolated sandbox network")
+
+                if not run_sandbox_container(
+                    sandbox_image,
+                    sandbox_container,
+                    host_port,
+                    container_port,
+                    waf_enabled,
+                    sandbox_network,
+                ):
                     raise RuntimeError("failed to start sandbox container")
 
                 if not wait_for_container(target_url, timeout=6.0):
@@ -876,7 +956,9 @@ def execute_scan(
                 # 7b. Aegis DAST Probe active scanning
                 zap_report_path = scan_dir / "zap-report.json"
                 print("  [DAST] Running active crawler against endpoints...")
-                zap_findings = run_dast_scan(target_url)
+                zap_findings = run_dast_scan(
+                    target_url, internal_port=container_port
+                )
                 write_json(zap_report_path, zap_findings)
                 mark_tool("DAST", "completed")
 
@@ -890,7 +972,9 @@ def execute_scan(
             finally:
                 print("  [Docker Sandbox] Cleaning up sandbox containers...")
                 try:
-                    stop_and_cleanup_sandbox(sandbox_container, sandbox_image)
+                    stop_and_cleanup_sandbox(
+                        sandbox_container, sandbox_image, sandbox_network
+                    )
                 except Exception:
                     pass
                 if sandbox_temp_dir.exists():
@@ -958,10 +1042,18 @@ def execute_scan(
     if strict and failed_tools:
         exit_code = EXIT_OPERATIONAL_ERROR
 
-    manifest = {
-        "schema_version": 1,
+    manifest = sign_manifest({
+        "schema_version": 2,
         "aegis_version": get_package_version(),
         "target": str(target_path),
+        "source": {
+            "identity": target_path.name,
+            "revision": (
+                f"sha256:{hashlib.sha256(target_path.read_bytes()).hexdigest()}"
+                if target_path.is_file()
+                else "local-worktree"
+            ),
+        },
         "started_at": started_at,
         "completed_at": utc_timestamp(),
         "strict": strict,
@@ -976,7 +1068,9 @@ def execute_scan(
         }.get(exit_code, "error"),
         "operational_failures": failed_tools,
         "tools": tool_statuses.records,
-    }
+        "policy_sha256": hashlib.sha256(canonical_json(policy_summary)).hexdigest(),
+        "artifacts": _cli_evidence_artifacts(scan_dir),
+    })
     write_json(scan_dir / "scan-manifest.json", manifest)
     policy_summary["tools"] = tool_statuses.records
 
@@ -1021,7 +1115,7 @@ def run_doctor(json_output: bool = False) -> int:
     return 0 if ok else 1
 
 
-def find_report_file(report_dir: str = None, *, markdown: bool = False) -> Path | None:
+def find_report_file(report_dir: str | None = None, *, markdown: bool = False) -> Path | None:
     filename = "report.md" if markdown else "report.html"
     if report_dir:
         candidate = Path(report_dir).expanduser().resolve() / filename
@@ -1050,7 +1144,7 @@ def open_report_file(path: Path) -> int:
         return 1
 
 
-def run_report(report_dir: str = None, *, markdown: bool = False, open_report: bool = False, path_only: bool = False) -> int:
+def run_report(report_dir: str | None = None, *, markdown: bool = False, open_report: bool = False, path_only: bool = False) -> int:
     report_path = find_report_file(report_dir, markdown=markdown)
     if not report_path:
         searched = Path(report_dir).expanduser().resolve() if report_dir else Path.cwd() / DEFAULT_SCAN_DIR
@@ -1226,6 +1320,61 @@ def run_restore(archive_path: str, *, confirmed: bool = False) -> int:
         confirmed=confirmed,
     )
 
+
+def run_verify_evidence(
+    manifest_path: str,
+    public_key: str | None = None,
+    *,
+    trust_embedded_key: bool = False,
+) -> int:
+    path = Path(manifest_path).expanduser().resolve()
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Evidence verification failed: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL_ERROR
+    if not public_key and not trust_embedded_key:
+        print(
+            "Evidence verification failed: --public-key is required. "
+            "Use --trust-embedded-key only for non-authoritative local checks.",
+            file=sys.stderr,
+        )
+        return EXIT_OPERATIONAL_ERROR
+    if not isinstance(manifest, dict) or not verify_manifest(
+        manifest, public_key, allow_embedded_key=trust_embedded_key
+    ):
+        print("Evidence verification failed: manifest signature is invalid.", file=sys.stderr)
+        return EXIT_OPERATIONAL_ERROR
+    for artifact in manifest.get("artifacts", []):
+        name = str(artifact.get("name", ""))
+        if Path(name).name != name:
+            print("Evidence verification failed: unsafe artifact name.", file=sys.stderr)
+            return EXIT_OPERATIONAL_ERROR
+        artifact_path = path.parent / name
+        try:
+            content = artifact_path.read_bytes()
+        except OSError:
+            print(f"Evidence verification failed: missing artifact {name}.", file=sys.stderr)
+            return EXIT_OPERATIONAL_ERROR
+        if len(content) != int(artifact.get("size", -1)) or not hmac_compare_digest(
+            hashlib.sha256(content).hexdigest(), str(artifact.get("sha256", ""))
+        ):
+            print(f"Evidence verification failed: artifact mismatch for {name}.", file=sys.stderr)
+            return EXIT_OPERATIONAL_ERROR
+    print(
+        "Evidence verified: Ed25519 signature and "
+        f"{len(manifest.get('artifacts', []))} artifact hashes are valid."
+    )
+    return EXIT_ALLOWED
+
+
+def hmac_compare_digest(first: str, second: str) -> bool:
+    # Local wrapper keeps evidence verification constant-time without exposing
+    # cryptographic comparison details to command dispatch.
+    import hmac
+
+    return hmac.compare_digest(first, second)
+
 def install_hook():
     git_dir = Path(".git")
     if not git_dir.exists() or not git_dir.is_dir():
@@ -1325,6 +1474,19 @@ def main():
     restore_parser = subparsers.add_parser("restore", help="Restore a backup archive")
     restore_parser.add_argument("archive", help="Backup zip path")
     restore_parser.add_argument("--yes", action="store_true", help="Confirm replacement of current state")
+    evidence_parser = subparsers.add_parser(
+        "verify-evidence", help="Verify a signed scan manifest and its artifacts"
+    )
+    evidence_parser.add_argument("manifest", help="Path to scan-manifest.json")
+    evidence_parser.add_argument(
+        "--public-key",
+        help="Pinned URL-safe base64 Ed25519 public key (recommended)",
+    )
+    evidence_parser.add_argument(
+        "--trust-embedded-key",
+        action="store_true",
+        help="Trust the manifest's embedded key (local integrity check only)",
+    )
     doctor_parser = subparsers.add_parser("doctor", help="Check local scanner dependencies")
     doctor_parser.add_argument("--json", action="store_true", help="Print doctor output as JSON")
     report_parser = subparsers.add_parser("report", help="Show or open the latest Aegis scan report")
@@ -1408,6 +1570,12 @@ def main():
         return run_backup(args.output)
     elif args.command == "restore":
         return run_restore(args.archive, confirmed=args.yes)
+    elif args.command == "verify-evidence":
+        return run_verify_evidence(
+            args.manifest,
+            args.public_key,
+            trust_embedded_key=args.trust_embedded_key,
+        )
     elif args.command == "doctor":
         return run_doctor(json_output=args.json)
     elif args.command == "report":

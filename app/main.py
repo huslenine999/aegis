@@ -10,7 +10,7 @@ import hashlib
 import uuid
 import secrets
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add the current directory and project root to sys.path to allow imports
@@ -29,6 +29,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.datastructures import UploadFile
 from werkzeug.utils import secure_filename
 
 from database import (
@@ -44,19 +45,33 @@ from database import (
     set_application_state,
     redis_client,
 )
-from config import environment_list, environment_positive_int, validate_runtime_configuration
+from config import (
+    environment_list,
+    environment_positive_int,
+    validate_runtime_configuration,
+    validate_server_bind,
+)
 from auth import (
     AUTH_REQUIRED,
+    Principal,
     SESSION_COOKIE,
+    TOKEN_SCOPES,
     authenticate,
+    begin_mfa_setup,
+    confirm_mfa_setup,
     complete_initial_setup,
     create_session,
     ensure_bootstrap_admin,
+    ensure_development_admin,
+    disable_mfa,
     hash_password,
+    hash_api_token,
     principal_from_request,
     require_role,
+    reauthenticate_session,
     revoke_session,
     revoke_user_sessions,
+    session_authentication_is_recent,
     websocket_principal,
 )
 from observability import ObservabilityMiddleware, configure_logging, recent_requests, render_metrics
@@ -76,6 +91,8 @@ from projects import (
     list_projects,
     list_project_members,
     list_scan_runs,
+    get_scan_artifact,
+    list_scan_artifacts,
     remove_project_member,
     require_project_role,
     set_project_member,
@@ -86,11 +103,16 @@ from github_integration import (
     complete_oauth,
     disconnect_github,
     github_connection,
+    github_app_enabled,
     github_enabled,
     list_repositories,
+    github_webhook_enabled,
+    create_check_run,
+    mark_webhook_delivery,
+    verify_and_record_webhook,
 )
-from notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, test_channel
-from audit import list_audit_events, record_audit
+from notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
+from audit import list_audit_events, record_audit, verify_audit_chain
 from policy_engine import get_ruff_severity
 from sandbox import (
     get_active_sandbox_container,
@@ -104,6 +126,7 @@ from reporting import (
     generate_fallback_tree as generate_project_fallback_tree,
     load_dependency_tree,
 )
+from artifact_storage import project_directory, run_directory
 
 validate_runtime_configuration()
 configure_logging()
@@ -114,6 +137,9 @@ ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
 MAX_REQUEST_BYTES = environment_positive_int(
     "AEGIS_MAX_REQUEST_BYTES", MAX_UPLOAD_BYTES + 64 * 1024
+)
+SCAN_JOB_TIMEOUT_SECONDS = environment_positive_int(
+    "AEGIS_SCAN_JOB_TIMEOUT_SECONDS", 3600
 )
 ALLOWED_SCAN_TARGETS = {"project", "secure", "vulnerable"}
 RUN_ARTIFACTS = {
@@ -175,12 +201,38 @@ def require_access(minimum_role: str):
     return dependency
 
 
-try:
-    from demo_lab import router as demo_lab_router
-except ImportError:
-    from .demo_lab import router as demo_lab_router
+def require_recent_access(minimum_role: str):
+    role_dependency = require_access(minimum_role)
 
-app.include_router(demo_lab_router, dependencies=[Depends(require_demo_lab_enabled)])
+    def dependency(request: Request):
+        principal = role_dependency(request)
+        if not AUTH_REQUIRED:
+            return principal
+        if principal.auth_method == "token":
+            if "*" not in principal.scopes and "admin" not in principal.scopes:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This sensitive operation requires an admin-scoped API token.",
+                )
+            return principal
+        session = request.cookies.get(SESSION_COOKIE, "")
+        if not session_authentication_is_recent(session):
+            raise HTTPException(
+                status_code=403,
+                detail="Recent authentication is required. Reauthenticate and try again.",
+            )
+        return principal
+
+    return dependency
+
+
+if DEMO_LAB_ENABLED:
+    try:
+        from demo_lab import router as demo_lab_router
+    except ImportError:
+        from .demo_lab import router as demo_lab_router
+
+    app.include_router(demo_lab_router, dependencies=[Depends(require_demo_lab_enabled)])
 
 # Global state for the WAF toggle (demo only)
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
@@ -239,6 +291,14 @@ def generate_fallback_tree():
 # application secrets; demo-only credentials live in app/demo_lab.py.
 app.state.secret_key = os.environ.get("SECRET_KEY")
 
+# Public acquisition is intentionally separate from the authenticated workbench.
+# This keeps the console's security boundary unchanged while giving prospective
+# users a clear place to understand the product and request a pilot.
+COMMERCIAL_CONTACT_URL = os.environ.get(
+    "AEGIS_COMMERCIAL_CONTACT_URL",
+    "https://github.com/huslenine999/aegis/issues/new",
+)
+
 # Initialize directories safely
 DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
 SCANS_DIR.mkdir(exist_ok=True, parents=True)
@@ -249,6 +309,7 @@ if not sample_file.exists():
 
 initialize_database()
 ensure_bootstrap_admin()
+ensure_development_admin()
 WAF_ENABLED = bool(get_application_state("waf_enabled", WAF_ENABLED))
 
 
@@ -278,6 +339,19 @@ def index(request: Request):
         return RedirectResponse("/login", status_code=303)
     return templates.TemplateResponse(request, "index.html")
 
+
+@app.get("/welcome", response_class=HTMLResponse)
+def commercial_landing(request: Request):
+    """Public product page for visitors who are not ready to sign in."""
+    return templates.TemplateResponse(
+        request,
+        "landing.html",
+        {
+            "pilot_url": COMMERCIAL_CONTACT_URL,
+            "github_url": "https://github.com/huslenine999/aegis",
+        },
+    )
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if setup_is_available():
@@ -285,6 +359,13 @@ def login_page(request: Request):
     if principal_from_request(request):
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(request, "login.html")
+
+
+@app.get("/account/security", response_class=HTMLResponse)
+def account_security_page(request: Request):
+    if AUTH_REQUIRED and not principal_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    return templates.TemplateResponse(request, "account_security.html")
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -330,20 +411,24 @@ async def complete_setup(request: Request):
         "configured_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        principal = complete_initial_setup(username, password, settings)
+        principal = await asyncio.to_thread(
+            complete_initial_setup, username, password, settings
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     project_id = None
     if repository:
         repository_name = repository.rstrip("/").removesuffix(".git").split("/")[-1] or workspace_name
         try:
-            project_id = create_project(
+            project_id = await asyncio.to_thread(
+                create_project,
                 name=repository_name[:128],
                 repository_url=repository,
                 github_full_name="",
                 default_branch="main",
                 scan_preset=scan_preset,
                 user_id=principal.user_id,
+                tenant_id=principal.tenant_id,
             )
             record_audit(principal.user_id, "project.created", "project", project_id, {"name": repository_name, "source": "setup"})
         except ValueError as exc:
@@ -360,7 +445,7 @@ async def complete_setup(request: Request):
     )
     response.set_cookie(
         SESSION_COOKIE,
-        create_session(principal),
+        await asyncio.to_thread(create_session, principal),
         httponly=True,
         secure=os.environ.get("AEGIS_ENV", "development").lower() == "production",
         samesite="strict",
@@ -378,15 +463,30 @@ async def login(request: Request):
         raise HTTPException(status_code=400, detail="JSON body required.") from exc
     username = str(body.get("username", ""))[:128]
     password = str(body.get("password", ""))[:1024]
-    principal = authenticate(username, password)
+    second_factor = str(body.get("second_factor", ""))[:128]
+    principal = await asyncio.to_thread(
+        authenticate, username, password, second_factor
+    )
     if not principal:
+        record_audit(
+            None,
+            "auth.login_failed",
+            "session",
+            details={"username_sha256": hashlib.sha256(username.encode()).hexdigest()},
+        )
         raise HTTPException(status_code=401, detail="Invalid username or password.")
+    record_audit(principal.user_id, "auth.login_succeeded", "session")
     response = JSONResponse(
-        {"username": principal.username, "role": principal.role, "csrf_token": principal.csrf_token}
+        {
+            "username": principal.username,
+            "role": principal.role,
+            "csrf_token": principal.csrf_token,
+            "tenant_id": principal.tenant_id,
+        }
     )
     response.set_cookie(
         SESSION_COOKIE,
-        create_session(principal),
+        await asyncio.to_thread(create_session, principal),
         httponly=True,
         secure=os.environ.get("AEGIS_ENV", "development").lower() == "production",
         samesite="strict",
@@ -398,11 +498,108 @@ async def login(request: Request):
 
 @app.get("/api/auth/me")
 def current_user(request: Request, principal=Depends(require_role("viewer"))):
+    with get_connection() as connection:
+        mfa = connection.execute(
+            "SELECT mfa_enabled FROM auth_users WHERE id = ? AND tenant_id = ?",
+            (principal.user_id, principal.tenant_id),
+        ).fetchone()
     return {
         "username": principal.username,
         "role": principal.role,
         "csrf_token": principal.csrf_token,
+        "tenant_id": principal.tenant_id,
+        "scopes": list(principal.scopes),
+        "mfa_enabled": bool(mfa and mfa[0]),
     }
+
+
+@app.post("/api/auth/reauth")
+async def reauthenticate(
+    request: Request, principal=Depends(require_role("viewer"))
+):
+    if principal.auth_method != "session":
+        raise HTTPException(status_code=403, detail="Reauthentication requires a browser session.")
+    body = await request.json()
+    valid = await asyncio.to_thread(
+        reauthenticate_session,
+        request.cookies.get(SESSION_COOKIE, ""),
+        principal,
+        str(body.get("password", ""))[:1024],
+        str(body.get("second_factor", ""))[:128],
+    )
+    if not valid:
+        record_audit(principal.user_id, "auth.reauthentication_failed", "session")
+        raise HTTPException(status_code=401, detail="Credential verification failed.")
+    record_audit(principal.user_id, "auth.reauthenticated", "session")
+    return {"status": "reauthenticated"}
+
+
+@app.post("/api/auth/mfa/setup")
+async def mfa_setup(
+    request: Request, principal=Depends(require_recent_access("viewer"))
+):
+    if principal.auth_method != "session":
+        raise HTTPException(status_code=403, detail="MFA setup requires a browser session.")
+    body = await request.json()
+    password = str(body.get("password", ""))[:1024]
+    if not await asyncio.to_thread(authenticate, principal.username, password):
+        raise HTTPException(status_code=403, detail="Current password is invalid.")
+    try:
+        setup = await asyncio.to_thread(
+            begin_mfa_setup, principal.user_id, principal.username
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    record_audit(principal.user_id, "auth.mfa_setup_started", "user", principal.user_id)
+    return setup
+
+
+@app.post("/api/auth/mfa/confirm")
+async def mfa_confirm(
+    request: Request, principal=Depends(require_recent_access("viewer"))
+):
+    if principal.auth_method != "session":
+        raise HTTPException(status_code=403, detail="MFA setup requires a browser session.")
+    body = await request.json()
+    try:
+        recovery_codes = await asyncio.to_thread(
+            confirm_mfa_setup, principal.user_id, str(body.get("code", ""))
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit(principal.user_id, "auth.mfa_enabled", "user", principal.user_id)
+    revoke_user_sessions(principal.user_id)
+    response = JSONResponse(
+        {
+            "status": "enabled",
+            "recovery_codes": recovery_codes,
+            "message": "Store these recovery codes now; they will not be shown again.",
+        }
+    )
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@app.delete("/api/auth/mfa")
+async def mfa_disable(
+    request: Request, principal=Depends(require_recent_access("viewer"))
+):
+    if principal.auth_method != "session":
+        raise HTTPException(status_code=403, detail="MFA changes require a browser session.")
+    body = await request.json()
+    disabled = await asyncio.to_thread(
+        disable_mfa,
+        principal.user_id,
+        str(body.get("password", "")),
+        str(body.get("code", "")),
+    )
+    if not disabled:
+        raise HTTPException(status_code=403, detail="Password or second factor is invalid.")
+    record_audit(principal.user_id, "auth.mfa_disabled", "user", principal.user_id)
+    revoke_user_sessions(principal.user_id)
+    response = JSONResponse({"status": "disabled"})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
 
 
 @app.get("/api/settings")
@@ -418,17 +615,25 @@ def workspace_settings(principal=Depends(require_role("viewer"))):
 
 
 def _project_access(project_id: int, principal, minimum: str):
-    project = get_project(project_id)
+    project = get_project(project_id, principal.tenant_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
     try:
-        require_project_role(project_id, principal.user_id, principal.role, minimum)
+        require_project_role(
+            project_id,
+            principal.user_id,
+            principal.role,
+            minimum,
+            principal.tenant_id,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return project
 
 
-def _enqueue_project_scan(project: dict, principal, preset: str) -> dict:
+def _enqueue_project_scan(
+    project: dict, principal, preset: str, github_context: dict | None = None
+) -> dict:
     if preset not in VALID_PRESETS:
         raise HTTPException(status_code=400, detail="Invalid scan preset.")
     job_id = uuid.uuid4().hex
@@ -438,6 +643,11 @@ def _enqueue_project_scan(project: dict, principal, preset: str) -> dict:
         requested_by=principal.user_id,
         target="project",
         preset=preset,
+        source_revision=(github_context or {}).get("head_sha"),
+        source_ref=(github_context or {}).get("head_ref"),
+        github_installation_id=(github_context or {}).get("installation_id"),
+        github_pull_request=(github_context or {}).get("pull_request"),
+        github_check_run_id=(github_context or {}).get("check_run_id"),
     )
     redis_client.hset(
         f"job:{job_id}",
@@ -460,13 +670,17 @@ def _enqueue_project_scan(project: dict, principal, preset: str) -> dict:
         project["id"],
         principal.user_id,
         preset,
+        (github_context or {}).get("head_sha"),
+        (github_context or {}).get("installation_id"),
     )
     if REDIS_AVAILABLE:
         from rq import Queue
         from redis import Redis
 
         queue = Queue(connection=Redis.from_url(REDIS_URL))
-        queue.enqueue(async_scan_task, *arguments)
+        queue.enqueue(
+            async_scan_task, *arguments, job_timeout=SCAN_JOB_TIMEOUT_SECONDS
+        )
     else:
         import threading
 
@@ -489,7 +703,11 @@ def admin_page(request: Request, principal=Depends(require_access("admin"))):
 
 @app.get("/api/projects")
 def projects_index(principal=Depends(require_role("viewer"))):
-    return {"projects": list_projects(principal.user_id, principal.role)}
+    return {
+        "projects": list_projects(
+            principal.user_id, principal.role, principal.tenant_id
+        )
+    }
 
 
 @app.post("/api/projects", status_code=201)
@@ -515,6 +733,7 @@ async def projects_create(
             default_branch=default_branch,
             scan_preset=preset,
             user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -524,7 +743,7 @@ async def projects_create(
 
 @app.patch("/api/projects/{project_id}")
 async def project_update(
-    project_id: int, request: Request, principal=Depends(require_access("operator"))
+    project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
     project = _project_access(project_id, principal, "admin")
     body = await request.json()
@@ -554,9 +773,9 @@ async def project_update(
 
 @app.delete("/api/projects/{project_id}")
 def project_delete(
-    project_id: int, principal=Depends(require_access("operator"))
+    project_id: int, principal=Depends(require_recent_access("operator"))
 ):
-    _project_access(project_id, principal, "admin")
+    project = _project_access(project_id, principal, "admin")
     try:
         job_ids = delete_project(project_id)
     except ValueError as exc:
@@ -566,6 +785,10 @@ def project_delete(
         run_dir = (runs_root / job_id).resolve()
         if run_dir.parent == runs_root:
             shutil.rmtree(run_dir, ignore_errors=True)
+    scoped_project_dir = project_directory(
+        SCANS_DIR, project["tenant_id"], project_id
+    )
+    shutil.rmtree(scoped_project_dir, ignore_errors=True)
     record_audit(principal.user_id, "project.deleted", "project", project_id)
     return {"status": "deleted"}
 
@@ -606,18 +829,27 @@ def project_scan_artifacts(
     project_id: int, run_id: int, principal=Depends(require_role("viewer"))
 ):
     run = _authorized_scan(project_id, run_id, principal)
-    report_dir = SCANS_DIR / "runs" / run["job_id"]
+    report_dir = run_directory(
+        SCANS_DIR,
+        run["job_id"],
+        tenant_id=run.get("tenant_id"),
+        project_id=project_id,
+    )
     artifacts = []
-    for name in RUN_ARTIFACTS:
+    for metadata in list_scan_artifacts(run_id):
+        name = metadata["name"]
         path = report_dir / name
-        if not path.is_file():
+        if name not in RUN_ARTIFACTS or not path.is_file():
             continue
+        integrity = (
+            path.stat().st_size == metadata["size"]
+            and _file_sha256(path) == metadata["sha256"]
+        )
         artifacts.append(
             {
-                "name": name,
+                **metadata,
                 "url": f"/api/projects/{project_id}/scans/{run_id}/artifacts/{name}",
-                "size": path.stat().st_size,
-                "sha256": _file_sha256(path),
+                "integrity": "verified" if integrity else "failed",
             }
         )
     if artifacts:
@@ -640,10 +872,24 @@ def project_scan_artifact(
     principal=Depends(require_role("viewer")),
 ):
     run = _authorized_scan(project_id, run_id, principal)
-    report_dir = SCANS_DIR / "runs" / run["job_id"]
+    report_dir = run_directory(
+        SCANS_DIR,
+        run["job_id"],
+        tenant_id=run.get("tenant_id"),
+        project_id=project_id,
+    )
     if artifact_name == "report-bundle.zip":
-        if not (report_dir / "report.html").is_file():
+        recorded = list_scan_artifacts(run_id)
+        if not recorded or not (report_dir / "report.html").is_file():
             raise HTTPException(status_code=404, detail="Report bundle is unavailable.")
+        for metadata in recorded:
+            path = report_dir / metadata["name"]
+            if (
+                not path.is_file()
+                or path.stat().st_size != metadata["size"]
+                or _file_sha256(path) != metadata["sha256"]
+            ):
+                raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
         return Response(
             content=build_report_bundle(report_dir),
             media_type="application/zip",
@@ -653,13 +899,19 @@ def project_scan_artifact(
         )
     media_type = RUN_ARTIFACTS.get(artifact_name)
     artifact_path = report_dir / artifact_name
-    if not media_type or not artifact_path.is_file():
+    metadata = get_scan_artifact(run_id, artifact_name)
+    if not media_type or not metadata or not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
+    if (
+        artifact_path.stat().st_size != metadata["size"]
+        or _file_sha256(artifact_path) != metadata["sha256"]
+    ):
+        raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
     return FileResponse(
         str(artifact_path),
         media_type=media_type,
         filename=artifact_name,
-        content_disposition_type="inline" if artifact_name == "report.html" else "attachment",
+        content_disposition_type="attachment",
     )
 
 
@@ -675,7 +927,7 @@ def project_members(
 async def project_member_set(
     project_id: int,
     request: Request,
-    principal=Depends(require_access("operator")),
+    principal=Depends(require_recent_access("operator")),
 ):
     _project_access(project_id, principal, "admin")
     body = await request.json()
@@ -695,7 +947,7 @@ async def project_member_set(
 def project_member_remove(
     project_id: int,
     user_id: int,
-    principal=Depends(require_access("operator")),
+    principal=Depends(require_recent_access("operator")),
 ):
     _project_access(project_id, principal, "admin")
     try:
@@ -717,7 +969,7 @@ def project_notifications(project_id: int, principal=Depends(require_role("viewe
 
 @app.post("/api/projects/{project_id}/notifications", status_code=201)
 async def project_notification_create(
-    project_id: int, request: Request, principal=Depends(require_access("operator"))
+    project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
     _project_access(project_id, principal, "admin")
     body = await request.json()
@@ -738,7 +990,7 @@ async def project_notification_create(
 
 @app.delete("/api/projects/{project_id}/notifications/{channel_id}")
 def project_notification_delete(
-    project_id: int, channel_id: int, principal=Depends(require_access("operator"))
+    project_id: int, channel_id: int, principal=Depends(require_recent_access("operator"))
 ):
     _project_access(project_id, principal, "admin")
     if not delete_channel(channel_id, project_id):
@@ -749,16 +1001,17 @@ def project_notification_delete(
 
 @app.post("/api/projects/{project_id}/notifications/{channel_id}/test")
 def project_notification_test(
-    project_id: int, channel_id: int, principal=Depends(require_access("operator"))
+    project_id: int, channel_id: int, principal=Depends(require_recent_access("operator"))
 ):
     _project_access(project_id, principal, "admin")
     try:
-        test_channel(channel_id, project_id)
+        if not queue_test_channel(channel_id, project_id):
+            raise RuntimeError("Notifier queue is unavailable.")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Notification delivery failed.") from exc
-    return {"status": "delivered"}
+    return {"status": "queued"}
 
 
 @app.post("/api/projects/{project_id}/scans", status_code=202)
@@ -807,6 +1060,132 @@ def _github_callback_url(request: Request) -> str:
     )
 
 
+@app.post("/api/github/webhook", status_code=202)
+async def github_webhook(request: Request):
+    """Authenticate, deduplicate, and record GitHub App webhook deliveries."""
+    if not github_webhook_enabled():
+        raise HTTPException(status_code=404, detail="GitHub webhooks are not enabled.")
+    body = await request.body()
+    try:
+        delivery = verify_and_record_webhook(
+            body,
+            signature_header=request.headers.get("X-Hub-Signature-256", ""),
+            delivery_id=request.headers.get("X-GitHub-Delivery", ""),
+            event_type=request.headers.get("X-GitHub-Event", ""),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        status_code = 409 if "already been processed" in str(exc) else 401
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    tenant_id = 1
+    project = None
+    project_owner = None
+    if delivery["repository"]:
+        with get_connection() as connection:
+            row = connection.execute(
+                """SELECT p.id, p.tenant_id, p.created_by, u.username, u.role
+                   FROM projects p JOIN auth_users u ON u.id = p.created_by
+                   WHERE p.github_full_name = ? AND u.active = 1 ORDER BY p.id LIMIT 1""",
+                (delivery["repository"],),
+            ).fetchone()
+            if row:
+                tenant_id = int(row[1])
+                project = get_project(int(row[0]), tenant_id)
+                project_owner = Principal(
+                    int(row[2]), row[3], row[4], "", tenant_id
+                )
+    record_audit(
+        None,
+        "github.webhook.accepted",
+        "github_delivery",
+        delivery["delivery_id"],
+        {
+            "event_type": delivery["event_type"],
+            "repository": delivery["repository"],
+            "payload_sha256": delivery["payload_sha256"],
+        },
+        tenant_id=tenant_id,
+    )
+    automation = None
+    try:
+        should_scan = (
+            delivery["event_type"] == "pull_request"
+            and delivery["action"] in {"opened", "reopened", "synchronize"}
+        )
+        if not should_scan or not project or not project_owner:
+            mark_webhook_delivery(delivery["delivery_id"], "ignored")
+        else:
+            if not github_app_enabled():
+                raise RuntimeError(
+                    "Pull-request automation requires a configured GitHub App private key."
+                )
+            installation_id = int(delivery["installation_id"])
+            pull_request = int(delivery["pull_request"])
+            head_sha = delivery["head_sha"]
+            if (
+                installation_id < 1
+                or pull_request < 1
+                or not re.fullmatch(r"[0-9a-f]{40,64}", head_sha)
+            ):
+                raise ValueError("GitHub pull-request context is invalid.")
+            details_base = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
+            details_url = (
+                f"{details_base}/projects" if details_base.startswith("https://") else ""
+            )
+            check_run_id = await asyncio.to_thread(
+                create_check_run,
+                installation_id,
+                delivery["repository"],
+                head_sha,
+                details_url,
+            )
+            automation = _enqueue_project_scan(
+                project,
+                project_owner,
+                project["scan_preset"],
+                {
+                    "installation_id": installation_id,
+                    "pull_request": pull_request,
+                    "head_sha": head_sha,
+                    "head_ref": delivery["head_ref"],
+                    "check_run_id": check_run_id,
+                },
+            )
+            mark_webhook_delivery(
+                delivery["delivery_id"], "processed", automation["scan_run_id"]
+            )
+            record_audit(
+                project_owner.user_id,
+                "github.pull_request_scan_queued",
+                "project",
+                project["id"],
+                {
+                    "pull_request": pull_request,
+                    "revision": head_sha,
+                    "scan_run_id": automation["scan_run_id"],
+                },
+                tenant_id=tenant_id,
+            )
+    except Exception as exc:
+        mark_webhook_delivery(delivery["delivery_id"], "failed")
+        record_audit(
+            None,
+            "github.webhook_processing_failed",
+            "github_delivery",
+            delivery["delivery_id"],
+            {"error_type": type(exc).__name__},
+            tenant_id=tenant_id,
+        )
+        raise HTTPException(status_code=502, detail="GitHub webhook processing failed.") from exc
+    return {
+        "status": "accepted",
+        "delivery_id": delivery["delivery_id"],
+        "event_type": delivery["event_type"],
+        "automation": automation,
+    }
+
+
 @app.get("/api/github/status")
 def github_status(principal=Depends(require_role("viewer"))):
     return {
@@ -816,7 +1195,7 @@ def github_status(principal=Depends(require_role("viewer"))):
 
 
 @app.get("/api/github/connect")
-def github_connect(request: Request, principal=Depends(require_role("viewer"))):
+def github_connect(request: Request, principal=Depends(require_recent_access("viewer"))):
     try:
         url = begin_oauth(principal.user_id, _github_callback_url(request))
     except RuntimeError as exc:
@@ -848,7 +1227,7 @@ def github_repositories(
 
 
 @app.post("/api/github/disconnect")
-def github_disconnect(principal=Depends(require_role("viewer"))):
+def github_disconnect(principal=Depends(require_recent_access("viewer"))):
     disconnect_github(principal.user_id)
     return {"status": "disconnected"}
 
@@ -859,23 +1238,26 @@ async def github_import(
 ):
     body = await request.json()
     full_name = str(body.get("full_name", ""))
-    repositories = list_repositories(principal.user_id)
+    repositories = await asyncio.to_thread(list_repositories, principal.user_id)
     repository = next((repo for repo in repositories if repo["full_name"] == full_name), None)
     if not repository:
         raise HTTPException(status_code=404, detail="GitHub repository not found.")
-    project_id = create_project(
+    project_id = await asyncio.to_thread(
+        create_project,
         name=repository["name"],
         repository_url=repository["clone_url"],
         github_full_name=repository["full_name"],
         default_branch=repository["default_branch"],
         scan_preset=str(body.get("scan_preset", "standard")).lower(),
         user_id=principal.user_id,
+        tenant_id=principal.tenant_id,
     )
     return {"id": project_id, "name": repository["name"]}
 
 
 @app.post("/api/auth/logout")
 def logout(request: Request, principal=Depends(require_role("viewer"))):
+    record_audit(principal.user_id, "auth.logout", "session")
     revoke_session(request.cookies.get(SESSION_COOKIE, ""))
     response = JSONResponse({"status": "signed_out"})
     response.delete_cookie(SESSION_COOKIE, path="/")
@@ -886,7 +1268,9 @@ def logout(request: Request, principal=Depends(require_role("viewer"))):
 def list_users(principal=Depends(require_access("admin"))):
     with get_connection() as connection:
         rows = connection.execute(
-            "SELECT id, username, role, active, created_at FROM auth_users ORDER BY username"
+            """SELECT id, username, role, active, created_at FROM auth_users
+               WHERE tenant_id = ? ORDER BY username""",
+            (principal.tenant_id,),
         ).fetchall()
     return {
         "users": [
@@ -903,7 +1287,7 @@ def list_users(principal=Depends(require_access("admin"))):
 
 
 @app.post("/api/users", status_code=201)
-async def create_user(request: Request, principal=Depends(require_access("admin"))):
+async def create_user(request: Request, principal=Depends(require_recent_access("admin"))):
     body = await request.json()
     username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
@@ -918,14 +1302,15 @@ async def create_user(request: Request, principal=Depends(require_access("admin"
         with get_connection() as connection:
             connection.execute(
                 """INSERT INTO auth_users
-                   (username, password_hash, role, active, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
+                   (username, password_hash, role, active, created_at, tenant_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 (
                     username,
                     hash_password(password),
                     role,
                     1,
                     datetime.now(timezone.utc).isoformat(),
+                    principal.tenant_id,
                 ),
             )
     except Exception as exc:
@@ -936,7 +1321,7 @@ async def create_user(request: Request, principal=Depends(require_access("admin"
 
 @app.patch("/api/users/{user_id}")
 async def update_user(
-    user_id: int, request: Request, principal=Depends(require_access("admin"))
+    user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
     body = await request.json()
     role = body.get("role")
@@ -952,7 +1337,9 @@ async def update_user(
         raise HTTPException(status_code=409, detail="Administrators cannot disable or demote their current account.")
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT username, role, active FROM auth_users WHERE id = ?", (user_id,)
+            """SELECT username, role, active FROM auth_users
+               WHERE id = ? AND tenant_id = ?""",
+            (user_id, principal.tenant_id),
         ).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found.")
@@ -961,20 +1348,28 @@ async def update_user(
         )
         if removing_admin:
             admin_count = connection.execute(
-                "SELECT COUNT(*) FROM auth_users WHERE role = 'admin' AND active = 1"
+                """SELECT COUNT(*) FROM auth_users
+                   WHERE role = 'admin' AND active = 1 AND tenant_id = ?""",
+                (principal.tenant_id,),
             ).fetchone()[0]
             if admin_count <= 1:
                 raise HTTPException(status_code=409, detail="At least one active administrator is required.")
         if role is not None:
-            connection.execute("UPDATE auth_users SET role = ? WHERE id = ?", (role, user_id))
+            connection.execute(
+                "UPDATE auth_users SET role = ? WHERE id = ? AND tenant_id = ?",
+                (role, user_id, principal.tenant_id),
+            )
         if active is not None:
             connection.execute(
-                "UPDATE auth_users SET active = ? WHERE id = ?", (1 if active else 0, user_id)
+                """UPDATE auth_users SET active = ?
+                   WHERE id = ? AND tenant_id = ?""",
+                (1 if active else 0, user_id, principal.tenant_id),
             )
         if password is not None:
             connection.execute(
-                "UPDATE auth_users SET password_hash = ? WHERE id = ?",
-                (hash_password(str(password)), user_id),
+                """UPDATE auth_users SET password_hash = ?, failed_login_count = 0,
+                   locked_until = NULL WHERE id = ? AND tenant_id = ?""",
+                (hash_password(str(password)), user_id, principal.tenant_id),
             )
         if active is False:
             connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
@@ -987,11 +1382,12 @@ async def update_user(
 
 @app.post("/api/users/{user_id}/tokens", status_code=201)
 async def create_api_token(
-    user_id: int, request: Request, principal=Depends(require_access("admin"))
+    user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
     body = await request.json()
     name = str(body.get("name", "automation")).strip()[:128]
     expires_at = body.get("expires_at")
+    requested_scopes = body.get("scopes")
     if expires_at:
         try:
             parsed_expiry = datetime.fromisoformat(str(expires_at))
@@ -1003,33 +1399,70 @@ async def create_api_token(
     token = secrets.token_urlsafe(40)
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT id FROM auth_users WHERE id = ? AND active = 1", (user_id,)
+            """SELECT id, role FROM auth_users
+               WHERE id = ? AND active = 1 AND tenant_id = ?""",
+            (user_id, principal.tenant_id),
         ).fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="User not found.")
+        default_scopes = {
+            "viewer": ["read"],
+            "operator": ["read", "write"],
+            "admin": ["read", "write", "admin"],
+        }[user[1]]
+        scopes = requested_scopes if requested_scopes is not None else default_scopes
+        if (
+            not isinstance(scopes, list)
+            or not scopes
+            or any(str(scope) not in TOKEN_SCOPES for scope in scopes)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="scopes must be a non-empty list containing read, write, or admin.",
+            )
+        scopes = sorted({str(scope) for scope in scopes})
+        allowed_by_role = set(default_scopes)
+        if not set(scopes).issubset(allowed_by_role):
+            raise HTTPException(status_code=400, detail="Token scope exceeds the user's role.")
         connection.execute(
             """INSERT INTO auth_tokens
-               (user_id, token_hash, name, expires_at, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
+               (user_id, token_hash, name, expires_at, created_at, scopes)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 user_id,
-                hashlib.sha256(token.encode()).hexdigest(),
+                hash_api_token(token),
                 name or "automation",
                 expires_at,
                 datetime.now(timezone.utc).isoformat(),
+                ",".join(scopes),
             ),
         )
-    record_audit(principal.user_id, "token.created", "user", user_id, {"name": name})
-    return {"token": token, "token_type": "bearer", "name": name}
+    record_audit(
+        principal.user_id,
+        "token.created",
+        "user",
+        user_id,
+        {"name": name, "scopes": scopes, "expires_at": expires_at},
+    )
+    return {
+        "token": token,
+        "token_type": "bearer",
+        "name": name,
+        "scopes": scopes,
+        "expires_at": expires_at,
+    }
 
 
 @app.get("/api/tokens")
 def list_api_tokens(principal=Depends(require_access("admin"))):
     with get_connection() as connection:
         rows = connection.execute(
-            """SELECT t.id, t.user_id, u.username, t.name, t.expires_at, t.created_at
+            """SELECT t.id, t.user_id, u.username, t.name, t.expires_at,
+                      t.created_at, t.scopes, t.last_used_at
                FROM auth_tokens t JOIN auth_users u ON u.id = t.user_id
+               WHERE u.tenant_id = ?
                ORDER BY t.id DESC"""
+            , (principal.tenant_id,)
         ).fetchall()
     return {
         "tokens": [
@@ -1040,6 +1473,8 @@ def list_api_tokens(principal=Depends(require_access("admin"))):
                 "name": row[3],
                 "expires_at": row[4],
                 "created_at": row[5],
+                "scopes": row[6].split(",") if row[6] else ["read"],
+                "last_used_at": row[7],
             }
             for row in rows
         ]
@@ -1047,9 +1482,13 @@ def list_api_tokens(principal=Depends(require_access("admin"))):
 
 
 @app.delete("/api/tokens/{token_id}")
-def revoke_api_token(token_id: int, principal=Depends(require_access("admin"))):
+def revoke_api_token(token_id: int, principal=Depends(require_recent_access("admin"))):
     with get_connection() as connection:
-        cursor = connection.execute("DELETE FROM auth_tokens WHERE id = ?", (token_id,))
+        cursor = connection.execute(
+            """DELETE FROM auth_tokens WHERE id = ? AND user_id IN
+               (SELECT id FROM auth_users WHERE tenant_id = ?)""",
+            (token_id, principal.tenant_id),
+        )
     if not getattr(cursor, "rowcount", 0):
         raise HTTPException(status_code=404, detail="Token not found.")
     record_audit(principal.user_id, "token.revoked", "token", token_id)
@@ -1096,7 +1535,12 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
 
 @app.get("/api/admin/audit")
 def admin_audit(limit: int = 100, principal=Depends(require_access("admin"))):
-    return {"events": list_audit_events(limit)}
+    return {"events": list_audit_events(limit, principal.tenant_id)}
+
+
+@app.get("/api/admin/audit/verify")
+def admin_audit_verify(principal=Depends(require_access("admin"))):
+    return verify_audit_chain(principal.tenant_id)
 
 
 @app.get("/api/admin/requests")
@@ -1144,7 +1588,7 @@ def download_report_bundle():
         },
     )
 
-@app.post("/toggle-waf", dependencies=[Depends(require_access("admin"))])
+@app.post("/toggle-waf", dependencies=[Depends(require_recent_access("admin"))])
 def toggle_waf():
     global WAF_ENABLED
     WAF_ENABLED = not WAF_ENABLED
@@ -1157,7 +1601,7 @@ def get_waf_rules():
     rules = load_waf_rules_from_db()
     return {"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED}
 
-@app.post("/save-waf-rules", dependencies=[Depends(require_access("admin"))])
+@app.post("/save-waf-rules", dependencies=[Depends(require_recent_access("admin"))])
 async def save_waf_rules(request: Request):
     try:
         data = await request.json()
@@ -1305,7 +1749,7 @@ def get_dependency_graph():
         except Exception:
             pass
 
-    osv_vulnerabilities = {}
+    osv_vulnerabilities: dict[str, list[dict]] = {}
     osv_path = SCANS_DIR / "osv-report.json"
     if osv_path.exists():
         try:
@@ -1328,7 +1772,7 @@ def get_dependency_graph():
     raw_tree = load_dependency_tree(PROJECT_ROOT)
 
     nodes = {}
-    links = []
+    links: list[dict] = []
     
     nodes["aegis"] = {
         "id": "aegis",
@@ -1396,8 +1840,9 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
 
     if "multipart/form-data" in content_type:
         form = await request.form()
-        uploaded_file = form.get("file")
-        if uploaded_file:
+        form_file = form.get("file")
+        if isinstance(form_file, UploadFile):
+            uploaded_file = form_file
             uploaded_filename = uploaded_file.filename
     else:
         try:
@@ -1406,7 +1851,9 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
         except Exception:
             try:
                 form = await request.form()
-                target_name = form.get("target", "vulnerable")
+                form_target = form.get("target", "vulnerable")
+                if isinstance(form_target, str):
+                    target_name = form_target
             except Exception:
                 pass
 
@@ -1452,7 +1899,14 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
 
         r_conn = Redis.from_url(REDIS_URL)
         q = Queue(connection=r_conn)
-        q.enqueue(async_scan_task, job_id, target_name, custom_file_path, WAF_ENABLED)
+        q.enqueue(
+            async_scan_task,
+            job_id,
+            target_name,
+            custom_file_path,
+            WAF_ENABLED,
+            job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
+        )
     else:
         import threading
         # Run scan task in a background thread in-process
@@ -1722,6 +2176,37 @@ def health():
     }
 
 
+@app.get("/.well-known/security.txt", response_class=PlainTextResponse)
+def security_txt():
+    contact = os.environ.get(
+        "AEGIS_SECURITY_CONTACT",
+        "https://github.com/huslenine999/aegis/security/advisories/new",
+    )
+    policy = os.environ.get(
+        "AEGIS_SECURITY_POLICY_URL",
+        "https://github.com/huslenine999/aegis/security/policy",
+    )
+    if not contact.startswith(("https://", "mailto:")) or any(
+        value in contact for value in ("\r", "\n")
+    ):
+        contact = "https://github.com/huslenine999/aegis/security/advisories/new"
+    if not policy.startswith("https://") or any(value in policy for value in ("\r", "\n")):
+        policy = "https://github.com/huslenine999/aegis/security/policy"
+    expires = (datetime.now(timezone.utc) + timedelta(days=365)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    lines = [
+        f"Contact: {contact}",
+        f"Expires: {expires}",
+        "Preferred-Languages: en",
+        f"Policy: {policy}",
+    ]
+    public_url = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
+    if public_url.startswith("https://"):
+        lines.append(f"Canonical: {public_url}/.well-known/security.txt")
+    return "\n".join(lines) + "\n"
+
+
 @app.get("/ready")
 def readiness():
     try:
@@ -1748,6 +2233,7 @@ def readiness():
         redis_state = "unavailable"
 
     worker_state = "not-required"
+    notifier_state = "not-required"
     worker_required = os.environ.get("AEGIS_REQUIRE_WORKER", "false").lower() in {
         "1",
         "true",
@@ -1760,18 +2246,42 @@ def readiness():
         try:
             from rq import Worker
 
-            worker_count = Worker.count(connection=redis_client)
+            workers = Worker.all(connection=redis_client)
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Worker readiness could not be verified.") from exc
-        if worker_count < 1:
-            raise HTTPException(status_code=503, detail="No RQ workers are available.")
-        worker_state = f"{worker_count} available"
+        scan_workers = [worker for worker in workers if "default" in worker.queue_names()]
+        if not scan_workers:
+            raise HTTPException(status_code=503, detail="No scanner RQ workers are available.")
+        worker_state = f"{len(scan_workers)} available"
+
+    notifier_required = os.environ.get("AEGIS_REQUIRE_NOTIFIER", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if notifier_required:
+        if not REDIS_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Notifier readiness requires Redis.")
+        try:
+            from rq import Worker
+
+            workers = Worker.all(connection=redis_client)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Notifier readiness could not be verified.") from exc
+        notifier_workers = [
+            worker for worker in workers if "notifications" in worker.queue_names()
+        ]
+        if not notifier_workers:
+            raise HTTPException(status_code=503, detail="No notifier RQ workers are available.")
+        notifier_state = f"{len(notifier_workers)} available"
 
     return {
         "status": "ready",
         "service": "aegis-security-console",
         "redis": redis_state,
         "worker": worker_state,
+        "notifier": notifier_state,
     }
 
 
@@ -1785,7 +2295,16 @@ def metrics(request: Request):
         and hmac.compare_digest(supplied[7:].strip(), metrics_token)
     )
     principal = principal_from_request(request)
-    if not token_valid and (not principal or principal.role != "admin"):
+    principal_valid = bool(
+        principal
+        and principal.role == "admin"
+        and (
+            principal.auth_method != "token"
+            or "*" in principal.scopes
+            or "admin" in principal.scopes
+        )
+    )
+    if not token_valid and not principal_valid:
         raise HTTPException(status_code=401, detail="Metrics authentication required.")
     return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
 
@@ -1867,11 +2386,11 @@ def export_dossier():
         secrets_blocking = 0
     else:
         secrets_results = secrets_report.get("results", {}) or {} if secrets_report else {}
-        secrets_findings = []
+        secrets_findings_list = []
         for filename, file_secrets in secrets_results.items():
             for secret in file_secrets:
-                secrets_findings.append(secret)
-        secrets_total = len(secrets_findings)
+                secrets_findings_list.append(secret)
+        secrets_total = len(secrets_findings_list)
         secrets_blocking = secrets_total
         secrets_status = "FAIL" if secrets_blocking > 0 else "PASS"  # pragma: allowlist secret
 
@@ -2190,4 +2709,8 @@ FINDINGS:
 if __name__ == "__main__":
     import uvicorn
     initialize_database()
-    uvicorn.run("main:app", host="0.0.0.0", port=5001, reload=False)
+    host = validate_server_bind(
+        os.environ.get("AEGIS_HOST", "127.0.0.1"),
+        auth_required=AUTH_REQUIRED,
+    )
+    uvicorn.run("main:app", host=host, port=5001, reload=False)

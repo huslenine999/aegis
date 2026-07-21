@@ -70,6 +70,53 @@ def test_run_dast_scan_does_not_treat_errors_as_exposure(monkeypatch):
     findings = run_dast_scan("http://isolated-target", job_id="test_job")
     assert {finding["status"] for finding in findings} == {"NOT_APPLICABLE"}
 
+
+def test_run_dast_scan_requires_observed_exploit_effect(monkeypatch):
+    import requests
+
+    class SafeResponse:
+        status_code = 200
+        text = "<div>&lt;script&gt;window.AEGIS_XSS_PROBE=1&lt;/script&gt;</div>"
+
+        def json(self):
+            return {"results": [], "result": "Calculations restricted in secure mode"}
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: SafeResponse())
+    findings = run_dast_scan("http://isolated-target", job_id="test_job")
+    assert {finding["status"] for finding in findings} == {"MITIGATED"}
+
+
+def test_run_dast_scan_detects_probe_markers(monkeypatch):
+    import requests
+
+    class ExposedResponse:
+        status_code = 200
+
+        def __init__(self, url):
+            self.url = url
+            self.text = ""
+            if url.endswith("/ping"):
+                self.text = "root:x:0:0:root:/root:/bin/sh"
+            elif url.endswith("/calculate"):
+                self.text = "AEGIS_RCE_PROBE"
+            elif url.endswith("/download"):
+                self.text = "Flask==3.1.3"
+            elif url.endswith("/xss"):
+                self.text = "<script>window.AEGIS_XSS_PROBE=1</script>"
+
+        def json(self):
+            if self.url.endswith("/user"):
+                return {"results": [[1, "admin"]]}
+            if self.url.endswith("/ssrf"):
+                return {"status": "success", "response": "healthy"}
+            return {}
+
+    monkeypatch.setattr(
+        requests, "get", lambda url, **kwargs: ExposedResponse(url)
+    )
+    findings = run_dast_scan("http://isolated-target", job_id="test_job")
+    assert {finding["status"] for finding in findings} == {"EXPOSED"}
+
 def test_policy_engine_clamav():
     # Test analyze_clamav with mock reports
     clean_report = []

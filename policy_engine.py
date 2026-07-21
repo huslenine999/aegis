@@ -43,10 +43,11 @@ def get_env_set(var_name: str, default: set) -> set:
     return {item.strip().upper() for item in val.split(",") if item.strip()}
 
 
-FAIL_ON_RUFF_SEVERITIES = get_env_set("FAIL_ON_RUFF", get_env_set("FAIL_ON_BANDIT", {"MEDIUM", "HIGH"}))
+FAIL_ON_SEVERITIES = get_env_set("FAIL_ON", {"MEDIUM", "HIGH", "CRITICAL"})
+FAIL_ON_RUFF_SEVERITIES = get_env_set("FAIL_ON_RUFF", get_env_set("FAIL_ON_BANDIT", FAIL_ON_SEVERITIES))
 FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
-FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", {"MEDIUM", "HIGH", "CRITICAL"})
-FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", {"MEDIUM", "HIGH"})
+FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", FAIL_ON_SEVERITIES)
+FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", FAIL_ON_SEVERITIES)
 
 
 def load_json(path: Path) -> Any:
@@ -366,6 +367,7 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
     normalized_examples = []
     for v in vulnerabilities:
         normalized_examples.append(enrich_finding("Safety", {
+            "severity": "MEDIUM",
             "package_name": v.get("package_name") or v.get("package"),
             "vulnerability_id": v.get("vulnerability_id") or v.get("advisory"),
             "affected_versions": v.get("affected_versions") or v.get("version"),
@@ -373,11 +375,16 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
             "description": v.get("description") or v.get("reason", "No description provided."),
         }))
 
+    blocking_count = (
+        len(vulnerabilities)
+        if FAIL_ON_SAFETY and "MEDIUM" in FAIL_ON_SEVERITIES
+        else 0
+    )
     return {
         "tool": "Safety",
         "total_issues": len(vulnerabilities),
-        "blocking_issues": len(vulnerabilities) if FAIL_ON_SAFETY else 0,
-        "status": "FAIL" if vulnerabilities and FAIL_ON_SAFETY else "PASS",
+        "blocking_issues": blocking_count,
+        "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": {"MEDIUM": len(vulnerabilities)} if vulnerabilities else {},
         "examples": normalized_examples[:5],
     }
@@ -406,7 +413,7 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "details": f.get("details"),
         }))
 
-    blocking_issues = [f for f in findings if f["severity"] in {"MEDIUM", "HIGH"}]
+    blocking_issues = [f for f in findings if f["severity"] in FAIL_ON_SEVERITIES]
 
     return {
         "tool": "OSV Dependency Audit",
@@ -477,11 +484,12 @@ def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
                 "line_number": secret.get("line_number"),
             }))
 
+    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
     return {
         "tool": "Secrets Scanner",
         "total_issues": len(findings),
-        "blocking_issues": len(findings),
-        "status": "FAIL" if findings else "PASS",
+        "blocking_issues": blocking_count,
+        "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
@@ -507,11 +515,12 @@ def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "author": f.get("author")
         }))
 
+    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
     return {
         "tool": "YARA Scanner",
         "total_issues": len(findings),
-        "blocking_issues": len(findings),
-        "status": "FAIL" if findings else "PASS",
+        "blocking_issues": blocking_count,
+        "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
@@ -536,11 +545,12 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "description": f.get("description")
         }))
 
+    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
     return {
         "tool": "ClamAV",
         "total_issues": len(findings),
-        "blocking_issues": len(findings),
-        "status": "FAIL" if findings else "PASS",
+        "blocking_issues": blocking_count,
+        "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
     }
@@ -568,7 +578,7 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "description": f.get("description"),
             "status": f.get("status")
         }))
-        if is_exposed:
+        if is_exposed and "HIGH" in FAIL_ON_SEVERITIES:
             blocking_count += 1
 
     return {
@@ -684,14 +694,14 @@ def parse_cvss_vector(vector_str: str) -> float:
         i_map = {"H": 0.56, "L": 0.22, "N": 0.0}
         a_map = {"H": 0.56, "L": 0.22, "N": 0.0}
         
-        av = av_map.get(metrics.get("AV"), 0.85)
-        ac = ac_map.get(metrics.get("AC"), 0.77)
-        ui = ui_map.get(metrics.get("UI"), 0.85)
+        av = av_map.get(metrics.get("AV", "N"), 0.85)
+        ac = ac_map.get(metrics.get("AC", "L"), 0.77)
+        ui = ui_map.get(metrics.get("UI", "N"), 0.85)
         scope = metrics.get("S", "U")
         
-        c = c_map.get(metrics.get("C"), 0.0)
-        i = i_map.get(metrics.get("I"), 0.0)
-        a = a_map.get(metrics.get("A"), 0.0)
+        c = c_map.get(metrics.get("C", "N"), 0.0)
+        i = i_map.get(metrics.get("I", "N"), 0.0)
+        a = a_map.get(metrics.get("A", "N"), 0.0)
         
         pr_val = metrics.get("PR", "N")
         if scope == "C":
@@ -728,14 +738,15 @@ def query_osv_vulnerabilities(
     *,
     raise_on_error: bool = False,
 ) -> List[Dict[str, Any]]:
-    findings = []
+    findings: list[dict[str, Any]] = []
     failed_queries = []
-    packages = [
-        package
-        for manifest in _normalize_manifests(manifests_or_path)
-        for package in manifest.packages
-        if package.version
-    ]
+    packages_by_key: dict[tuple[str, str, str], DependencyPackage] = {}
+    for manifest in _normalize_manifests(manifests_or_path):
+        for package in manifest.packages:
+            if package.version:
+                key = (package.ecosystem, package.name.lower(), package.version)
+                packages_by_key.setdefault(key, package)
+    packages = list(packages_by_key.values())
     if not packages:
         print("[INFO] No pinned dependency versions found for OSV queries.")
         return findings
@@ -799,7 +810,7 @@ def query_osv_vulnerabilities(
                         for sev in vuln.get("severity", []):
                             if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
                                 vector = sev.get("score")
-                                cvss_score = parse_cvss_vector(vector)
+                                cvss_score = parse_cvss_vector(str(vector or ""))
                                 break
                     
                     vuln_list.append({
@@ -843,10 +854,11 @@ def query_osv_vulnerabilities(
 
 
 def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: bool) -> float:
+    del waf_enabled
     severity_cvss = {"LOW": 2.0, "MEDIUM": 5.5, "HIGH": 8.5, "CRITICAL": 9.8}
     severities = []
     for result in results:
-        if result.get("status") in {"SKIPPED", "MISSING", "ERROR"}:
+        if result.get("status") in {"SKIPPED", "MISSING", "ERROR"} or not result.get("blocking_issues"):
             continue
         for severity, count in (result.get("severity_counts") or {}).items():
             severities.extend([severity_cvss.get(severity.upper(), 2.0)] * int(count))
@@ -865,8 +877,8 @@ def generate_reports(
     final_status: str,
     reason: str,
     exploitability_score: float = 0.0,
-    html_path: Path = None,
-    md_path: Path = None
+    html_path: Path | None = None,
+    md_path: Path | None = None
 ):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     h_path = html_path if html_path is not None else HTML_REPORT
@@ -966,9 +978,9 @@ def print_result(result: Dict[str, Any]) -> None:
 
 def run_policy_engine(
     scan_dir: Path,
-    html_path: Path = None,
-    md_path: Path = None,
-    req_path: Path = None,
+    html_path: Path | None = None,
+    md_path: Path | None = None,
+    req_path: Path | None = None,
     dependency_manifests: list[DependencyManifest] | None = None,
     reporter_callback = None,
     operational_failures: List[str] | None = None,

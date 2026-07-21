@@ -7,6 +7,14 @@ Aegis combines a Python security-scanning CLI, a GitHub Action, and a web
 console for teams that want repeatable security gates without sending source
 code to a hosted third party.
 
+## Commercial direction
+
+Aegis is positioned for small engineering teams that need a private, explainable
+release-security decision without buying a large AppSec platform. The public
+product overview and founding-pilot offer are available at `/welcome` when the
+workbench is running. See [docs/MONETIZATION.md](docs/MONETIZATION.md) for the
+recommended customer profile, offer ladder, and path to paid hosted plans.
+
 ## Highlights
 
 - Local and CI security gates with deterministic exit codes.
@@ -19,6 +27,8 @@ code to a hosted third party.
 - Slack, Teams Workflow, email, and signed webhook notifications.
 - PostgreSQL persistence, Redis/RQ workers, Caddy TLS, and Prometheus metrics.
 - Administration for users, API tokens, audit events, WAF rules, and diagnostics.
+- Tenant-scoped authorization, scoped API tokens, login lockout, and encrypted TOTP MFA.
+- Ed25519-signed evidence manifests with independently verifiable artifact hashes.
 
 ## Quick Start
 
@@ -58,6 +68,12 @@ Exit codes:
 
 Reports explain what failed, why it matters, how to fix it, whether the finding
 is new, and when suppression is acceptable.
+
+Verify service-generated evidence against a pinned deployment public key:
+
+```bash
+aegis verify-evidence ./scan-manifest.json --public-key YOUR_PINNED_KEY
+```
 
 ### Start The Workbench
 
@@ -138,7 +154,7 @@ scanner fails. Use `--strict` for CI and release gates.
 | --- | --- |
 | Python SAST | Ruff security rules |
 | Pattern analysis | Semgrep with Aegis rules |
-| Dependencies | Safety and OSV |
+| Dependencies | OSV by default; licensed Safety CLI integration is opt-in |
 | Secrets | detect-secrets |
 | Malware/signatures | YARA and ClamAV-compatible fallback checks |
 | Containers | Trivy when Docker is available |
@@ -167,10 +183,15 @@ scan:
       rule: S103
       path: app/cli.py
       reason: Reviewed executable hook creation.
+      approved_by: application-security
+      ticket: SEC-123
+      expires_at: 2027-07-20
 ```
 
-CLI options override configuration-file values. Applied suppressions are written
-to `suppressions-report.json`.
+CLI options override configuration-file values. A suppression is active only
+when it has a meaningful reason, approver, tracking ticket, and future ISO-8601
+expiry. Applied, expired, and invalid exceptions are written to the versioned
+`suppressions-report.json`; expired or malformed entries never hide findings.
 
 ## Architecture
 

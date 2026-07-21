@@ -25,6 +25,7 @@
     <p class="steps">First-run setup · guided first scan</p>
     <h1>Configure Aegis</h1>
     <p>Claim the administrator account, add the first repository, then run the first scan from Projects.</p>
+    <p><a href="/welcome" style="color:#a8e6ad">Read the product overview →</a></p>
     <p class="hint">To try Aegis without a repository, run <code>aegis demo</code> in a terminal.</p>
     <form id="setup-form">
       <label for="workspace-name">Workspace name</label>
@@ -38,7 +39,7 @@
       <select id="scan-preset">
         <option value="quick">Quick — fastest local feedback</option>
         <option value="standard" selected>Standard — recommended PR gate</option>
-        <option value="deep">Deep — release audit</option>
+        <option value="deep">Deep — requires isolated Docker/Trivy worker</option>
       </select>
 
       <label for="username">Administrator username</label>
@@ -54,7 +55,7 @@
       <p id="error" role="alert" aria-live="polite"></p>
     </form>
   </main>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     const token = window.location.hash.slice(1);
     history.replaceState(null, "", "/setup");
     const form = document.getElementById("setup-form");

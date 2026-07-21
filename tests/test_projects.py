@@ -7,6 +7,7 @@ from app import worker
 from cryptography.fernet import Fernet
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import hashlib
 import pytest
 
 
@@ -112,6 +113,40 @@ def test_fingerprints_cover_every_scanner_family_and_ignore_line_moves():
     assert len(projects._fingerprints(first)) == 4
 
 
+def test_fingerprints_ignore_ephemeral_github_workspace_ids():
+    first = {
+        "ruff": [
+            {
+                "code": "S105",
+                "filename": "/data/scans/workspaces/job-1/src/a.py",
+                "message": "secret",
+            }
+        ],
+        "yara": [
+            {
+                "rule": "Webshell",
+                "filename": "/data/scans/workspaces/job-1/src/a.py",
+            }
+        ],
+    }
+    second = {
+        "ruff": [
+            {
+                "code": "S105",
+                "filename": "/data/scans/workspaces/job-2/src/a.py",
+                "message": "secret",
+            }
+        ],
+        "yara": [
+            {
+                "rule": "Webshell",
+                "filename": "/data/scans/workspaces/job-2/src/a.py",
+            }
+        ],
+    }
+    assert projects._fingerprints(first) == projects._fingerprints(second)
+
+
 def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     scans_dir = tmp_path / "scans"
     run_dir = scans_dir / "runs" / "job-1"
@@ -125,6 +160,23 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
         "get_scan_run",
         lambda run_id: {"id": run_id, "project_id": 7, "job_id": "job-1"},
     )
+    metadata = [
+        {
+            "name": path.name,
+            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        for path in (run_dir / "report.html", run_dir / "sbom.json")
+    ]
+    monkeypatch.setattr(app_main, "list_scan_artifacts", lambda run_id: metadata)
+    monkeypatch.setattr(
+        app_main,
+        "get_scan_artifact",
+        lambda run_id, name: next(
+            (artifact for artifact in metadata if artifact["name"] == name), None
+        ),
+    )
 
     listing = app_main.project_scan_artifacts(7, 3, principal=object())
     assert {item["name"] for item in listing["artifacts"]} == {
@@ -136,6 +188,38 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
         7, 3, "report.html", principal=object()
     )
     assert response.path == str(run_dir / "report.html")
+
+    (run_dir / "report.html").write_text("tampered")
+    with pytest.raises(app_main.HTTPException, match="integrity verification failed"):
+        app_main.project_scan_artifact(7, 3, "report.html", principal=object())
+
+
+def test_scan_artifact_metadata_is_persisted(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="Evidence",
+        repository_url="",
+        github_full_name="",
+        default_branch="main",
+        scan_preset="quick",
+        user_id=10,
+    )
+    run_id = projects.create_scan_run(
+        job_id="artifact-job",
+        project_id=project_id,
+        requested_by=10,
+        target="project",
+        preset="quick",
+    )
+    projects.record_scan_artifacts(
+        run_id,
+        [{"name": "report.html", "size": 12, "sha256": "a" * 64}],
+    )
+
+    artifact = projects.get_scan_artifact(run_id, "report.html")
+    assert artifact["size"] == 12
+    assert artifact["sha256"] == "a" * 64
+    assert projects.list_scan_artifacts(run_id) == [artifact]
 
 
 def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monkeypatch):
@@ -163,6 +247,7 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     monkeypatch.setattr(worker, "PROJECT_ROOT", target)
     monkeypatch.setattr(worker, "get_project", projects.get_project)
     monkeypatch.setattr(worker, "update_scan_run", projects.update_scan_run)
+    monkeypatch.setattr(worker, "record_scan_artifacts", projects.record_scan_artifacts)
     monkeypatch.setattr(worker, "is_docker_available", lambda: False)
     monkeypatch.setattr(worker, "run_yara_scan", lambda *args: [])
     monkeypatch.setattr(worker, "run_clamav_scan", lambda *args: [])
@@ -339,8 +424,8 @@ def test_notification_configuration_is_encrypted_and_delivered(tmp_path, monkeyp
 
     delivered = []
     monkeypatch.setattr(
-        notifications.requests,
-        "post",
+        notifications,
+        "_post_pinned",
         lambda *args, **kwargs: delivered.append((args, kwargs)) or Response(),
     )
     notifications.send_project_notification(
@@ -367,11 +452,43 @@ def test_webhook_delivery_rejects_redirects(monkeypatch):
 
     attempts = []
     monkeypatch.setattr(
-        notifications.requests,
-        "post",
+        notifications,
+        "_post_pinned",
         lambda *args, **kwargs: attempts.append(kwargs) or Redirect(),
     )
     with pytest.raises(RuntimeError, match="redirects are not allowed"):
         notifications._post_with_retries("https://example.com/hook", json={})
     assert len(attempts) == 3
-    assert all(attempt["allow_redirects"] is False for attempt in attempts)
+
+
+def test_webhook_connection_is_pinned_to_validated_address(monkeypatch):
+    pools = []
+
+    class Response:
+        status_code = 200
+
+    class Pool:
+        def __init__(self, host, **kwargs):
+            pools.append((host, kwargs))
+
+        def urlopen(self, method, target, **kwargs):
+            assert method == "POST"
+            assert target == "/hook"
+            assert kwargs["headers"]["Host"] == "hooks.example.com"
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        notifications.socket,
+        "getaddrinfo",
+        lambda *args: [(2, 1, 6, "", ("8.8.8.8", 443))],
+    )
+    monkeypatch.setattr(notifications.urllib3, "HTTPSConnectionPool", Pool)
+
+    notifications._post_pinned("https://hooks.example.com/hook", json={"ok": True})
+
+    assert pools[0][0] == "8.8.8.8"
+    assert pools[0][1]["server_hostname"] == "hooks.example.com"
+    assert pools[0][1]["assert_hostname"] == "hooks.example.com"

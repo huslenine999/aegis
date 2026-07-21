@@ -1,11 +1,20 @@
 rules:
   - id: python-sqli
-    pattern-either:
-      - pattern: $CURSOR.execute(f"...")
-      - pattern: $CURSOR.execute("..." % ...)
-      - pattern: $CURSOR.execute("...".format(...))
-      - pattern: $CURSOR.execute($QUERY + ...)
-    message: "Detected potential SQL injection via string formatting or interpolation in database execution."
+    mode: taint
+    pattern-sources:
+      - pattern: input(...)
+      - pattern: $REQUEST.query_params
+      - pattern: $REQUEST.path_params
+      - pattern: $REQUEST.form(...)
+      - pattern: $REQUEST.json(...)
+    pattern-sinks:
+      - patterns:
+          - pattern: $CURSOR.execute($QUERY, ...)
+          - focus-metavariable: $QUERY
+      - patterns:
+          - pattern: $CURSOR.executemany($QUERY, ...)
+          - focus-metavariable: $QUERY
+    message: "Untrusted request or input data reaches a database execution call. Use a parameterized query."
     languages: [python]
     severity: ERROR
 

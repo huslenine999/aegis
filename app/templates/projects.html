@@ -95,7 +95,7 @@
               <select id="scan-preset">
                 <option value="quick">Quick — local/dev feedback</option>
                 <option value="standard">Standard — PR gate</option>
-                <option value="deep">Deep — release audit</option>
+                <option value="deep">Deep — requires isolated Docker/Trivy worker</option>
               </select>
             </label>
             <span id="preset-note" class="preset-note">Standard checks are recommended for pull requests.</span>
@@ -131,19 +131,19 @@
       <label>Project name<input id="create-name" maxlength="128" required></label>
       <label>GitHub HTTPS URL<input id="create-repository" type="url" placeholder="https://github.com/org/repository.git"></label>
       <label>Default branch<input id="create-branch" value="main" required></label>
-      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — release audit</option></select></label>
+      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — requires isolated worker</option></select></label>
       <div class="row"><button class="primary" type="submit">Create</button><button id="close-dialog" type="button">Cancel</button></div>
     </form>
   </dialog>
 
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     let csrf = "";
     let projects = [];
     let selected = null;
     const presetNotes = {
       quick: "Quick is for local/dev feedback: fastest checks while coding.",
       standard: "Standard is for PR gates: static, dependency, secret, and signature checks.",
-      deep: "Deep is for release audits: every available scanner plus sandbox checks."
+      deep: "Deep requires a separately provisioned isolated Docker/Trivy worker and fails closed when it is unavailable."
     };
     const byId = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char]));

@@ -6,7 +6,7 @@ PyYAML==6.0.3
 Jinja2==3.1.6
 MarkupSafe==2.1.5
 ruff==0.15.17
-safety==3.2.9
+safety==3.8.1
 detect-secrets==1.5.0
 yara-python==4.5.0
 pipdeptree==2.35.3
@@ -17,5 +17,5 @@ rq==2.1.0
 python-multipart==0.0.31
 websockets==16.0
 psycopg[binary]==3.2.10
-cryptography==48.0.0
-semgrep==1.168.0
+cryptography==49.0.0
+semgrep==1.170.0

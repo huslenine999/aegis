@@ -21,16 +21,19 @@
   <main>
     <h1>Aegis</h1>
     <p>Sign in to the security workbench.</p>
+    <p><a href="/welcome" style="color:#a8e6ad">See how Aegis helps small teams ship safely →</a></p>
     <form id="login-form">
       <label for="username">Username</label>
       <input id="username" name="username" autocomplete="username" required autofocus>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <label for="second-factor">Authenticator or recovery code <small>(if enabled)</small></label>
+      <input id="second-factor" name="second-factor" inputmode="numeric" autocomplete="one-time-code">
       <button type="submit">Sign in</button>
       <p id="error" role="alert" aria-live="polite"></p>
     </form>
   </main>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     document.getElementById("login-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const error = document.getElementById("error");
@@ -40,7 +43,8 @@
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           username: document.getElementById("username").value,
-          password: document.getElementById("password").value
+          password: document.getElementById("password").value,
+          second_factor: document.getElementById("second-factor").value
         })
       });
       if (response.ok) window.location.replace("/");

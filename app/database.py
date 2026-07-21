@@ -110,6 +110,10 @@ class PostgresCursor:
     def fetchall(self):
         return self._cursor.fetchall()
 
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
 
 def get_connection():
     if USING_POSTGRES:
@@ -354,10 +358,319 @@ def _migration_003_github_webhook_deliveries(cursor) -> None:
     """)
 
 
+def _migration_004_scan_artifacts(cursor) -> None:
+    identity = _identity_id_type()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS scan_artifacts (
+            id {identity},
+            scan_run_id BIGINT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+            sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (scan_run_id, name)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_artifacts_run ON scan_artifacts(scan_run_id)"
+    )
+
+
+def _migration_005_tenant_and_identity_hardening(cursor) -> None:
+    """Make tenant boundaries and credential state first-class database data."""
+    identity = _identity_id_type()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS tenants (
+            id {identity},
+            slug TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    tenant = cursor.execute("SELECT id FROM tenants ORDER BY id LIMIT 1").fetchone()
+    if tenant:
+        tenant_id = int(tenant[0])
+    else:
+        now = datetime.now(timezone.utc).isoformat()
+        insert = "INSERT INTO tenants (slug, name, created_at) VALUES (?, ?, ?)"
+        if USING_POSTGRES:
+            insert += " RETURNING id"
+        result = cursor.execute(insert, ("default", "Default workspace", now))
+        tenant_id = int(result.fetchone()[0]) if USING_POSTGRES else 1
+
+    # These migrations intentionally use a concrete default so existing rows are
+    # assigned atomically. Application writes always provide/derive tenant scope.
+    for statement in (
+        f"ALTER TABLE auth_users ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT {tenant_id}",
+        "ALTER TABLE auth_users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE auth_users ADD COLUMN locked_until TEXT",
+        "ALTER TABLE auth_users ADD COLUMN last_login_at TEXT",
+        f"ALTER TABLE projects ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT {tenant_id}",
+        f"ALTER TABLE scan_runs ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT {tenant_id}",
+        f"ALTER TABLE audit_events ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT {tenant_id}",
+        "ALTER TABLE auth_tokens ADD COLUMN scopes TEXT NOT NULL DEFAULT 'read'",
+        "ALTER TABLE auth_tokens ADD COLUMN last_used_at TEXT",
+        "ALTER TABLE auth_sessions ADD COLUMN authenticated_at TEXT",
+    ):
+        cursor.execute(statement)
+
+    cursor.execute("UPDATE auth_sessions SET authenticated_at = created_at WHERE authenticated_at IS NULL")
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_auth_users_tenant ON auth_users(tenant_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_runs_tenant ON scan_runs(tenant_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_expiry ON auth_tokens(expires_at)",
+    ):
+        cursor.execute(statement)
+
+
+def _migration_006_webhook_integrity(cursor) -> None:
+    cursor.execute(
+        "ALTER TABLE github_webhook_deliveries ADD COLUMN payload_sha256 TEXT"
+    )
+    cursor.execute(
+        "ALTER TABLE github_webhook_deliveries ADD COLUMN status TEXT NOT NULL DEFAULT 'accepted'"
+    )
+    cursor.execute(
+        "ALTER TABLE github_webhook_deliveries ADD COLUMN processed_at TEXT"
+    )
+
+
+def _migration_007_mfa(cursor) -> None:
+    for statement in (
+        "ALTER TABLE auth_users ADD COLUMN mfa_pending_secret_encrypted TEXT",
+        "ALTER TABLE auth_users ADD COLUMN mfa_secret_encrypted TEXT",
+        "ALTER TABLE auth_users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE auth_users ADD COLUMN mfa_recovery_hashes TEXT",
+    ):
+        cursor.execute(statement)
+
+
+def _migration_008_mfa_replay_protection(cursor) -> None:
+    cursor.execute("ALTER TABLE auth_users ADD COLUMN mfa_last_counter BIGINT")
+
+
+def _migration_009_append_only_audit_chain(cursor) -> None:
+    cursor.execute("ALTER TABLE audit_events ADD COLUMN previous_hash TEXT")
+    cursor.execute("ALTER TABLE audit_events ADD COLUMN event_hash TEXT")
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_events_hash ON audit_events(event_hash)"
+    )
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_reject_audit_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'audit_events are append-only';
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS audit_events_no_update ON audit_events")
+        cursor.execute("DROP TRIGGER IF EXISTS audit_events_no_delete ON audit_events")
+        cursor.execute("""
+            CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events
+            FOR EACH ROW EXECUTE FUNCTION aegis_reject_audit_mutation()
+        """)
+        cursor.execute("""
+            CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events
+            FOR EACH ROW EXECUTE FUNCTION aegis_reject_audit_mutation()
+        """)
+    else:
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+            BEFORE UPDATE ON audit_events
+            BEGIN SELECT RAISE(ABORT, 'audit_events are append-only'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+            BEFORE DELETE ON audit_events
+            BEGIN SELECT RAISE(ABORT, 'audit_events are append-only'); END
+        """)
+
+
+def _migration_010_github_app_checks(cursor) -> None:
+    for statement in (
+        "ALTER TABLE scan_runs ADD COLUMN source_revision TEXT",
+        "ALTER TABLE scan_runs ADD COLUMN source_ref TEXT",
+        "ALTER TABLE scan_runs ADD COLUMN github_installation_id BIGINT",
+        "ALTER TABLE scan_runs ADD COLUMN github_pull_request INTEGER",
+        "ALTER TABLE scan_runs ADD COLUMN github_check_run_id BIGINT",
+    ):
+        cursor.execute(statement)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_runs_github_check ON scan_runs(github_check_run_id)"
+    )
+
+
+def _migration_011_tenant_consistency_guards(cursor) -> None:
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_project_tenant()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM auth_users
+                    WHERE id = NEW.created_by AND tenant_id = NEW.tenant_id
+                ) THEN RAISE EXCEPTION 'project tenant mismatch'; END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_scan_tenant()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.requested_by
+                    WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                    AND u.tenant_id = NEW.tenant_id
+                ) THEN RAISE EXCEPTION 'scan tenant mismatch'; END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_member_tenant()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.user_id
+                    WHERE p.id = NEW.project_id AND p.tenant_id = u.tenant_id
+                ) THEN RAISE EXCEPTION 'project member tenant mismatch'; END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_prevent_tenant_change()
+            RETURNS trigger AS $$
+            BEGIN
+                IF OLD.tenant_id IS DISTINCT FROM NEW.tenant_id THEN
+                    RAISE EXCEPTION 'tenant identity is immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        for table, function in (
+            ("projects", "aegis_validate_project_tenant"),
+            ("scan_runs", "aegis_validate_scan_tenant"),
+            ("project_members", "aegis_validate_member_tenant"),
+        ):
+            cursor.execute(f"DROP TRIGGER IF EXISTS {table}_tenant_guard ON {table}")
+            cursor.execute(
+                f"""CREATE TRIGGER {table}_tenant_guard BEFORE INSERT OR UPDATE ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION {function}()"""
+            )
+        for table in ("auth_users", "projects", "scan_runs"):
+            cursor.execute(f"DROP TRIGGER IF EXISTS {table}_tenant_immutable ON {table}")
+            cursor.execute(
+                f"""CREATE TRIGGER {table}_tenant_immutable BEFORE UPDATE OF tenant_id ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION aegis_prevent_tenant_change()"""
+            )
+    else:
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS projects_tenant_guard
+            BEFORE INSERT ON projects
+            WHEN NOT EXISTS (
+                SELECT 1 FROM auth_users
+                WHERE id = NEW.created_by AND tenant_id = NEW.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'project tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS projects_tenant_update_guard
+            BEFORE UPDATE OF tenant_id, created_by ON projects
+            WHEN NOT EXISTS (
+                SELECT 1 FROM auth_users
+                WHERE id = NEW.created_by AND tenant_id = NEW.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'project tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS scan_runs_tenant_guard
+            BEFORE INSERT ON scan_runs
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.requested_by
+                WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                AND u.tenant_id = NEW.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'scan tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS scan_runs_tenant_update_guard
+            BEFORE UPDATE OF project_id, requested_by, tenant_id ON scan_runs
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.requested_by
+                WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                AND u.tenant_id = NEW.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'scan tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS project_members_tenant_guard
+            BEFORE INSERT ON project_members
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.user_id
+                WHERE p.id = NEW.project_id AND p.tenant_id = u.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'project member tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS project_members_tenant_update_guard
+            BEFORE UPDATE OF project_id, user_id ON project_members
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.user_id
+                WHERE p.id = NEW.project_id AND p.tenant_id = u.tenant_id
+            )
+            BEGIN SELECT RAISE(ABORT, 'project member tenant mismatch'); END
+        """)
+        for table in ("auth_users", "projects", "scan_runs"):
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {table}_tenant_immutable
+                BEFORE UPDATE OF tenant_id ON {table}
+                WHEN OLD.tenant_id != NEW.tenant_id
+                BEGIN SELECT RAISE(ABORT, 'tenant identity is immutable'); END
+            """)
+
+
+def _migration_012_webhook_scan_link(cursor) -> None:
+    """Link webhook deliveries to scans without rewriting an applied migration."""
+    if USING_POSTGRES:
+        cursor.execute("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+            AND table_name = 'github_webhook_deliveries'
+            AND column_name = 'scan_run_id'
+        """)
+        column_exists = cursor.fetchone() is not None
+    else:
+        cursor.execute("PRAGMA table_info(github_webhook_deliveries)")
+        column_exists = any(row[1] == "scan_run_id" for row in cursor.fetchall())
+    if not column_exists:
+        cursor.execute(
+            "ALTER TABLE github_webhook_deliveries ADD COLUMN scan_run_id BIGINT"
+        )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_github_webhook_scan "
+        "ON github_webhook_deliveries(scan_run_id)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
     Migration(3, "github_webhook_deliveries", _migration_003_github_webhook_deliveries),
+    Migration(4, "immutable_scan_artifacts", _migration_004_scan_artifacts),
+    Migration(5, "tenant_and_identity_hardening", _migration_005_tenant_and_identity_hardening),
+    Migration(6, "github_webhook_integrity", _migration_006_webhook_integrity),
+    Migration(7, "totp_mfa", _migration_007_mfa),
+    Migration(8, "mfa_replay_protection", _migration_008_mfa_replay_protection),
+    Migration(9, "append_only_audit_chain", _migration_009_append_only_audit_chain),
+    Migration(10, "github_app_checks", _migration_010_github_app_checks),
+    Migration(11, "tenant_consistency_guards", _migration_011_tenant_consistency_guards),
+    Migration(12, "webhook_scan_link", _migration_012_webhook_scan_link),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -378,7 +691,8 @@ def run_migrations(cursor) -> list[Migration]:
 def _seed_default_rows(cursor, *, reset: bool = False) -> None:
     if reset:
         cursor.execute("DELETE FROM users")
-    if cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+    seed_demo_users = os.environ.get("AEGIS_ENV", "development").lower() != "production"
+    if seed_demo_users and cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         cursor.executemany(
             "INSERT INTO users (username, role, api_key) VALUES (?, ?, ?)",
             DEFAULT_USERS,
@@ -399,11 +713,20 @@ def initialize_database(*, reset: bool = False):
     conn = get_connection()
     cursor = conn.cursor()
 
-    run_migrations(cursor)
-    _seed_default_rows(cursor, reset=reset)
-
-    conn.commit()
-    conn.close()
+    try:
+        if USING_POSTGRES:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(?))",
+                ("aegis_schema_migrations",),
+            )
+        run_migrations(cursor)
+        _seed_default_rows(cursor, reset=reset)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def get_application_state(key: str, default=None):

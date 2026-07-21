@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import smtplib
 import socket
@@ -11,7 +12,7 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from urllib.parse import urlparse
 
-import requests
+import urllib3
 from cryptography.fernet import Fernet
 
 try:
@@ -22,6 +23,7 @@ except ImportError:
 
 CHANNEL_TYPES = {"webhook", "slack", "teams", "email"}
 EVENT_TYPES = {"completed", "blocked", "failed", "cancelled"}
+LOGGER = logging.getLogger("aegis.notifications")
 
 
 def _now() -> str:
@@ -40,12 +42,12 @@ def _decrypt(value: str) -> dict:
     return json.loads(_fernet().decrypt(value.encode()))
 
 
-def _validate_webhook_url(url: str) -> None:
+def _resolve_webhook_url(url: str):
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("Webhook URLs must use HTTPS.")
-    addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443)
-    for address in addresses:
+    resolved = set()
+    for address in socket.getaddrinfo(parsed.hostname, parsed.port or 443):
         ip = ipaddress.ip_address(address[4][0])
         if (
             ip.is_private
@@ -55,22 +57,77 @@ def _validate_webhook_url(url: str) -> None:
             or ip.is_reserved
         ):
             raise ValueError("Webhook URL resolves to a non-public address.")
+        resolved.add(str(ip))
+    if not resolved:
+        raise ValueError("Webhook URL did not resolve to a public address.")
+    return parsed, sorted(resolved)
+
+
+def _validate_webhook_url(url: str) -> None:
+    _resolve_webhook_url(url)
+
+
+def _post_pinned(url: str, **kwargs):
+    parsed, addresses = _resolve_webhook_url(url)
+    hostname = parsed.hostname or ""
+    port = parsed.port or 443
+    headers = dict(kwargs.get("headers") or {})
+    headers["Host"] = hostname if port == 443 else f"{hostname}:{port}"
+    body: bytes | None
+    if "json" in kwargs:
+        body = json.dumps(kwargs["json"], separators=(",", ":")).encode()
+        headers.setdefault("Content-Type", "application/json")
+    else:
+        raw_body = kwargs.get("data")
+        if isinstance(raw_body, bytes):
+            body = raw_body
+        elif isinstance(raw_body, str):
+            body = raw_body.encode()
+        elif raw_body is None:
+            body = None
+        else:
+            raise TypeError("Webhook body must be bytes or text.")
+    target = parsed.path or "/"
+    if parsed.query:
+        target += "?" + parsed.query
+    pool = urllib3.HTTPSConnectionPool(
+        addresses[0],
+        port=port,
+        assert_hostname=hostname,
+        server_hostname=hostname,
+        cert_reqs="CERT_REQUIRED",
+        timeout=urllib3.Timeout(connect=5, read=10),
+        retries=False,
+        maxsize=1,
+        block=True,
+    )
+    try:
+        return pool.urlopen(
+            "POST",
+            target,
+            body=body,
+            headers=headers,
+            redirect=False,
+            retries=False,
+        )
+    finally:
+        pool.close()
 
 
 def _post_with_retries(url: str, **kwargs):
     last_error = None
     for attempt in range(3):
-        _validate_webhook_url(url)
         try:
-            response = requests.post(
-                url, timeout=10, allow_redirects=False, **kwargs
+            response = _post_pinned(url, **kwargs)
+            status_code = int(
+                getattr(response, "status_code", getattr(response, "status", 200))
             )
-            status_code = int(getattr(response, "status_code", 200))
             if 300 <= status_code < 400:
                 raise RuntimeError("Webhook redirects are not allowed.")
-            response.raise_for_status()
+            if status_code >= 400:
+                raise RuntimeError(f"Webhook returned HTTP {status_code}.")
             return response
-        except (requests.RequestException, RuntimeError) as exc:
+        except (urllib3.exceptions.HTTPError, OSError, RuntimeError, ValueError) as exc:
             last_error = exc
             if attempt < 2:
                 time.sleep(0.25 * (2**attempt))
@@ -227,6 +284,43 @@ def send_project_notification(project_id: int, event: str, payload: dict) -> Non
                 pass
 
 
+def queue_project_notification(project_id: int, event: str, payload: dict) -> bool:
+    """Hand notification delivery to a credential-bearing notifier process."""
+    require_notifier = os.environ.get("AEGIS_REQUIRE_NOTIFIER", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not require_notifier:
+        send_project_notification(project_id, event, payload)
+        return True
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        queue = Queue(
+            "notifications",
+            connection=Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
+        )
+        queue.enqueue(
+            send_project_notification,
+            project_id,
+            event,
+            payload,
+            job_timeout=60,
+            result_ttl=300,
+            failure_ttl=86400,
+        )
+        return True
+    except Exception:
+        LOGGER.exception(
+            "Failed to enqueue notification",
+            extra={"project_id": project_id, "event": event},
+        )
+        return False
+
+
 def test_channel(channel_id: int, project_id: int) -> None:
     with get_connection() as connection:
         row = connection.execute(
@@ -237,3 +331,37 @@ def test_channel(channel_id: int, project_id: int) -> None:
     if not row:
         raise ValueError("Notification channel not found.")
     _deliver(row[0], _decrypt(row[1]), "completed", {"project_name": "Test notification", "job_id": "test"})
+
+
+def queue_test_channel(channel_id: int, project_id: int) -> bool:
+    require_notifier = os.environ.get("AEGIS_REQUIRE_NOTIFIER", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not require_notifier:
+        test_channel(channel_id, project_id)
+        return True
+    try:
+        from redis import Redis
+        from rq import Queue
+
+        Queue(
+            "notifications",
+            connection=Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
+        ).enqueue(
+            test_channel,
+            channel_id,
+            project_id,
+            job_timeout=60,
+            result_ttl=300,
+            failure_ttl=86400,
+        )
+        return True
+    except Exception:
+        LOGGER.exception(
+            "Failed to enqueue test notification",
+            extra={"project_id": project_id, "channel_id": channel_id},
+        )
+        return False

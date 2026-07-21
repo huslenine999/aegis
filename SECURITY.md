@@ -1,30 +1,24 @@
 # Security policy
 
-## Supported versions
+Report suspected vulnerabilities privately through [GitHub Security
+Advisories](https://github.com/huslenine999/aegis/security/advisories/new).
+Do not open a public issue containing exploit details, credentials, customer
+data, or an unpatched vulnerability.
 
-Security fixes are provided for the latest minor release on `main`. Deployments
-should pin a reviewed release image or immutable commit and keep PostgreSQL
-backups before upgrading.
+Include the affected version, deployment mode, reproduction steps, expected and
+actual behavior, impact, and any proof of concept. Use synthetic data and stop
+testing if you access another party's information, degrade availability, or
+would need persistence, phishing, denial of service, or social engineering.
 
-## Reporting a vulnerability
+The project will target acknowledgement within two business days, initial
+triage within five business days, and status updates at least every seven days
+until resolution. These are response targets, not a contractual SLA. Disclosure
+timing will be coordinated with the reporter after a fix and customer guidance
+are available.
 
-Do not open a public issue for an exploitable vulnerability or exposed secret.
-Use GitHub's private vulnerability-reporting feature for this repository and
-include the affected version, deployment model, reproduction steps, impact, and
-any suggested mitigation. Remove real credentials and customer source code from
-all evidence.
+Supported releases are the latest tagged release and the current default
+branch. Older releases may require upgrading before a fix can be supplied.
 
-The maintainer should acknowledge a complete report within five business days,
-coordinate a fix and disclosure date with the reporter, and publish a security
-advisory when the fix is available.
-
-## Deployment assumptions
-
-Aegis processes untrusted source code. Keep workers isolated from production
-secrets and networks, require strict scans for release decisions, and never
-interpret an unavailable scanner as a clean result. Deep scans require a
-separate Docker/Trivy execution environment; mounting a host Docker socket into
-the dashboard is not a supported production design.
-
-See [the threat model](docs/THREAT_MODEL.md) and
-[production guide](docs/PRODUCTION.md) for the maintained trust boundaries.
+Good-faith research that follows this policy is authorized for project-owned
+systems. Customer-operated deployments and third-party services are outside
+this authorization and require their owners' permission.

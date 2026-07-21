@@ -160,3 +160,39 @@ test("operations console issues and revokes API tokens accessibly", async ({ pag
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
 });
+
+test("scanner-controlled filenames remain inert text", async ({ page }) => {
+  await page.goto("/login");
+  if (page.url().includes("/setup")) {
+    const setup = await page.request.post("/api/setup", {
+      headers: { "X-Aegis-Setup-Token": "e2e-first-run-setup-token" },
+      data: {
+        workspace_name: "E2E Engineering",
+        repository: "",
+        scan_preset: "standard",
+        username: "e2e-owner",
+        password: "e2e-owner-password"
+      }
+    });
+    expect(setup.status(), await setup.text()).toBe(200);
+    await page.goto("/");
+  } else {
+    await page.getByLabel("Username").fill("e2e-owner");
+    await page.getByLabel("Password").fill("e2e-owner-password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/$/);
+  }
+  await expect(page.locator("#uploadFile")).toBeAttached();
+  await page.waitForFunction(() => typeof window.addSyslogEntry === "function");
+  await page.evaluate(() => { window.AEGIS_XSS_PROBE = 0; });
+
+  const filename = "<img src=x onerror=window.AEGIS_XSS_PROBE=1>.py";
+  await page.locator("#uploadFile").setInputFiles({
+    name: filename,
+    mimeType: "text/x-python",
+    buffer: Buffer.from("print('safe')\n")
+  });
+
+  await expect(page.locator("#syslog-stream")).toContainText(filename, { timeout: 1000 });
+  expect(await page.evaluate(() => window.AEGIS_XSS_PROBE)).toBe(0);
+});

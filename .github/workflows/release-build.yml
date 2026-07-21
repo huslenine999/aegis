@@ -2,7 +2,6 @@ name: Release Build
 
 permissions:
   contents: read
-  packages: write
 
 on:
   push:
@@ -15,6 +14,11 @@ jobs:
     name: Verify and Build Release Artifact
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
 
     steps:
       - name: Checkout repository
@@ -63,6 +67,9 @@ jobs:
           mypy
           pytest -q --timeout=60 --timeout-method=thread
 
+      - name: Run scanner behavior benchmark
+        run: python scripts/run_security_benchmark.py --output benchmark-results.json
+
       - name: Build wheel
         run: python -m pip wheel . --no-deps --wheel-dir dist
 
@@ -76,7 +83,10 @@ jobs:
           wheel = next(pathlib.Path("dist").glob("*.whl"))
           required = {
               "app/cli.py",
+              "app/evidence.py",
+              "app/worker_entrypoint.py",
               "app/templates/index.html",
+              "app/templates/landing.html",
               "app/templates/report_template.html",
               "app/static/enhanced-dashboard.css",
               "app/static/enhanced-dashboard.js",
@@ -89,26 +99,73 @@ jobs:
               raise SystemExit(f"Wheel is missing required files: {sorted(missing)}")
           PY
 
+      - name: Generate release checksums
+        working-directory: dist
+        run: sha256sum *.whl > SHA256SUMS
+
+      - name: Attest wheel build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: dist/*.whl
+
       - name: Upload release wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aegis-${{ github.ref_name }}-wheel
-          path: dist/*.whl
+          path: |
+            dist/*.whl
+            dist/SHA256SUMS
+            benchmark-results.json
           if-no-files-found: error
           retention-days: 30
 
+  publish-container:
+    name: Approve and Publish Container
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout attested source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - name: Publish versioned container image
-        if: startsWith(github.ref, 'refs/tags/')
+        id: publish
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE: ghcr.io/${{ github.repository }}
           VERSION: ${{ github.ref_name }}
         run: |
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker build \
+          docker buildx build \
+            --provenance=mode=max \
+            --sbom=true \
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             -t "$IMAGE:$VERSION" \
-            -t "$IMAGE:latest" .
-          docker push "$IMAGE:$VERSION"
-          docker push "$IMAGE:latest"
+            -t "$IMAGE:latest" \
+            --metadata-file build-metadata.json \
+            --push .
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          metadata = json.load(open("build-metadata.json"))
+          print(f"digest={metadata['containerimage.digest']}")
+          PY
+
+      - name: Attest published container digest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true

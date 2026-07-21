@@ -1285,6 +1285,7 @@
                             </label>
                             <button id="uxSaveAdminToken" class="modern-btn compact settings-save" type="button">Save admin token</button>
                             <a class="modern-btn compact settings-save" href="/admin">Open operations console</a>
+                            <a class="modern-btn compact settings-save" href="/account/security">Account security</a>
                             <button id="uxSignOut" class="modern-btn compact settings-save" type="button">Sign out</button>
                         </div>
                     </section>
@@ -1747,7 +1748,7 @@
     </footer>
 
     <!-- Animated Retro Scanning Grid Canvas -->
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
         const canvas = document.getElementById('bg-canvas');
         const ctx = canvas.getContext('2d');
         let width, height;
@@ -1875,7 +1876,7 @@
     </script>
 
     <!-- i18n & Theme Script -->
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
         const i18n = {
             en: {
                 brand: "[ AEGIS_SECURE_CONSOLE_v2.0 ]",
@@ -2296,11 +2297,11 @@
                             <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                                 <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                                     <span class="mono" style="color: var(--danger); font-weight: bold;">[MALWARE]</span>
-                                    <span class="link" style="word-break: break-all;">${f.filename.split('/').pop()}</span>
-                                    <span class="badge badge-danger">${f.virus}</span>
+                                    <span class="link" style="word-break: break-all;">${escapeHtml(String(f.filename || '').split('/').pop())}</span>
+                                    <span class="badge badge-danger">${escapeHtml(f.virus)}</span>
                                 </div>
                                 <div class="explainer-subtext mono" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                                    ${f.description}
+                                    ${escapeHtml(f.description)}
                                 </div>
                             </div>
                         `).join('');
@@ -2339,11 +2340,11 @@
                             <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                                 <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                                     <span class="method">GET</span>
-                                    <span class="link">${f.route}</span>
-                                    <span class="badge ${badgeClass}">${f.status}</span>
+                                    <span class="link">${escapeHtml(f.route)}</span>
+                                    <span class="badge ${badgeClass}">${escapeHtml(f.status)}</span>
                                 </div>
                                 <div class="explainer-subtext mono" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                                    ${f.vuln_type}: ${f.description}
+                                    ${escapeHtml(f.vuln_type)}: ${escapeHtml(f.description)}
                                 </div>
                             </div>
                         `;
@@ -2386,7 +2387,7 @@
     </script>
 
     <!-- UI Interaction Script -->
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
 
         // --- 2. Live Vector Attack Map & Radar canvas engine ---
         const radarCanvas = document.getElementById('radar-canvas');
@@ -2799,7 +2800,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         }
 
         function escapeHtml(text) {
-            return text
+            return String(text ?? '')
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
@@ -2883,7 +2884,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             entry.appendChild(ts);
             
             const msg = document.createElement('span');
-            msg.innerHTML = text;
+            msg.textContent = String(text ?? '');
             entry.appendChild(msg);
             
             syslogStream.appendChild(entry);
@@ -2949,7 +2950,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
                 let i = 0;
                 function type() {
                     if (i < text.length) {
-                        content.innerHTML += text.charAt(i);
+                        content.textContent += text.charAt(i);
                         i++;
                         terminal.scrollTop = terminal.scrollHeight;
                         setTimeout(type, speed);
@@ -2964,7 +2965,13 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         const addLogFast = (text, color = 'var(--primary)') => {
             const line = document.createElement('div');
             line.style.color = color;
-            line.innerHTML = `<span style="opacity: 0.5; margin-right: 8px;">[${new Date().toLocaleTimeString()}]</span><span>${text}</span>`;
+            const timestamp = document.createElement('span');
+            timestamp.style.opacity = '0.5';
+            timestamp.style.marginRight = '8px';
+            timestamp.textContent = `[${new Date().toLocaleTimeString()}]`;
+            const message = document.createElement('span');
+            message.textContent = String(text ?? '');
+            line.append(timestamp, message);
             terminal.insertBefore(line, cursorLine);
             terminal.scrollTop = terminal.scrollHeight;
         };
@@ -3563,7 +3570,7 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
     </script>
 
     <!-- Tactical Dependency Graph Script -->
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
         // --- 6. Tactical Dependency Graph Rendering ---
         const depCanvas = document.getElementById('dep-canvas');
         const depTooltip = document.getElementById('dep-tooltip');
@@ -3980,6 +3987,6 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
             }
         }
     </script>
-    <script src="/static/enhanced-dashboard.js?v=2.5.3"></script>
+    <script nonce="{{ request.state.csp_nonce }}" src="/static/enhanced-dashboard.js?v=2.5.3"></script>
 </body>
 </html>

@@ -13,35 +13,86 @@ scan:
       rule: S103
       path: app/cli.py
       reason: Git hook installer intentionally writes an executable pre-push hook.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-001
+      expires_at: 2027-07-20
     - tool: Ruff
       rule: S104
       path: app/main.py
       reason: Development dashboard binds to all interfaces only when launched directly.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-002
+      expires_at: 2027-07-20
     - tool: Ruff
       rule: S607
       path: app/sandbox.py
       reason: Docker CLI invocations intentionally use PATH discovery for local developer tooling.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-003
+      expires_at: 2027-07-20
     - tool: Ruff
       rule: S310
       path: policy_engine.py
       reason: OSV vulnerability queries call a fixed HTTPS endpoint assembled by the scanner.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-004
+      expires_at: 2027-07-20
     - tool: Ruff
       rule: S310
       path: app/cli_stack.py
       reason: CLI stack helper opens only locally generated report paths for developer convenience.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-005
+      expires_at: 2027-07-20
     - tool: Ruff
       rule: S607
       path: app/worker.py
       reason: Worker intentionally invokes configured scanner executables from the runtime PATH.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-006
+      expires_at: 2027-07-20
     - tool: Secrets
       rule: Hex High Entropy String
       path: .github/workflows/security-pipeline.yml
       reason: Reviewed immutable Git commit SHA for the trusted Aegis scanner revision.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-007
+      expires_at: 2027-07-20
     - tool: Secrets
       rule: Secret Keyword
       path: playwright.config.js
       reason: E2E test credentials are deterministic local-only fixtures scoped to the temporary test server.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-008
+      expires_at: 2027-07-20
     - tool: YARA
       rule: Backdoor_Webshell
       path: app/cli.py
       reason: CLI scanner test fixture generation intentionally writes payload strings used to validate detections.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-009
+      expires_at: 2027-07-20
+    - tool: OSV Dependency Audit
+      rule: GHSA-hvrp-rf83-w775
+      reason: Semgrep pins MCP 1.23.3, but Aegis invokes only the local Semgrep scan CLI and never enables MCP experimental task handlers.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-001
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
+      rule: GHSA-jpw9-pfvf-9f58
+      reason: Semgrep pins MCP 1.23.3, but Aegis does not expose MCP SSE or stateful HTTP server transports.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-002
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
+      rule: GHSA-vj7q-gjh5-988w
+      reason: Semgrep pins MCP 1.23.3, but Aegis does not expose the deprecated MCP WebSocket server transport.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-003
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
+      rule: PYSEC-2026-2132
+      reason: Semgrep pins Click 8.1.8, but Aegis never invokes click.edit and passes fixed scanner arguments without an attacker-controlled editor command.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-004
+      expires_at: 2026-10-20

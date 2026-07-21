@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Account security | Aegis</title>
+  <style>
+    :root{font-family:system-ui,sans-serif;color-scheme:dark}body{margin:0;background:#080b09;color:#eef4e9}main{width:min(44rem,calc(100% - 2rem));margin:4rem auto;padding:2rem;border:1px solid #334333;background:#111711}h1,h2{color:#c7ff3d}section{margin-top:2rem;padding-top:1rem;border-top:1px solid #334333}label,input,button{display:block;width:100%;box-sizing:border-box}label{margin-top:1rem;font-weight:600}input{margin-top:.35rem;padding:.75rem;border:1px solid #566657;background:#080b09;color:inherit}button{margin-top:1rem;padding:.8rem;border:0;background:#c7ff3d;color:#101607;font-weight:750;cursor:pointer}.danger{background:#ff7b72}.muted{color:#a9b4a7}code,pre{font-family:ui-monospace,monospace;overflow-wrap:anywhere}pre{padding:1rem;background:#080b09;white-space:pre-wrap}#message{min-height:1.5rem;color:#c7ff3d}a{color:#c7ff3d}</style>
+</head>
+<body>
+  <main>
+    <a href="/">← Workbench</a>
+    <h1>Account security</h1>
+    <p id="status" class="muted">Loading security status…</p>
+    <p id="message" role="status" aria-live="polite"></p>
+
+    <section>
+      <h2>Refresh sensitive access</h2>
+      <p class="muted">Identity, token, integration, project deletion, and policy changes require authentication within the last ten minutes.</p>
+      <form id="reauth-form"><label>Current password<input id="reauth-password" type="password" autocomplete="current-password" required></label><label>Authenticator or recovery code (when MFA is enabled)<input id="reauth-code" autocomplete="one-time-code"></label><button>Reauthenticate</button></form>
+    </section>
+
+    <section id="enable-section">
+      <h2>Enable authenticator MFA</h2>
+      <p class="muted">Use any RFC 6238-compatible authenticator. Enabling MFA signs out every existing session.</p>
+      <form id="setup-form"><label>Current password<input id="setup-password" type="password" autocomplete="current-password" required></label><button>Start MFA setup</button></form>
+      <div id="confirmation" hidden><p>Add this secret or URI to your authenticator:</p><pre id="setup-secret"></pre><form id="confirm-form"><label>Six-digit authenticator code<input id="confirm-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button>Confirm and enable MFA</button></form></div>
+      <div id="recovery" hidden><h2>Save these recovery codes now</h2><p class="muted">Each code works once and will not be shown again.</p><pre id="recovery-codes"></pre></div>
+    </section>
+
+    <section id="disable-section" hidden>
+      <h2>Disable MFA</h2>
+      <p class="muted">This requires both your password and a current authenticator or recovery code.</p>
+      <form id="disable-form"><label>Current password<input id="disable-password" type="password" autocomplete="current-password" required></label><label>Authenticator or recovery code<input id="disable-code" autocomplete="one-time-code" required></label><button class="danger">Disable MFA</button></form>
+    </section>
+  </main>
+  <script nonce="{{ request.state.csp_nonce }}">
+    let csrf="";const byId=(id)=>document.getElementById(id);async function api(url,options={}){const headers=new Headers(options.headers||{});if(options.method&&options.method!=="GET")headers.set("X-CSRF-Token",csrf);if(options.body)headers.set("Content-Type","application/json");return fetch(url,{...options,headers,credentials:"same-origin"})}function message(value){byId("message").textContent=value}
+    async function load(){const response=await api("/api/auth/me");if(response.status===401){location.assign("/login");return}const me=await response.json();csrf=me.csrf_token||"";byId("status").textContent=me.mfa_enabled?"Authenticator MFA is enabled.":"Authenticator MFA is not enabled.";byId("enable-section").hidden=me.mfa_enabled;byId("disable-section").hidden=!me.mfa_enabled}
+    byId("reauth-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/reauth",{method:"POST",body:JSON.stringify({password:byId("reauth-password").value,second_factor:byId("reauth-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"Reauthentication failed.");return}byId("reauth-password").value="";byId("reauth-code").value="";message("Sensitive access refreshed for ten minutes.")});
+    byId("setup-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa/setup",{method:"POST",body:JSON.stringify({password:byId("setup-password").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA setup failed.");return}byId("setup-secret").textContent=`Secret: ${data.secret}\n\n${data.otpauth_uri}`;byId("confirmation").hidden=false;message("Authenticator secret created. Confirm a code to enable MFA.")});
+    byId("confirm-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa/confirm",{method:"POST",body:JSON.stringify({code:byId("confirm-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA confirmation failed.");return}byId("recovery-codes").textContent=(data.recovery_codes||[]).join("\n");byId("recovery").hidden=false;byId("confirmation").hidden=true;message("MFA enabled. Save the recovery codes, then sign in again.")});
+    byId("disable-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa",{method:"DELETE",body:JSON.stringify({password:byId("disable-password").value,code:byId("disable-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA could not be disabled.");return}location.assign("/login")});load();
+  </script>
+</body>
+</html>

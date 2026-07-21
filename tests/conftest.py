@@ -1,6 +1,10 @@
 import pytest
+import os
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+
+
+os.environ.setdefault("AEGIS_ENABLE_DEMO_LAB", "true")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +89,8 @@ def mock_rq_and_redis(monkeypatch):
     
     # Mock RQ Queue.enqueue to execute target function synchronously
     def dummy_enqueue(func, *args, **kwargs):
+        kwargs.pop("job_timeout", None)
+        kwargs.pop("result_ttl", None)
         return func(*args, **kwargs)
         
     queue_mock = patch("rq.Queue.enqueue", side_effect=dummy_enqueue)

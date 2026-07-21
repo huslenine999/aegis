@@ -37,10 +37,10 @@ fi
 
 if [ $REDIS_RUNNING -eq 0 ]; then
     echo "⚠️  Redis not detected on localhost:6379."
-    if command -v docker >/dev/null; then
+    if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
         echo "🐳  Docker detected. Spawning redis container..."
         docker rm -f aegis-redis 2>/dev/null || true
-        docker run -d \
+        if docker run -d \
             -p 127.0.0.1:6379:6379 \
             --read-only \
             --cap-drop ALL \
@@ -49,9 +49,19 @@ if [ $REDIS_RUNNING -eq 0 ]; then
             -v aegis-redis-data:/data \
             --name aegis-redis \
             redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-        echo "Waiting for Redis to start..."
-        sleep 2
-        REDIS_RUNNING=1
+        then
+            echo "Waiting for Redis to start..."
+            sleep 2
+            if nc -z 127.0.0.1 6379 2>/dev/null; then
+                REDIS_RUNNING=1
+            else
+                echo "⚠️  Redis container started but port 6379 is not accepting connections. Running in-process simulated mode."
+            fi
+        else
+            echo "⚠️  Docker could not start Redis. Running in-process simulated mode."
+        fi
+    elif command -v docker >/dev/null; then
+        echo "⚠️  Docker CLI is installed, but the Docker daemon is not running. Running in-process simulated mode."
     else
         echo "⚠️  Redis server and Docker are missing. Running in-process simulated mode."
     fi

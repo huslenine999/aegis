@@ -1,4 +1,5 @@
 import json
+import policy_engine
 from policy_engine import (
     analyze_ruff,
     analyze_safety,
@@ -58,6 +59,26 @@ def test_analyze_trivy_fail():
     result = analyze_trivy(report)
     assert result["status"] == "FAIL"
     assert result["blocking_issues"] == 1
+
+
+def test_global_fail_on_applies_to_every_scanner_family(monkeypatch):
+    monkeypatch.setattr(policy_engine, "FAIL_ON_SEVERITIES", {"CRITICAL"})
+    monkeypatch.setattr(policy_engine, "FAIL_ON_RUFF_SEVERITIES", {"CRITICAL"})
+    monkeypatch.setattr(policy_engine, "FAIL_ON_SEMGREP_SEVERITIES", {"CRITICAL"})
+    monkeypatch.setattr(policy_engine, "FAIL_ON_TRIVY_SEVERITIES", {"CRITICAL"})
+
+    safety = policy_engine.analyze_safety([{"package": "flask"}])
+    osv = policy_engine.analyze_osv([{"id": "OSV-1", "package": "flask", "cvss": 5.0}])
+    secrets = policy_engine.analyze_secrets(
+        {"results": {"app.py": [{"type": "API key"}]}}
+    )
+    yara = policy_engine.analyze_yara([{"rule": "Webshell", "filename": "app.py"}])
+    clamav = policy_engine.analyze_clamav([{"virus": "EICAR", "filename": "eicar"}])
+    dast = policy_engine.analyze_zap(
+        [{"status": "EXPOSED", "vuln_type": "XSS", "route": "/xss"}]
+    )
+
+    assert {item["status"] for item in (safety, osv, secrets, yara, clamav, dast)} == {"PASS"}
 
 
 def test_policy_engine_reports_operational_error(tmp_path):

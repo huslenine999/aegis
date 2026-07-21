@@ -1,5 +1,5 @@
-safety==3.2.9
+safety==3.8.1
 httpx==0.28.1
 mypy==1.18.2
-pytest==8.1.1
+pytest==9.1.1
 pytest-timeout==2.3.1

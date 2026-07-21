@@ -27,3 +27,16 @@ Use this checklist before tagging a public release.
     orchestration code is incrementally typed.
 16. Confirm every non-strict scan summary used as release evidence has an empty
     `operational_failures` list.
+17. Verify the wheel against `SHA256SUMS` and confirm the published container has
+    BuildKit SBOM and provenance attestations before promoting the tag.
+18. Verify a signed `scan-manifest.json` with the deployment's pinned Ed25519
+    public key and reject any manifest whose artifact hashes do not match.
+19. Run `python scripts/run_security_benchmark.py --output benchmark-results.json`
+    and require 100% recall with 0% false positives across the versioned 18-case
+    corpus. Review the corpus hash and category-level results in the output.
+20. Verify the tagged wheel's GitHub/Sigstore provenance with
+    `gh attestation verify <wheel> --repo <owner/repository>`.
+21. Confirm the `production-release` environment approval was performed by an
+    independent reviewer, then verify the GHCR digest-bound attestation.
+22. Review every suppression: require an owner, ticket, future expiry, and
+    CODEOWNER approval; reject releases with expired or invalid exceptions.

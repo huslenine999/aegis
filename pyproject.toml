@@ -29,7 +29,7 @@ dependencies = [
   "Jinja2==3.1.6",
   "MarkupSafe==2.1.5",
   "ruff==0.15.17",
-  "safety==3.2.9",
+  "safety==3.8.1",
   "detect-secrets==1.5.0",
   "yara-python==4.5.0",
   "pipdeptree==2.35.3",
@@ -40,17 +40,17 @@ dependencies = [
   "python-multipart==0.0.31",
   "websockets==16.0",
   "psycopg[binary]==3.2.10",
-  "cryptography==48.0.0",
+  "cryptography==49.0.0",
 ]
 
 [project.optional-dependencies]
 scanner = [
-  "semgrep==1.168.0",
+  "semgrep==1.170.0",
 ]
 dev = [
   "httpx==0.28.1",
   "mypy==1.18.2",
-  "pytest==8.1.1",
+  "pytest==9.1.1",
   "pytest-timeout==2.3.1",
 ]
 
@@ -79,11 +79,17 @@ check_untyped_defs = true
 no_implicit_optional = true
 files = [
   "app/auth.py",
+  "app/cli.py",
   "app/database.py",
   "app/notifications.py",
   "app/projects.py",
   "app/scan_status.py",
   "app/security_middleware.py",
+  "app/sandbox.py",
+  "app/scanners.py",
+  "app/main.py",
+  "app/worker.py",
+  "policy_engine.py",
 ]
 
 [tool.ruff.lint.per-file-ignores]

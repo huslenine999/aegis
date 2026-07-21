@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 try:
     from .database import DB_PATH, DOWNLOAD_DIR
 except ImportError:
-    from database import DB_PATH, DOWNLOAD_DIR
+    from database import DB_PATH, DOWNLOAD_DIR  # type: ignore[no-redef]
 
 
 router = APIRouter(tags=["demo-lab"])

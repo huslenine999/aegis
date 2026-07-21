@@ -60,20 +60,22 @@ services:
         condition: service_healthy
     environment:
       AEGIS_ENV: ${AEGIS_ENV:-production}
+      AEGIS_PUBLIC_URL: https://${AEGIS_DOMAIN}
       AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?Set AEGIS_ADMIN_TOKEN to at least 32 characters}
       AEGIS_SESSION_SECRET: ${AEGIS_SESSION_SECRET:?Set AEGIS_SESSION_SECRET to at least 32 characters}
+      AEGIS_TOKEN_PEPPER: ${AEGIS_TOKEN_PEPPER:?Set AEGIS_TOKEN_PEPPER to at least 32 characters}
+      AEGIS_AUDIT_HMAC_KEY: ${AEGIS_AUDIT_HMAC_KEY:?Set AEGIS_AUDIT_HMAC_KEY to at least 32 characters}
+      AEGIS_SECURITY_PROFILE: ${AEGIS_SECURITY_PROFILE:-standard}
       AEGIS_BOOTSTRAP_ADMIN_USERNAME: ${AEGIS_BOOTSTRAP_ADMIN_USERNAME:-admin}
-      AEGIS_BOOTSTRAP_ADMIN_PASSWORD: ${AEGIS_BOOTSTRAP_ADMIN_PASSWORD:?Set the initial administrator password}
+      AEGIS_BOOTSTRAP_ADMIN_PASSWORD: ${AEGIS_BOOTSTRAP_ADMIN_PASSWORD:-}
       AEGIS_SETUP_TOKEN: ${AEGIS_SETUP_TOKEN:-}
       AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
-      AEGIS_SMTP_HOST: ${AEGIS_SMTP_HOST:-}
-      AEGIS_SMTP_PORT: ${AEGIS_SMTP_PORT:-587}
-      AEGIS_SMTP_USERNAME: ${AEGIS_SMTP_USERNAME:-}
-      AEGIS_SMTP_PASSWORD: ${AEGIS_SMTP_PASSWORD:-}
-      AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
       AEGIS_GITHUB_CLIENT_ID: ${AEGIS_GITHUB_CLIENT_ID:-}
       AEGIS_GITHUB_CLIENT_SECRET: ${AEGIS_GITHUB_CLIENT_SECRET:-}
       AEGIS_GITHUB_CALLBACK_URL: ${AEGIS_GITHUB_CALLBACK_URL:-}
+      AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
+      AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
+      AEGIS_GITHUB_WEBHOOK_SECRET: ${AEGIS_GITHUB_WEBHOOK_SECRET:-}
       AEGIS_REQUIRE_AUTH: "true"
       AEGIS_METRICS_TOKEN: ${AEGIS_METRICS_TOKEN:?Set a metrics bearer token}
       AEGIS_ALLOWED_HOSTS: ${AEGIS_ALLOWED_HOSTS:?Set the public host allowlist}
@@ -81,14 +83,26 @@ services:
       AEGIS_DATA_DIR: /data
       AEGIS_REQUIRE_REDIS: "true"
       AEGIS_REQUIRE_WORKER: "true"
+      AEGIS_REQUIRE_NOTIFIER: "true"
       AEGIS_MAX_UPLOAD_BYTES: ${AEGIS_MAX_UPLOAD_BYTES:-1048576}
       AEGIS_MAX_REQUEST_BYTES: ${AEGIS_MAX_REQUEST_BYTES:-1114112}
       AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
+      AEGIS_SCAN_JOB_TIMEOUT_SECONDS: ${AEGIS_SCAN_JOB_TIMEOUT_SECONDS:-3600}
+      AEGIS_SANDBOX_COMMAND_TIMEOUT_SECONDS: ${AEGIS_SANDBOX_COMMAND_TIMEOUT_SECONDS:-300}
+      AEGIS_SCANNER_TIMEOUT_SECONDS: ${AEGIS_SCANNER_TIMEOUT_SECONDS:-300}
+      AEGIS_SANDBOX_MAX_FILES: ${AEGIS_SANDBOX_MAX_FILES:-100000}
+      AEGIS_SANDBOX_MAX_CONTEXT_BYTES: ${AEGIS_SANDBOX_MAX_CONTEXT_BYTES:-2147483648}
+      AEGIS_LOGIN_FAILURE_LIMIT: ${AEGIS_LOGIN_FAILURE_LIMIT:-5}
+      AEGIS_LOGIN_LOCKOUT_SECONDS: ${AEGIS_LOGIN_LOCKOUT_SECONDS:-900}
+      AEGIS_RECENT_AUTH_SECONDS: ${AEGIS_RECENT_AUTH_SECONDS:-600}
+      AEGIS_ALLOW_DEEP_SCANS: ${AEGIS_ALLOW_DEEP_SCANS:-false}
+      AEGIS_ISOLATED_WORKER: ${AEGIS_ISOLATED_WORKER:-false}
+      AEGIS_MULTI_TENANT: "false"
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
       AEGIS_ENABLE_DEMO_LAB: "false"
-      FORWARDED_ALLOW_IPS: "*"
+      FORWARDED_ALLOW_IPS: 172.31.0.10
     expose:
       - "5001"
     volumes:
@@ -99,7 +113,7 @@ services:
   worker:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
-    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--path", "/app/app"]
+    command: ["python", "-m", "app.worker_entrypoint", "--url", "redis://redis:6379/0", "--path", "/app/app"]
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -114,23 +128,26 @@ services:
         condition: service_healthy
     environment:
       AEGIS_ENV: production
-      AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?Set AEGIS_ADMIN_TOKEN to at least 32 characters}
-      AEGIS_SESSION_SECRET: ${AEGIS_SESSION_SECRET:?Set AEGIS_SESSION_SECRET to at least 32 characters}
-      AEGIS_BOOTSTRAP_ADMIN_PASSWORD: ${AEGIS_BOOTSTRAP_ADMIN_PASSWORD:?Set the initial administrator password}
+      AEGIS_PUBLIC_URL: https://${AEGIS_DOMAIN}
       AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
-      AEGIS_SMTP_HOST: ${AEGIS_SMTP_HOST:-}
-      AEGIS_SMTP_PORT: ${AEGIS_SMTP_PORT:-587}
-      AEGIS_SMTP_USERNAME: ${AEGIS_SMTP_USERNAME:-}
-      AEGIS_SMTP_PASSWORD: ${AEGIS_SMTP_PASSWORD:-}
-      AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
-      AEGIS_REQUIRE_AUTH: "true"
-      AEGIS_ALLOWED_HOSTS: ${AEGIS_ALLOWED_HOSTS:?Set the public host allowlist}
-      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:?Set the HTTPS origin allowlist}
       AEGIS_DATA_DIR: /data
       AEGIS_REQUIRE_REDIS: "true"
       AEGIS_REQUIRE_WORKER: "true"
+      AEGIS_REQUIRE_NOTIFIER: "true"
       AEGIS_SKIP_EXTERNAL_SCANNERS: ${AEGIS_SKIP_EXTERNAL_SCANNERS:-false}
+      AEGIS_ENABLE_SAFETY: ${AEGIS_ENABLE_SAFETY:-false}
+      SAFETY_API_KEY: ${SAFETY_API_KEY:-}
       AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
+      AEGIS_SCAN_JOB_TIMEOUT_SECONDS: ${AEGIS_SCAN_JOB_TIMEOUT_SECONDS:-3600}
+      AEGIS_SANDBOX_COMMAND_TIMEOUT_SECONDS: ${AEGIS_SANDBOX_COMMAND_TIMEOUT_SECONDS:-300}
+      AEGIS_SCANNER_TIMEOUT_SECONDS: ${AEGIS_SCANNER_TIMEOUT_SECONDS:-300}
+      AEGIS_SANDBOX_MAX_FILES: ${AEGIS_SANDBOX_MAX_FILES:-100000}
+      AEGIS_SANDBOX_MAX_CONTEXT_BYTES: ${AEGIS_SANDBOX_MAX_CONTEXT_BYTES:-2147483648}
+      AEGIS_ALLOW_DEEP_SCANS: ${AEGIS_ALLOW_DEEP_SCANS:-false}
+      AEGIS_ISOLATED_WORKER: ${AEGIS_ISOLATED_WORKER:-false}
+      AEGIS_EVIDENCE_SIGNING_KEY: ${AEGIS_EVIDENCE_SIGNING_KEY:?Set a URL-safe base64 Ed25519 seed}
+      AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
+      AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
@@ -139,6 +156,40 @@ services:
       - aegis-data:/data
     tmpfs:
       - /tmp:size=512m,mode=1777
+    healthcheck:
+      disable: true
+
+  notifier:
+    image: ${AEGIS_IMAGE:-aegis-local:latest}
+    build: .
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--path", "/app/app", "notifications"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AEGIS_ENV: production
+      AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
+      AEGIS_SMTP_HOST: ${AEGIS_SMTP_HOST:-}
+      AEGIS_SMTP_PORT: ${AEGIS_SMTP_PORT:-587}
+      AEGIS_SMTP_USERNAME: ${AEGIS_SMTP_USERNAME:-}
+      AEGIS_SMTP_PASSWORD: ${AEGIS_SMTP_PASSWORD:-}
+      AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
+      AEGIS_DATA_DIR: /data
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+    volumes:
+      - aegis-data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     healthcheck:
       disable: true
 
@@ -160,6 +211,15 @@ services:
       - caddy-config:/config
     security_opt:
       - no-new-privileges:true
+    networks:
+      default:
+        ipv4_address: 172.31.0.10
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
 
 volumes:
   aegis-data:

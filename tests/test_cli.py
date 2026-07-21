@@ -198,6 +198,9 @@ def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
         "      rule: S307\n"
         "      path: unsafe.py\n"
         "      reason: Regression fixture for suppression behavior.\n"
+        "      approved_by: security-reviewer\n"
+        "      ticket: SEC-123\n"
+        "      expires_at: 2099-12-31\n"
     )
 
     monkeypatch.chdir(tmp_path)
@@ -216,12 +219,79 @@ def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
 
     assert summary["exit_code"] == 0
     suppressions = json.loads((output_dir / "suppressions-report.json").read_text())
-    assert suppressions == [{
-        "tool": "Ruff",
-        "rule": "S307",
-        "path": str(target_file),
-        "reason": "Regression fixture for suppression behavior.",
-    }]
+    assert suppressions == {
+        "schema_version": 2,
+        "applied": [{
+            "tool": "Ruff",
+            "rule": "S307",
+            "path": str(target_file),
+            "reason": "Regression fixture for suppression behavior.",
+            "approved_by": "security-reviewer",
+            "ticket": "SEC-123",
+            "expires_at": "2099-12-31",
+        }],
+        "expired": [],
+        "invalid": [],
+    }
+
+
+def test_expired_suppression_is_reported_and_does_not_hide_finding(tmp_path):
+    target_file = tmp_path / "unsafe.py"
+    target_file.write_text("eval(input())\n")
+    scan_dir = tmp_path / "reports"
+    scan_dir.mkdir()
+    (scan_dir / "ruff-report.json").write_text(json.dumps([{
+        "code": "S307",
+        "filename": str(target_file),
+        "location": {"row": 1, "column": 1},
+        "message": "unsafe eval",
+    }]))
+    suppressions = cli.normalize_suppressions({
+        "_config_path": str(tmp_path / "aegis.yml"),
+        "scan": {"suppressions": [{
+            "tool": "Ruff",
+            "rule": "S307",
+            "path": "unsafe.py",
+            "reason": "Previously reviewed test finding.",
+            "approved_by": "security-reviewer",
+            "ticket": "SEC-100",
+            "expires_at": "2020-01-01",
+        }]},
+    }, target_file)
+
+    cli.apply_suppressions(scan_dir, suppressions)
+
+    assert len(json.loads((scan_dir / "ruff-report.json").read_text())) == 1
+    report = json.loads((scan_dir / "suppressions-report.json").read_text())
+    assert report["applied"] == []
+    assert report["expired"][0]["ticket"] == "SEC-100"
+    assert report["invalid"] == []
+
+
+def test_governed_suppression_can_disposition_an_osv_advisory(tmp_path):
+    scan_dir = tmp_path / "reports"
+    scan_dir.mkdir()
+    (scan_dir / "osv-report.json").write_text(json.dumps([{
+        "id": "GHSA-example",
+        "package": "scanner-helper",
+        "version": "1.0.0",
+    }]))
+    suppressions = cli.normalize_suppressions({
+        "scan": {"suppressions": [{
+            "tool": "OSV Dependency Audit",
+            "rule": "GHSA-example",
+            "reason": "Feature is not loaded by the isolated scanner process.",
+            "approved_by": "application-security",
+            "ticket": "UPSTREAM-7",
+            "expires_at": "2099-12-31",
+        }]},
+    }, tmp_path)
+
+    cli.apply_suppressions(scan_dir, suppressions)
+
+    assert json.loads((scan_dir / "osv-report.json").read_text()) == []
+    report = json.loads((scan_dir / "suppressions-report.json").read_text())
+    assert report["applied"][0]["rule"] == "GHSA-example"
 
 def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
@@ -270,6 +340,7 @@ def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch)
          patch("app.cli.find_free_host_port", return_value=5678), \
          patch("app.cli.scaffold_sandbox_context", return_value=5001) as scaffold, \
          patch("app.cli.build_sandbox_image", return_value=True) as build_image, \
+         patch("app.cli.create_sandbox_network", return_value=True) as create_network, \
          patch("app.cli.run_sandbox_container", return_value=True) as run_container, \
          patch("app.cli.wait_for_container", return_value=True) as wait_container, \
          patch("app.cli.run_trivy_scan", return_value=[]), \
@@ -287,19 +358,21 @@ def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch)
     assert summary["exit_code"] == 0
     scaffold.assert_called_once()
     build_image.assert_called_once()
+    create_network.assert_called_once()
     run_container.assert_called_once()
     cleanup.assert_called_once()
 
-    image_tag, container_name, host_port, container_port, waf_enabled = run_container.call_args.args
+    image_tag, container_name, host_port, container_port, waf_enabled, network_name = run_container.call_args.args
     assert image_tag.startswith("aegis-sandbox-")
     assert container_name.startswith("aegis-sandbox-container-")
     assert host_port == 5678
     assert container_port == 5001
     assert waf_enabled is False
+    assert network_name.startswith("aegis-sandbox-network-")
 
     target_url = f"http://127.0.0.1:{host_port}"
     wait_container.assert_called_once_with(target_url, timeout=6.0)
-    dast_scan.assert_called_once_with(target_url)
+    dast_scan.assert_called_once_with(target_url, internal_port=5001)
 
 def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, capsys):
     target_file = tmp_path / "safe.py"

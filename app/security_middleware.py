@@ -1,5 +1,6 @@
 import json
 import re
+import secrets
 import urllib.parse
 from collections.abc import Callable
 from typing import Any
@@ -69,6 +70,9 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        nonce = secrets.token_urlsafe(24)
+        scope.setdefault("state", {})["csp_nonce"] = nonce
+
         async def send_with_security_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
@@ -85,15 +89,16 @@ class SecurityHeadersMiddleware:
                         (
                             b"content-security-policy",
                             (
-                                b"default-src 'self'; "
-                                b"script-src 'self' 'unsafe-inline'; "
-                                b"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                                b"font-src 'self' https://fonts.gstatic.com; "
-                                b"img-src 'self' data:; "
-                                b"connect-src 'self' ws: wss:; "
-                                b"object-src 'none'; base-uri 'none'; "
-                                b"frame-ancestors 'none'; form-action 'self'"
-                            ),
+                                "default-src 'self'; "
+                                f"script-src 'self' 'nonce-{nonce}'; "
+                                "script-src-attr 'none'; "
+                                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                                "font-src 'self' https://fonts.gstatic.com; "
+                                "img-src 'self' data:; "
+                                "connect-src 'self' ws: wss:; "
+                                "object-src 'none'; base-uri 'none'; "
+                                "frame-ancestors 'none'; form-action 'self'"
+                            ).encode(),
                         ),
                     ]
                 )

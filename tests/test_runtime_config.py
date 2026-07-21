@@ -36,6 +36,17 @@ def test_readiness_fails_when_required_redis_is_unavailable(monkeypatch):
     assert response.json()["detail"] == "Redis is required but unavailable."
 
 
+def test_security_txt_exposes_disclosure_policy_without_authentication(monkeypatch):
+    monkeypatch.setenv("AEGIS_PUBLIC_URL", "https://aegis.example.com")
+    response = TestClient(app_main.app).get("/.well-known/security.txt")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "Contact: https://github.com/huslenine999/aegis/security/advisories/new" in response.text
+    assert "Policy: https://github.com/huslenine999/aegis/security/policy" in response.text
+    assert "Canonical: https://aegis.example.com/.well-known/security.txt" in response.text
+
+
 def test_data_directory_does_not_replace_source_root(tmp_path):
     code = """
 import json
@@ -137,12 +148,19 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["dashboard"]["environment"]["AEGIS_ENV"] == "${AEGIS_ENV:-production}"
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_REDIS"] == "true"
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_WORKER"] == "true"
+    assert services["dashboard"]["environment"]["AEGIS_REQUIRE_NOTIFIER"] == "true"
     assert services["worker"]["environment"]["AEGIS_DATA_DIR"] == "/data"
+    assert "AEGIS_SMTP_PASSWORD" not in services["dashboard"]["environment"]
+    assert "AEGIS_SMTP_PASSWORD" not in services["worker"]["environment"]
+    assert "AEGIS_SMTP_PASSWORD" in services["notifier"]["environment"]
     assert "aegis-data:/data" in services["dashboard"]["volumes"]
     assert "aegis-data:/data" in services["worker"]["volumes"]
     assert services["dashboard"]["expose"] == ["5001"]
     assert services["proxy"]["ports"] == ["80:80", "443:443", "443:443/udp"]
     assert services["dashboard"]["environment"]["DATABASE_URL"].startswith("postgresql://")
+    assert services["dashboard"]["environment"]["FORWARDED_ALLOW_IPS"] != "*"
+    assert "AEGIS_SESSION_SECRET" not in services["worker"]["environment"]
+    assert "AEGIS_ADMIN_TOKEN" not in services["worker"]["environment"]
     assert services["proxy"]["depends_on"]["dashboard"]["condition"] == "service_started"
 
 
@@ -154,6 +172,9 @@ def test_security_headers_are_added_to_dynamic_responses():
     assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    assert "script-src-attr 'none'" in response.headers["content-security-policy"]
+    assert "script-src 'self' 'nonce-" in response.headers["content-security-policy"]
+    assert "script-src 'self' 'unsafe-inline'" not in response.headers["content-security-policy"]
 
 
 def test_dashboard_renders_with_current_starlette_template_api():
@@ -170,6 +191,7 @@ def test_production_configuration_fails_closed(monkeypatch):
     monkeypatch.delenv("AEGIS_CORS_ORIGINS", raising=False)
     monkeypatch.delenv("AEGIS_REQUIRE_REDIS", raising=False)
     monkeypatch.delenv("AEGIS_REQUIRE_WORKER", raising=False)
+    monkeypatch.delenv("AEGIS_REQUIRE_NOTIFIER", raising=False)
 
     with pytest.raises(RuntimeError, match="Invalid production configuration"):
         validate_runtime_configuration()
@@ -180,10 +202,17 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "a" * 32)
     monkeypatch.setenv("AEGIS_ALLOWED_HOSTS", "aegis.example.com")
     monkeypatch.setenv("AEGIS_CORS_ORIGINS", "https://aegis.example.com")
+    monkeypatch.setenv("AEGIS_PUBLIC_URL", "https://aegis.example.com")
     monkeypatch.setenv("AEGIS_REQUIRE_REDIS", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_WORKER", "true")
+    monkeypatch.setenv("AEGIS_REQUIRE_NOTIFIER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_AUTH", "true")
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "s" * 32)
+    monkeypatch.setenv("AEGIS_TOKEN_PEPPER", "p" * 32)
+    monkeypatch.setenv("AEGIS_AUDIT_HMAC_KEY", "a" * 32)
+    monkeypatch.setenv(
+        "AEGIS_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    )
     monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "test-password-long")
     monkeypatch.setenv("AEGIS_METRICS_TOKEN", "m" * 32)
     monkeypatch.setenv("DATABASE_URL", "postgresql://aegis:test@db/aegis")
@@ -227,6 +256,17 @@ def test_database_initialization_records_schema_migration(tmp_path, monkeypatch)
     assert rows == [
         (migration.version, migration.name) for migration in database.MIGRATIONS
     ]
+
+
+def test_production_database_does_not_seed_legacy_api_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "production.db")
+    monkeypatch.setattr(database, "USING_POSTGRES", False)
+    monkeypatch.setenv("AEGIS_ENV", "production")
+
+    database.initialize_database(reset=True)
+
+    with database.get_connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
 
 
 def test_completed_job_metadata_is_bounded_and_expires(monkeypatch):
