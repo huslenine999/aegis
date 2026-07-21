@@ -65,6 +65,9 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Set `AEGIS_ARTIFACT_RETENTION_DAYS` to the approved evidence-retention
   period. Run downloads remain authorized by project membership and include
   SHA-256 integrity metadata.
+- Keep `AEGIS_ARTIFACT_BACKEND=local`. This release rejects any other value so
+  an environment variable cannot imply an object-storage control that has not
+  been implemented and reviewed.
 - Keep `AEGIS_MULTI_TENANT=false`. Until an external object-storage backend is
   available, deploy one isolated Aegis stack per customer tenant.
 - Generate and protect a unique 32-byte Ed25519 seed for

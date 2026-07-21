@@ -13,7 +13,19 @@ Aegis is positioned for small engineering teams that need a private, explainable
 release-security decision without buying a large AppSec platform. The public
 product overview and founding-pilot offer are available at `/welcome` when the
 workbench is running. See [docs/MONETIZATION.md](docs/MONETIZATION.md) for the
-recommended customer profile, offer ladder, and path to paid hosted plans.
+recommended customer profile, offer ladder, and path to paid hosted plans. The
+operator workflow and measurable pilot exit criteria are in
+[docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md).
+
+The product's primary workflow is deliberately narrow:
+
+1. connect one approved repository;
+2. run a repeatable release policy;
+3. explain every allowed, blocked, or operational-error decision; and
+4. export signed evidence that another person can verify independently.
+
+The supported commercial topology is one isolated deployment per customer.
+Public shared multi-tenant hosting is not offered by this release.
 
 ## Highlights
 

@@ -1,13 +1,20 @@
 import os
 import sys
 
-try:
-    from .evidence import evidence_public_key
-except ImportError:
-    from evidence import evidence_public_key
+from .evidence import evidence_public_key
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+FORBIDDEN_PRODUCTION_SECRETS = {
+    "AEGIS_ADMIN_TOKEN",
+    "AEGIS_AUDIT_HMAC_KEY",
+    "AEGIS_BOOTSTRAP_ADMIN_PASSWORD",
+    "AEGIS_METRICS_TOKEN",
+    "AEGIS_SESSION_SECRET",
+    "AEGIS_SETUP_TOKEN",
+    "AEGIS_SMTP_PASSWORD",
+    "AEGIS_TOKEN_PEPPER",
+}
 
 
 def validate_worker_configuration() -> None:
@@ -25,6 +32,15 @@ def validate_worker_configuration() -> None:
         raise RuntimeError(
             "AEGIS_ENABLE_SAFETY requires a licensed SAFETY_API_KEY on the worker."
         )
+    if os.environ.get("AEGIS_ENV", "development").lower() == "production":
+        exposed = sorted(
+            name for name in FORBIDDEN_PRODUCTION_SECRETS if os.environ.get(name)
+        )
+        if exposed:
+            raise RuntimeError(
+                "Production scanner workers must not receive dashboard or notifier "
+                "secrets: " + ", ".join(exposed)
+            )
 
 
 def main() -> None:

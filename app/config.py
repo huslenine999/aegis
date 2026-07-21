@@ -103,6 +103,12 @@ def validate_runtime_configuration() -> None:
     environment = os.environ.get("AEGIS_ENV", "development").strip().lower()
     if environment not in {"development", "test", "production"}:
         raise RuntimeError("AEGIS_ENV must be development, test, or production.")
+    artifact_backend = os.environ.get("AEGIS_ARTIFACT_BACKEND", "local").strip().lower()
+    if artifact_backend != "local":
+        raise RuntimeError(
+            "AEGIS_ARTIFACT_BACKEND must be local in this build. External object "
+            "storage requires a reviewed backend implementation."
+        )
     security_profile = os.environ.get("AEGIS_SECURITY_PROFILE", "standard").strip().lower()
     if security_profile not in {"standard", "bank"}:
         raise RuntimeError("AEGIS_SECURITY_PROFILE must be standard or bank.")
@@ -194,7 +200,7 @@ def validate_runtime_configuration() -> None:
         )
     if environment_bool("AEGIS_MULTI_TENANT"):
         errors.append(
-            "AEGIS_MULTI_TENANT must remain false until an external tenant-scoped object storage backend is configured"
+            "AEGIS_MULTI_TENANT must remain false while AEGIS_ARTIFACT_BACKEND=local"
         )
     if not os.environ.get("DATABASE_URL", "").startswith(("postgresql://", "postgres://")):
         errors.append("DATABASE_URL must use PostgreSQL")

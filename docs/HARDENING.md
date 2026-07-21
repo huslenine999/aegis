@@ -25,6 +25,9 @@ not considered complete merely because an environment variable exists.
 ### Scan and artifact trust
 
 - New project artifacts use tenant/project/run-scoped filesystem paths.
+- `AEGIS_ARTIFACT_BACKEND` accepts only `local` in this build, and production
+  rejects multi-tenant mode with that backend. Unsupported storage values fail
+  startup instead of creating a decorative assurance claim.
 - Artifact metadata includes SHA-256 size and integrity records.
 - Scan manifests are signed with Ed25519 and contain source identity, revision,
   policy digest, scanner state, operational failures, and artifact hashes.
@@ -62,6 +65,9 @@ not considered complete merely because an environment variable exists.
 - Asynchronous scan completion only enqueues notification work. SMTP and
   outbound notification credentials live in a separate notifier service, not
   the scanner worker.
+- Production scanner and notifier entrypoints reject secrets owned by the other
+  service boundaries. This catches accidental Compose or secret-manager
+  expansion before either worker accepts jobs.
 - Production configuration refuses unauthenticated exposure, wildcard hosts or
   origins, SQLite, missing Redis/workers, and unsafe multi-tenant mode.
 - Audit events form a per-tenant HMAC chain, expose a verification endpoint,

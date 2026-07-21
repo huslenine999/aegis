@@ -2,6 +2,17 @@
 
 Use this checklist before tagging a public release.
 
+Start by generating the consolidated repository-side evidence:
+
+```bash
+python scripts/pilot_readiness.py --output pilot-readiness.json
+```
+
+On a clean Docker-capable rehearsal host with ports 80 and 443 available, run
+`python scripts/pilot_readiness.py --docker-smoke --output pilot-rehearsal.json`.
+The Docker mode uses a unique Compose project, rehearses database recovery and
+service restart, then removes only its temporary containers and volumes.
+
 1. Update versions in `pyproject.toml`, `package.json`, and `CHANGELOG.md`.
 2. Run `python -m py_compile app/main.py app/cli.py app/worker.py app/scanners.py app/demo_lab.py`.
 3. Run `pytest -q --timeout=60 --timeout-method=thread`.

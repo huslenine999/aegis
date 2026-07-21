@@ -89,6 +89,8 @@ files = [
   "app/scanners.py",
   "app/main.py",
   "app/worker.py",
+  "app/worker_entrypoint.py",
+  "app/notifier_entrypoint.py",
   "policy_engine.py",
 ]
 

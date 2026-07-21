@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app import audit, auth, cli, config, database, github_integration, projects, worker
 from app.artifact_storage import run_directory
 from app.evidence import sign_manifest, verify_manifest
+from app.notifier_entrypoint import validate_notifier_configuration
 from app.worker_entrypoint import validate_worker_configuration
 
 
@@ -303,6 +304,30 @@ def test_worker_fails_startup_for_invalid_signing_or_isolation_configuration(
     monkeypatch.delenv("SAFETY_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="SAFETY_API_KEY"):
         validate_worker_configuration()
+
+
+def test_production_workers_reject_cross_boundary_secrets(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.setenv(
+        "AEGIS_EVIDENCE_SIGNING_KEY",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    )
+    monkeypatch.setenv("AEGIS_SESSION_SECRET", "must-not-reach-scanner")
+    with pytest.raises(RuntimeError, match="AEGIS_SESSION_SECRET"):
+        validate_worker_configuration()
+
+    monkeypatch.delenv("AEGIS_SESSION_SECRET")
+    monkeypatch.setenv("AEGIS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNING_KEY", "must-not-reach-notifier")
+    with pytest.raises(RuntimeError, match="AEGIS_EVIDENCE_SIGNING_KEY"):
+        validate_notifier_configuration()
+
+
+def test_unsupported_artifact_backend_fails_closed(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "development")
+    monkeypatch.setenv("AEGIS_ARTIFACT_BACKEND", "s3")
+    with pytest.raises(RuntimeError, match="must be local"):
+        config.validate_runtime_configuration()
 
 
 def test_recent_authentication_can_be_refreshed(tmp_path, monkeypatch):

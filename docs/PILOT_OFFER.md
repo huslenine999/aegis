@@ -28,6 +28,10 @@ custom scanner development, and production access to customer secrets.
 - False-positive disposition and accepted-risk suppressions are recorded.
 - The customer names an economic buyer and agrees whether to convert by day 30.
 
+Use `docs/PILOT_RUNBOOK.md` as the operating checklist and scorecard. A pilot is
+not complete until every required metric has an owner, source, baseline, and
+day-30 result; anecdotes alone are not a conversion decision.
+
 ## Commercial experiment
 
 Quote a fixed paid pilot rather than free consulting. Record the proposed price,

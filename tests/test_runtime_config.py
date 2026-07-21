@@ -149,7 +149,9 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_REDIS"] == "true"
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_WORKER"] == "true"
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_NOTIFIER"] == "true"
+    assert services["dashboard"]["environment"]["AEGIS_ARTIFACT_BACKEND"] == "${AEGIS_ARTIFACT_BACKEND:-local}"
     assert services["worker"]["environment"]["AEGIS_DATA_DIR"] == "/data"
+    assert services["worker"]["environment"]["AEGIS_ARTIFACT_BACKEND"] == "${AEGIS_ARTIFACT_BACKEND:-local}"
     assert "AEGIS_SMTP_PASSWORD" not in services["dashboard"]["environment"]
     assert "AEGIS_SMTP_PASSWORD" not in services["worker"]["environment"]
     assert "AEGIS_SMTP_PASSWORD" in services["notifier"]["environment"]
@@ -161,6 +163,11 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["dashboard"]["environment"]["FORWARDED_ALLOW_IPS"] != "*"
     assert "AEGIS_SESSION_SECRET" not in services["worker"]["environment"]
     assert "AEGIS_ADMIN_TOKEN" not in services["worker"]["environment"]
+    assert services["notifier"]["command"][:3] == [
+        "python",
+        "-m",
+        "app.notifier_entrypoint",
+    ]
     assert services["proxy"]["depends_on"]["dashboard"]["condition"] == "service_started"
 
 
