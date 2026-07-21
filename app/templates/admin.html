@@ -3,22 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Operations | Aegis</title>
-  <style>
-    :root{color-scheme:dark;font-family:system-ui,sans-serif;--bg:#090c0a;--panel:#121713;--line:#344037;--ink:#edf5ee;--muted:#a5b0a6;--accent:#c7ff3d;--danger:#ff736c}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}header{display:flex;justify-content:space-between;padding:1rem 1.5rem;border-bottom:1px solid var(--line)}a{color:var(--accent);text-decoration:none}main{max-width:1200px;margin:auto;padding:1.5rem}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.panel{border:1px solid var(--line);background:var(--panel);padding:1rem;border-radius:10px}.wide{grid-column:1/-1}.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}.spread{justify-content:space-between}input,select,button{font:inherit;padding:.6rem;border:1px solid var(--line);border-radius:5px;background:#080b09;color:var(--ink)}button{cursor:pointer}button.primary{background:var(--accent);color:#101408;font-weight:700}.item{padding:.7rem 0;border-top:1px solid var(--line)}.muted,small{color:var(--muted)}.status{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem}.metric{padding:.7rem;background:#090c0a;border-radius:6px}.metric strong{display:block;color:var(--accent)}pre{max-height:25rem;overflow:auto;white-space:pre-wrap;color:#bdc9be}#error{color:var(--danger)}#notice{color:var(--accent)}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.status{grid-template-columns:1fr}}
-  </style>
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
 </head>
-<body>
-  <header><a href="/">Aegis Operations</a><nav class="row"><a href="/projects">Projects</a><a href="/">Dashboard</a></nav></header>
-  <main>
-    <h1>Administration and operations</h1>
-    <p class="muted">Manage access, inspect health, and review security-sensitive activity.</p>
-    <p id="notice" role="status" aria-live="polite"></p><p id="error" role="alert"></p>
+<body class="app-page">
+  <div class="app-shell">
+    <aside class="app-sidebar" aria-label="Primary navigation">
+      <a class="brand-lockup" href="/projects"><span>Aegis<small>Security workbench</small></span></a>
+      <nav class="app-nav"><span class="app-nav-label">Workspace</span><a href="/projects"><span>Projects</span></a><a href="/account/security"><span>Account security</span></a><a class="active" href="/admin" aria-current="page"><span>Operations</span></a></nav>
+    </aside>
+    <div class="app-main">
+      <header class="app-topbar"><div class="topbar-context"><small>Administrative boundary</small><strong>Operations</strong></div><button id="refresh" class="primary" type="button">Refresh diagnostics</button></header>
+      <main class="app-content">
+        <header class="page-heading"><div><span class="eyebrow">Operations</span><h1>Administration and audit.</h1><p>Manage access, inspect runtime health, and review security-sensitive activity.</p></div></header>
+        <div class="notice-region"><p id="notice" role="status" aria-live="polite"></p><p id="error" role="alert"></p></div>
     <div class="grid">
-      <section class="panel wide"><div class="row spread"><h2>Diagnostics</h2><button id="refresh">Refresh</button></div><div id="diagnostics" class="status"></div></section>
-      <section class="panel">
+      <section class="panel section-card wide"><div class="section-heading"><div><h2>Diagnostics</h2><p>Current dependency and service readiness.</p></div></div><div id="diagnostics" class="status"></div></section>
+      <section class="panel section-card">
         <h2>Users</h2>
         <form id="user-form" class="row">
           <input id="username" aria-label="New username" placeholder="username" required>
@@ -28,15 +31,17 @@
         </form>
         <div id="users"></div>
       </section>
-      <section class="panel">
+      <section class="panel section-card">
         <h2>API tokens</h2>
         <p class="muted">Tokens are displayed once when issued.</p>
         <div id="tokens"></div>
       </section>
-      <section class="panel wide"><h2>Audit events</h2><div id="audit"></div></section>
-      <section class="panel wide"><h2>Recent HTTP requests</h2><pre id="requests" tabindex="0" aria-label="Recent HTTP request log"></pre></section>
+      <section class="panel section-card wide"><h2>Audit events</h2><p class="muted">Append-only security-sensitive actions.</p><div id="audit"></div></section>
+      <section class="panel section-card wide"><h2>Recent HTTP requests</h2><p class="muted">Operational request trail with correlation identifiers.</p><pre id="requests" tabindex="0" aria-label="Recent HTTP request log"></pre></section>
     </div>
-  </main>
+      </main>
+    </div>
+  </div>
   <script nonce="{{ request.state.csp_nonce }}">
     let csrf="";const el=(id)=>document.getElementById(id);const esc=(v)=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
     async function api(url,options={}){const headers=new Headers(options.headers||{});if(!["GET","HEAD","OPTIONS"].includes(String(options.method||"GET").toUpperCase()))headers.set("X-CSRF-Token",csrf);if(options.body)headers.set("Content-Type","application/json");const response=await fetch(url,{...options,headers,credentials:"same-origin"});if(response.status===401)location.assign("/login");return response}

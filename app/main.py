@@ -350,7 +350,19 @@ def index(request: Request):
         return RedirectResponse("/setup", status_code=303)
     if AUTH_REQUIRED and not principal_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse(request, "index.html")
+    return RedirectResponse("/projects", status_code=303)
+
+
+@app.get("/lab", response_class=HTMLResponse)
+def threat_lab(request: Request):
+    """Keep the intentionally theatrical demo surface separate from project work."""
+    if setup_is_available():
+        return RedirectResponse("/setup", status_code=303)
+    if AUTH_REQUIRED and not principal_from_request(request):
+        return RedirectResponse("/login", status_code=303)
+    if not DEMO_LAB_ENABLED:
+        raise HTTPException(status_code=404, detail="Threat Lab is not enabled.")
+    return templates.TemplateResponse(request, "index.html", {"threat_lab": True})
 
 
 @app.get("/welcome", response_class=HTMLResponse)
@@ -764,7 +776,11 @@ def _enqueue_project_scan(
 def projects_page(request: Request):
     if AUTH_REQUIRED and not principal_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse(request, "projects.html")
+    return templates.TemplateResponse(
+        request,
+        "projects.html",
+        {"demo_lab_enabled": DEMO_LAB_ENABLED},
+    )
 
 
 @app.get("/admin", response_class=HTMLResponse)

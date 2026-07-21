@@ -21,6 +21,13 @@
     --aegis-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 }
 
+/* The theatrical overlays belong to the isolated Threat Lab, but must remain
+   behind its actual controls and evidence panels. */
+body.threat-lab-page::before { z-index: 2; }
+body.threat-lab-page::after { z-index: 1; }
+body.threat-lab-page #bg-canvas { z-index: 0; }
+body.threat-lab-page .container { z-index: 3; }
+
 .sr-only {
     position: absolute;
     width: 1px;

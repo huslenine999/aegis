@@ -3,148 +3,152 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Aegis project security workbench for release decisions, findings, policy, and evidence.">
+  <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
-  <title>Projects | Aegis</title>
-  <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; --bg:#090c0a; --panel:#121713; --line:#344037; --ink:#edf5ee; --muted:#a5b0a6; --accent:#c7ff3d; --danger:#ff736c; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--ink); }
-    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.5rem; border-bottom:1px solid var(--line); }
-    header a { color:var(--accent); text-decoration:none; font-weight:700; }
-    main { max-width:1200px; margin:auto; padding:1.5rem; }
-    .heading { display:flex; justify-content:space-between; align-items:end; gap:1rem; margin-bottom:1.5rem; }
-    h1,h2,h3 { margin:.2rem 0 .6rem; }
-    p { color:var(--muted); }
-    .layout { display:grid; grid-template-columns:minmax(17rem, .8fr) minmax(0, 1.5fr); gap:1rem; }
-    .panel { border:1px solid var(--line); background:var(--panel); padding:1rem; border-radius:8px; }
-    .onboarding { border-color:#708047; background:#151b12; margin-bottom:1rem; }
-    .stack { display:grid; gap:.75rem; }
-    label { display:grid; gap:.35rem; color:var(--muted); font-size:.9rem; }
-    input,select,button { font:inherit; }
-    input,select { width:100%; padding:.7rem; background:#080b09; color:var(--ink); border:1px solid #59655b; border-radius:6px; }
-    button,.button { border:1px solid var(--line); background:#202820; color:var(--ink); padding:.65rem .85rem; border-radius:6px; cursor:pointer; text-decoration:none; }
-    button.primary,.button.primary { background:var(--accent); color:#101408; border-color:var(--accent); font-weight:700; }
-    button.danger { color:var(--danger); }
-    button:disabled { opacity:.55; cursor:not-allowed; }
-    .project { width:100%; text-align:left; display:grid; gap:.25rem; }
-    .project.active { border-color:var(--accent); }
-    .project small,.muted { color:var(--muted); }
-    .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-    .spread { justify-content:space-between; }
-    .badge { display:inline-block; padding:.2rem .45rem; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:.75rem; }
-    .scan { border-top:1px solid var(--line); padding:.8rem 0; display:grid; gap:.4rem; }
-    .progress { height:6px; background:#252c26; overflow:hidden; border-radius:6px; }
-    .progress span { display:block; height:100%; background:var(--accent); }
-    #notice { min-height:1.4rem; color:var(--accent); }
-    #error { min-height:1.4rem; color:var(--danger); }
-    .preset-note { min-width:13rem; max-width:24rem; color:var(--muted); }
-    dialog { width:min(34rem,calc(100% - 2rem)); background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; }
-    @media(max-width:760px){ .layout{grid-template-columns:1fr} .heading{align-items:start;flex-direction:column} }
-  </style>
+  <title>Security workbench | Aegis</title>
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
 </head>
-<body>
-  <header>
-    <a href="/">Aegis Security Workbench</a>
-    <div class="row">
-      <span id="identity" class="muted"></span>
-      <a class="button" href="/">Dashboard</a>
-    </div>
-  </header>
-  <main>
-    <div class="heading">
-      <div><span class="badge">Project workspace</span><h1>Projects</h1><p>Keep repositories, scan history, and findings separated.</p></div>
-      <div class="row">
-        <a id="github-connect" class="button" href="/api/github/connect">Connect GitHub</a>
-        <button id="new-project" class="primary">New project</button>
+<body class="app-page">
+  <a class="skip-link" href="#workspace-content">Skip to workspace</a>
+  <div class="app-shell">
+    <aside class="app-sidebar" aria-label="Primary navigation">
+      <a class="brand-lockup" href="/projects"><span>Aegis<small>Security workbench</small></span></a>
+      <nav class="app-nav">
+        <span class="app-nav-label">Workspace</span>
+        <a class="active" href="/projects" aria-current="page"><span>Projects</span></a>
+        <a href="/account/security"><span>Account security</span></a>
+        <a href="/admin"><span>Operations</span></a>
+        {% if demo_lab_enabled %}<a href="/lab"><span>Threat Lab</span></a>{% endif %}
+      </nav>
+      <div class="app-sidebar-footer">
+        <div class="identity-card"><strong id="identity">Loading identity…</strong><small>Authenticated workspace</small></div>
       </div>
-    </div>
-    <p id="notice" role="status" aria-live="polite"></p>
-    <p id="error" role="alert" aria-live="assertive"></p>
-    <section id="onboarding" class="panel onboarding" hidden>
-      <div class="row spread">
-        <div>
-          <span class="badge">Start here</span>
-          <h2>Run the first scan</h2>
-          <p id="onboarding-copy">Create or import a project, then start a quick scan.</p>
-        </div>
-        <div class="row">
-          <button id="onboarding-create">Create project</button>
-          <button id="onboarding-scan" class="primary" disabled>Start quick scan</button>
-        </div>
-      </div>
-    </section>
-    <div class="layout">
-      <section class="panel">
-        <div class="row spread"><h2>Your projects</h2><span id="project-count" class="badge">0</span></div>
-        <div id="projects" class="stack"><p>No projects yet.</p></div>
-        <section id="github-repositories" hidden>
-          <hr>
-          <h3>Import from GitHub</h3>
-          <div id="repositories" class="stack"></div>
-        </section>
-      </section>
-      <section class="panel" aria-live="polite">
-        <div id="empty-project"><h2>Select a project</h2><p>Choose a project to review history or start a scan.</p></div>
-        <div id="project-detail" hidden>
-          <div class="row spread">
-            <div><h2 id="project-name"></h2><p id="project-repository"></p></div>
-            <span id="project-role" class="badge"></span>
-          </div>
-          <div class="row">
-            <label>Scan preset
-              <select id="scan-preset">
-                <option value="quick">Quick — local/dev feedback</option>
-                <option value="standard">Standard — PR gate</option>
-                <option value="deep">Deep — requires isolated Docker/Trivy worker</option>
-              </select>
-            </label>
-            <span id="preset-note" class="preset-note">Standard checks are recommended for pull requests.</span>
-            <button id="start-scan" class="primary">Start scan</button>
-            <button id="save-project">Save settings</button>
-            <button id="delete-project" class="danger">Delete project</button>
-          </div>
-          <h3>Scan history</h3>
-          <div id="scan-history"><p>No scans yet.</p></div>
-          <h3>Security findings</h3>
-          <div id="findings"><p>No durable findings yet.</p></div>
-          <h3>Policy versions</h3>
-          <form id="policy-form" class="row">
-            <input id="policy-name" aria-label="Policy name" placeholder="High severity gate" required>
-            <select id="policy-threshold" aria-label="Blocking threshold">
-              <option value="medium">Medium and above</option>
-              <option value="high">High and critical</option>
-              <option value="critical">Critical only</option>
-            </select>
-            <button>Create draft</button>
-          </form>
-          <div id="policies"></div>
-          <h3>Members</h3>
-          <form id="member-form" class="row">
-            <input id="member-username" aria-label="Member username" placeholder="username" required>
-            <select id="member-role" aria-label="Project role"><option>viewer</option><option>operator</option><option>admin</option></select>
-            <button>Add or update</button>
-          </form>
-          <div id="members"></div>
-          <h3>Notifications</h3>
-          <form id="notification-form" class="row">
-            <input id="notification-name" aria-label="Notification name" placeholder="Security alerts" required>
-            <select id="notification-type" aria-label="Notification type"><option>slack</option><option>teams</option><option>webhook</option><option>email</option></select>
-            <input id="notification-destination" aria-label="Webhook URL or email" placeholder="HTTPS webhook URL" required>
-            <button>Add</button>
-          </form>
-          <div id="notifications"></div>
-        </div>
-      </section>
-    </div>
-  </main>
+    </aside>
 
-  <dialog id="project-dialog">
-    <form id="project-form" class="stack">
-      <h2>Create project</h2>
+    <div class="app-main">
+      <header class="app-topbar">
+        <div class="topbar-context"><small>Private release security</small><strong id="workspace-context">Choose a project to begin</strong></div>
+        <div class="row">
+          <a id="github-connect" class="button subtle" href="/api/github/connect">Connect GitHub</a>
+          <button id="new-project" class="primary" type="button">New project</button>
+        </div>
+      </header>
+
+      <main id="workspace-content" class="app-content" tabindex="-1">
+        <header class="page-heading">
+          <div><span class="eyebrow">Project workbench</span><h1>Release security, in context.</h1><p>Scan approved repositories, make the deployment decision obvious, and move every finding toward an owner and outcome.</p></div>
+        </header>
+
+        <div class="notice-region"><p id="notice" role="status" aria-live="polite"></p><p id="error" role="alert" aria-live="assertive"></p></div>
+
+        <section id="onboarding" class="panel onboarding" hidden>
+          <div><span class="eyebrow">Start here</span><h2>Generate your first release decision</h2><p id="onboarding-copy">Create or import a project, then start a quick scan.</p></div>
+          <div class="row"><button id="onboarding-create" type="button">Create project</button><button id="onboarding-scan" class="primary" type="button" disabled>Start quick scan</button></div>
+        </section>
+
+        <div class="workspace-layout">
+          <aside class="panel project-rail" aria-label="Projects">
+            <div class="section-heading"><div><h2>Your projects</h2><p>Repository boundaries stay separate.</p></div><span id="project-count" class="badge">0</span></div>
+            <div id="projects" class="project-list stack"><div class="empty-state"><strong>No projects yet</strong>Create one or connect GitHub.</div></div>
+            <section id="github-repositories" hidden>
+              <div class="section-heading" style="margin-top:20px"><div><h3>Import from GitHub</h3></div></div>
+              <div id="repositories" class="stack"></div>
+            </section>
+          </aside>
+
+          <section class="project-workspace" aria-live="polite">
+            <div id="empty-project" class="panel empty-state"><strong>Select a project</strong>Choose a repository to review its release decision, findings, and evidence.</div>
+            <div id="project-detail" hidden>
+              <div class="project-hero">
+                <article class="panel project-intro">
+                  <span class="eyebrow">Active project</span>
+                  <h2 id="project-name"></h2>
+                  <p id="project-repository"></p>
+                  <div class="project-meta"><span id="project-branch" class="badge">main</span><span id="project-role" class="badge"></span><span id="project-preset" class="badge">standard</span></div>
+                </article>
+                <article class="panel release-decision" aria-labelledby="decision-title">
+                  <small id="decision-title">Latest release decision</small>
+                  <strong id="release-decision">Not evaluated</strong>
+                  <p id="release-reason">Run a scan to bind evidence to the current policy.</p>
+                </article>
+              </div>
+
+              <section class="panel summary-grid" aria-label="Project security summary">
+                <div class="summary-metric"><span>Open findings</span><strong id="summary-open">0</strong><small>Requires triage</small></div>
+                <div class="summary-metric"><span>Blockers</span><strong id="summary-blockers">0</strong><small>High and critical</small></div>
+                <div class="summary-metric"><span>New findings</span><strong id="summary-new">0</strong><small>Latest scan delta</small></div>
+                <div class="summary-metric"><span>Last scan</span><strong id="summary-last">—</strong><small id="summary-last-note">No evidence yet</small></div>
+              </section>
+
+              <nav class="workspace-tabs" role="tablist" aria-label="Project sections">
+                <button type="button" role="tab" aria-selected="true" aria-controls="panel-overview" data-workspace-tab="overview">Overview</button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="panel-findings" data-workspace-tab="findings">Findings</button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="panel-policy" data-workspace-tab="policy">Policy</button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="panel-team" data-workspace-tab="team">Team & alerts</button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="panel-settings" data-workspace-tab="settings">Settings</button>
+              </nav>
+
+              <div id="panel-overview" class="workspace-section" role="tabpanel" data-workspace-panel="overview">
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Scan history</h2><p>Every decision remains bound to its evidence and policy version.</p></div><button id="start-scan" class="primary" type="button">Run scan</button></div>
+                  <div id="scan-history"><div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div></div>
+                </section>
+              </div>
+
+              <div id="panel-findings" class="workspace-section" role="tabpanel" data-workspace-panel="findings" hidden>
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Actionable findings</h2><p>Prioritize release blockers, assign ownership, and record the outcome.</p></div></div>
+                  <div class="toolbar"><input id="findings-search" type="search" aria-label="Search findings" placeholder="Search rule, file, scanner, or title"><select id="findings-severity" aria-label="Filter by severity"><option value="all">All severities</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option></select><select id="findings-status" aria-label="Filter by status"><option value="active">Open and acknowledged</option><option value="all">All statuses</option><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="accepted">Accepted risk</option><option value="false_positive">False positive</option><option value="resolved">Resolved</option></select></div>
+                  <div id="findings"><div class="empty-state"><strong>No durable findings yet</strong>Complete a scan to populate the remediation queue.</div></div>
+                </section>
+              </div>
+
+              <div id="panel-policy" class="workspace-section" role="tabpanel" data-workspace-panel="policy" hidden>
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Policy versions</h2><p>Draft, review, and approve immutable release gates.</p></div></div>
+                  <form id="policy-form" class="form-grid">
+                    <label>Policy name<input id="policy-name" placeholder="High severity gate" required></label>
+                    <label>Blocking threshold<select id="policy-threshold"><option value="medium">Medium and above</option><option value="high">High and critical</option><option value="critical">Critical only</option></select></label>
+                    <div class="full row"><button type="submit">Create draft</button></div>
+                  </form>
+                  <div id="policies"></div>
+                </section>
+              </div>
+
+              <div id="panel-team" class="workspace-section" role="tabpanel" data-workspace-panel="team" hidden>
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Members</h2><p>Keep project access explicit and least-privileged.</p></div></div>
+                  <form id="member-form" class="form-grid"><label>Username<input id="member-username" placeholder="username" required></label><label>Project role<select id="member-role"><option>viewer</option><option>operator</option><option>admin</option></select></label><div class="full row"><button type="submit">Add or update</button></div></form>
+                  <div id="members"></div>
+                </section>
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Notifications</h2><p>Send scan outcomes to the team’s existing workflow.</p></div></div>
+                  <form id="notification-form" class="form-grid"><label>Channel name<input id="notification-name" placeholder="Security alerts" required></label><label>Channel type<select id="notification-type"><option>slack</option><option>teams</option><option>webhook</option><option>email</option></select></label><label class="full">Destination<input id="notification-destination" placeholder="HTTPS webhook URL" required></label><div class="full row"><button type="submit">Add channel</button></div></form>
+                  <div id="notifications"></div>
+                </section>
+              </div>
+
+              <div id="panel-settings" class="workspace-section" role="tabpanel" data-workspace-panel="settings" hidden>
+                <section class="panel section-card">
+                  <div class="section-heading"><div><h2>Project settings</h2><p>Choose the default scan depth for this repository.</p></div></div>
+                  <div class="form-grid"><label>Scan preset<select id="scan-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard">Standard — PR gate</option><option value="deep">Deep — isolated worker required</option></select></label><div><span id="preset-note" class="muted">Standard checks are recommended for pull requests.</span></div><div class="full row"><button id="save-project" type="button">Save settings</button><button id="delete-project" class="danger" type="button">Delete project</button></div></div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="project-dialog" aria-labelledby="project-dialog-title">
+    <form id="project-form" class="dialog-content stack">
+      <div><span class="eyebrow">New boundary</span><h2 id="project-dialog-title">Create project</h2><p class="muted">Connect one repository to its own policy, evidence, and remediation queue.</p></div>
       <label>Project name<input id="create-name" maxlength="128" required></label>
       <label>GitHub HTTPS URL<input id="create-repository" type="url" placeholder="https://github.com/org/repository.git"></label>
       <label>Default branch<input id="create-branch" value="main" required></label>
-      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — requires isolated worker</option></select></label>
+      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — isolated worker required</option></select></label>
       <div class="row"><button class="primary" type="submit">Create</button><button id="close-dialog" type="button">Cancel</button></div>
     </form>
   </dialog>
@@ -153,6 +157,10 @@
     let csrf = "";
     let projects = [];
     let selected = null;
+    let currentIdentity = null;
+    let cachedFindings = [];
+    let cachedScans = [];
+    let currentMembers = [];
     const presetNotes = {
       quick: "Quick is for local/dev feedback: fastest checks while coding.",
       standard: "Standard is for PR gates: static, dependency, secret, and signature checks.",
@@ -172,6 +180,18 @@
     function message(text, error = false) {
       byId(error ? "error" : "notice").textContent = text;
       if (!error) byId("error").textContent = "";
+      window.clearTimeout(message.timer);
+      message.timer = window.setTimeout(() => {
+        if (byId(error ? "error" : "notice").textContent === text) byId(error ? "error" : "notice").textContent = "";
+      }, 6000);
+    }
+    function formatDate(value, compact = false) {
+      if (!value) return "—";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat(undefined, compact
+        ? {month:"short", day:"numeric"}
+        : {dateStyle:"medium", timeStyle:"short"}).format(date);
     }
     function updatePresetNote() {
       byId("preset-note").textContent = presetNotes[byId("scan-preset").value] || presetNotes.standard;
@@ -188,6 +208,7 @@
     async function loadIdentity() {
       const response = await api("/api/auth/me");
       const identity = await response.json();
+      currentIdentity = identity;
       csrf = identity.csrf_token || "";
       byId("identity").textContent = `${identity.username} · ${identity.role}`;
     }
@@ -199,10 +220,11 @@
         <button class="project ${selected?.id === project.id ? "active" : ""}" data-project="${project.id}">
           <strong>${escapeHtml(project.name)}</strong>
           <small>${escapeHtml(project.github_full_name || project.repository_url || "Local project")} · ${escapeHtml(project.scan_preset)}</small>
-        </button>`).join("") : "<p>No projects yet.</p>";
+        </button>`).join("") : '<div class="empty-state"><strong>No projects yet</strong>Create one or connect GitHub.</div>';
       document.querySelectorAll("[data-project]").forEach((button) => button.onclick = () => selectProject(Number(button.dataset.project)));
       if (!selected && projects.length) {
-        await selectProject(projects[0].id);
+        const requested = Number(new URLSearchParams(location.search).get("project"));
+        await selectProject(projects.some((project) => project.id === requested) ? requested : projects[0].id);
         return;
       }
       updateOnboarding();
@@ -214,31 +236,78 @@
       byId("project-detail").hidden = false;
       byId("project-name").textContent = selected.name;
       byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Local project";
-      byId("project-role").textContent = selected.role;
+      byId("project-role").textContent = `${selected.role} access`;
+      byId("project-branch").textContent = selected.default_branch || "main";
+      byId("project-preset").textContent = `${selected.scan_preset} scan`;
+      byId("workspace-context").textContent = `${selected.name} / ${selected.default_branch || "main"}`;
       byId("scan-preset").value = selected.scan_preset;
       byId("save-project").hidden = selected.role !== "admin";
       byId("delete-project").hidden = selected.role !== "admin";
       updatePresetNote();
       updateOnboarding();
+      const url = new URL(location.href);
+      url.searchParams.set("project", selected.id);
+      history.replaceState(null, "", url);
       await loadProjects();
       await Promise.all([loadScans(), loadFindings(), loadPolicies(), loadMembers(), loadNotifications()]);
     }
     async function loadScans() {
       const response = await api(`/api/projects/${selected.id}/scans`);
-      const scans = (await response.json()).scans || [];
-      byId("scan-history").innerHTML = scans.length ? scans.map((scan) => `
+      cachedScans = (await response.json()).scans || [];
+      byId("scan-history").innerHTML = cachedScans.length ? cachedScans.map((scan) => `
         <article class="scan">
-          <div class="row spread"><strong>${escapeHtml(scan.preset)} scan</strong><span class="badge">${escapeHtml(scan.state)}</span></div>
+          <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state)}</span></div>
           <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
-          <small class="muted">${escapeHtml(scan.created_at)} · ${scan.new_findings} new findings</small>
+          <small class="muted">${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${Number(scan.progress || 0)}% complete</small>
           <div class="row">
             ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
             ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
-            ${["completed","failed"].includes(scan.state) ? `<a href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download bundle</a>` : ""}
+            ${["completed","failed"].includes(scan.state) ? `<a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download evidence</a>` : ""}
           </div>
-        </article>`).join("") : "<p>No scans yet.</p>";
+        </article>`).join("") : '<div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div>';
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
       document.querySelectorAll("[data-retry]").forEach((button) => button.onclick = () => scanAction(button.dataset.retry, "retry"));
+      await updateProjectSummary();
+    }
+    async function updateProjectSummary() {
+      if (!selected) return;
+      const active = cachedFindings.filter((finding) => !["resolved", "false_positive"].includes(finding.status));
+      const blockers = active.filter((finding) => ["HIGH", "CRITICAL"].includes(finding.severity));
+      const latest = cachedScans[0];
+      byId("summary-open").textContent = active.length;
+      byId("summary-blockers").textContent = blockers.length;
+      byId("summary-new").textContent = Number(latest?.new_findings || 0);
+      byId("summary-last").textContent = latest ? formatDate(latest.completed_at || latest.created_at, true) : "—";
+      byId("summary-last-note").textContent = latest ? `${latest.preset} · ${latest.state}` : "No evidence yet";
+      if (!latest) {
+        byId("release-decision").textContent = "Not evaluated";
+        byId("release-reason").textContent = "Run a scan to bind evidence to the current policy.";
+        return;
+      }
+      if (!["completed", "failed", "cancelled"].includes(latest.state)) {
+        byId("release-decision").textContent = "Scan in progress";
+        byId("release-reason").textContent = `${latest.progress}% complete. The decision remains pending until all required evidence arrives.`;
+        return;
+      }
+      if (latest.state !== "completed") {
+        byId("release-decision").textContent = "Evidence unavailable";
+        byId("release-reason").textContent = `The latest scan ${latest.state}; no release approval should be inferred.`;
+        return;
+      }
+      let isBlocked = blockers.length > 0;
+      try {
+        const detailResponse = await api(`/api/projects/${selected.id}/scans/${latest.id}`);
+        if (detailResponse.ok) {
+          const detail = await detailResponse.json();
+          if (typeof detail.result?.is_blocked === "boolean") isBlocked = detail.result.is_blocked;
+        }
+      } catch (_) {
+        // Durable findings remain a conservative fallback when detail is unavailable.
+      }
+      byId("release-decision").textContent = isBlocked ? "Blocked" : "Allowed";
+      byId("release-reason").textContent = isBlocked
+        ? `${blockers.length || "Policy"} blocking finding${blockers.length === 1 ? "" : "s"} require an outcome before release.`
+        : "The latest completed evidence does not contain a policy blocker.";
     }
     async function scanAction(id, action) {
       const response = await api(`/api/scans/${id}/${action}`, {method:"POST"});
@@ -249,24 +318,65 @@
     async function loadFindings() {
       const response = await api(`/api/projects/${selected.id}/findings`);
       if (!response.ok) return;
-      const findings = (await response.json()).findings || [];
+      cachedFindings = (await response.json()).findings || [];
+      renderFindings();
+      await updateProjectSummary();
+    }
+    function filteredFindings() {
+      const query = byId("findings-search").value.trim().toLowerCase();
+      const severity = byId("findings-severity").value;
+      const status = byId("findings-status").value;
+      return cachedFindings.filter((finding) => {
+        const haystack = [finding.title, finding.tool, finding.rule_id, finding.path, finding.owner].join(" ").toLowerCase();
+        const statusMatch = status === "all" || (status === "active" ? ["open", "acknowledged"].includes(finding.status) : finding.status === status);
+        return (!query || haystack.includes(query)) && (severity === "all" || finding.severity === severity) && statusMatch;
+      });
+    }
+    function renderFindings() {
       const canOperate = selected.role !== "viewer";
-      byId("findings").innerHTML = findings.map(finding => `<article class="scan">
-        <div class="row spread"><strong>${escapeHtml(finding.title)}</strong><span><span class="badge">${escapeHtml(finding.severity)}</span> <span class="badge">${escapeHtml(finding.status)}</span></span></div>
-        <small class="muted">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "no rule")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${finding.line_number}` : ""} · seen ${finding.occurrence_count} time(s)</small>
-        <div class="row">
+      const findings = filteredFindings();
+      byId("findings").innerHTML = findings.map(finding => `<article class="finding-row">
+        <div class="finding-head"><div><h3 class="finding-title">${escapeHtml(finding.title)}</h3><div class="finding-meta">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "unclassified")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${Number(finding.line_number)}` : ""}</div></div><div class="finding-context"><span class="badge severity-${escapeHtml(finding.severity.toLowerCase())}">${escapeHtml(finding.severity)}</span><span class="badge">${escapeHtml(finding.status.replaceAll("_", " "))}</span></div></div>
+        <div class="finding-context"><span class="badge">Owner: ${escapeHtml(finding.owner || "unassigned")}</span><span class="badge">Due: ${escapeHtml(finding.due_at ? formatDate(finding.due_at, true) : "not set")}</span><span class="badge">Seen ${Number(finding.occurrence_count)}×</span>${finding.accepted_until ? `<span class="badge">Risk expires ${escapeHtml(formatDate(finding.accepted_until, true))}</span>` : ""}</div>
+        ${finding.resolution_note ? `<p class="muted">${escapeHtml(finding.resolution_note)}</p>` : ""}
+        <div class="row finding-actions">
           ${canOperate && finding.status === "open" ? `<button data-finding-status="${finding.id}:acknowledged">Acknowledge</button>` : ""}
-          ${canOperate && finding.status !== "resolved" ? `<button data-finding-status="${finding.id}:resolved">Mark resolved</button>` : ""}
+          ${canOperate && !["resolved", "false_positive"].includes(finding.status) ? `<button data-finding-status="${finding.id}:resolved">Resolve</button>` : ""}
+          ${canOperate && ["open", "acknowledged"].includes(finding.status) ? `<button data-finding-status="${finding.id}:accepted">Accept risk</button><button data-finding-status="${finding.id}:false_positive">False positive</button>` : ""}
+          ${canOperate && ["resolved", "accepted", "false_positive"].includes(finding.status) ? `<button data-finding-status="${finding.id}:open">Reopen</button>` : ""}
           ${canOperate && selected.github_full_name && !finding.ticket_url ? `<button data-finding-ticket="${finding.id}">Create GitHub issue</button>` : ""}
-          ${finding.ticket_url ? `<a href="${escapeHtml(finding.ticket_url)}" target="_blank" rel="noopener">Remediation ticket</a>` : ""}
+          ${finding.ticket_url ? `<a class="button subtle" href="${escapeHtml(finding.ticket_url)}" target="_blank" rel="noopener">Remediation ticket</a>` : ""}
         </div>
-      </article>`).join("") || "<p class='muted'>No durable findings yet. Complete a scan to populate this queue.</p>";
+        ${canOperate ? `<div class="row"><select data-finding-owner="${finding.id}" aria-label="Owner for ${escapeHtml(finding.title)}"><option value="">Unassigned</option>${currentMembers.map(member => `<option value="${Number(member.user_id)}" ${Number(finding.owner_id) === Number(member.user_id) ? "selected" : ""}>${escapeHtml(member.username)}</option>`).join("")}</select><input data-finding-due="${finding.id}" type="date" aria-label="Due date for ${escapeHtml(finding.title)}" value="${finding.due_at ? escapeHtml(finding.due_at.slice(0, 10)) : ""}"><button data-save-assignment="${finding.id}">Save owner & due date</button></div>` : ""}
+      </article>`).join("") || '<div class="empty-state"><strong>No findings match</strong>Adjust the filters or run a scan to populate the queue.</div>';
       document.querySelectorAll("[data-finding-status]").forEach(button => button.onclick = async () => {
         const [id, status] = button.dataset.findingStatus.split(":");
-        const response = await api(`/api/projects/${selected.id}/findings/${id}`, {method:"PATCH", body:JSON.stringify({status})});
+        const changes = {status};
+        if (["resolved", "accepted", "false_positive"].includes(status)) {
+          const note = prompt(status === "resolved" ? "Resolution note" : "Document the rationale (at least 12 characters)");
+          if (note === null) return;
+          changes.resolution_note = note;
+        }
+        if (status === "accepted") {
+          const expiry = new Date();
+          expiry.setDate(expiry.getDate() + 30);
+          const acceptedUntil = prompt("Accepted-risk expiration (ISO date)", expiry.toISOString().slice(0, 10));
+          if (!acceptedUntil) return;
+          changes.accepted_until = `${acceptedUntil}T23:59:59Z`;
+        }
+        const response = await api(`/api/projects/${selected.id}/findings/${id}`, {method:"PATCH", body:JSON.stringify(changes)});
         const data = await response.json();
         if (!response.ok) return message(data.detail || "Finding update failed.", true);
         message("Finding updated."); await loadFindings();
+      });
+      document.querySelectorAll("[data-save-assignment]").forEach(button => button.onclick = async () => {
+        const id = button.dataset.saveAssignment;
+        const ownerValue = document.querySelector(`[data-finding-owner="${id}"]`).value;
+        const dueValue = document.querySelector(`[data-finding-due="${id}"]`).value;
+        const response = await api(`/api/projects/${selected.id}/findings/${id}`, {method:"PATCH", body:JSON.stringify({owner_id: ownerValue ? Number(ownerValue) : null, due_at: dueValue ? `${dueValue}T23:59:59Z` : null})});
+        const data = await response.json();
+        if (!response.ok) return message(data.detail || "Assignment update failed.", true);
+        message("Finding owner and due date saved."); await loadFindings();
       });
       document.querySelectorAll("[data-finding-ticket]").forEach(button => button.onclick = async () => {
         const response = await api(`/api/projects/${selected.id}/findings/${button.dataset.findingTicket}/github-issue`, {method:"POST", body:"{}"});
@@ -296,10 +406,12 @@
       const response = await api(`/api/projects/${selected.id}/members`);
       if (!response.ok) return;
       const members = (await response.json()).members || [];
+      currentMembers = members;
       const canAdmin = selected.role === "admin";
       byId("member-form").hidden = !canAdmin;
       byId("members").innerHTML = members.map(member => `<div class="scan row spread"><span>${escapeHtml(member.username)} <small>${escapeHtml(member.role)}</small></span>${canAdmin ? `<button class="danger" data-remove-member="${member.user_id}">Remove</button>` : ""}</div>`).join("") || "<p class='muted'>No members.</p>";
       document.querySelectorAll("[data-remove-member]").forEach(button => button.onclick = () => removeMember(button.dataset.removeMember));
+      renderFindings();
     }
     async function removeMember(userId) {
       const response = await api(`/api/projects/${selected.id}/members/${userId}`, {method:"DELETE"});
@@ -424,6 +536,7 @@
       socket.onmessage = async (event) => {
         const payload = JSON.parse(event.data);
         if (payload.type === "state") await loadScans();
+        if (payload.type === "result") await Promise.all([loadScans(), loadFindings(), loadPolicies()]);
       };
       await loadScans();
     };
@@ -433,6 +546,28 @@
       updatePresetNote();
       byId("start-scan").click();
     };
+    function activateWorkspaceTab(name) {
+      document.querySelectorAll("[data-workspace-tab]").forEach((button) => {
+        const active = button.dataset.workspaceTab === name;
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+      });
+      document.querySelectorAll("[data-workspace-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.workspacePanel !== name;
+      });
+    }
+    const workspaceTabs = Array.from(document.querySelectorAll("[data-workspace-tab]"));
+    workspaceTabs.forEach((button, index) => {
+      button.onclick = () => activateWorkspaceTab(button.dataset.workspaceTab);
+      button.onkeydown = (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? workspaceTabs.length - 1 : event.key === "ArrowRight" ? (index + 1) % workspaceTabs.length : (index - 1 + workspaceTabs.length) % workspaceTabs.length;
+        workspaceTabs[nextIndex].focus();
+        activateWorkspaceTab(workspaceTabs[nextIndex].dataset.workspaceTab);
+      };
+    });
+    ["findings-search", "findings-severity", "findings-status"].forEach((id) => byId(id).addEventListener("input", renderFindings));
     (async () => {
       await loadIdentity();
       await Promise.all([loadProjects(), loadGitHub()]);

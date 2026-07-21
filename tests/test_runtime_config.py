@@ -188,7 +188,8 @@ def test_dashboard_renders_with_current_starlette_template_api():
     response = TestClient(app_main.app).get("/")
 
     assert response.status_code == 200
-    assert "Project Security Dashboard" in response.text
+    assert "Release security, in context." in response.text
+    assert str(response.url).endswith("/projects")
 
 
 def test_production_configuration_fails_closed(monkeypatch):

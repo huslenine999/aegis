@@ -361,13 +361,18 @@ npm ci
 npx playwright install chromium
 ```
 
-Run the complete repository readiness gate:
+Run the complete repository readiness gate with one command:
+
+```bash
+make verify
+```
+
+For a quick local loop without browser tests or mypy, run `make verify-fast`.
+Before a controlled pilot, also generate the operator-facing readiness artifact:
 
 ```bash
 ./venv/bin/python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
-npm run test:e2e
-git diff --check
 ```
 
 The current baseline is:

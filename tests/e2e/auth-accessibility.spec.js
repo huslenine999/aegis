@@ -18,15 +18,14 @@ test("first-run wizard claims the administrator and configures the workspace", a
     await page.getByLabel("Administrator password", { exact: true }).fill("e2e-owner-password");
     await page.getByLabel("Confirm password").fill("e2e-owner-password");
     await page.getByRole("button", { name: "Finish setup" }).click();
-    await expect(page).toHaveURL(/\/projects\?welcome=1$/);
+    await expect(page).toHaveURL(/\/projects\?welcome=1(?:&project=\d+)?$/);
   } else {
     // Serial retries reuse the already-configured server process.
     await expect(page).toHaveURL(/\/login(?:#.*)?$/);
     await page.getByLabel("Username").fill("e2e-owner");
     await page.getByLabel("Password").fill("e2e-owner-password");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/);
-    await page.goto("/projects");
+    await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
   }
   await expect(page.locator("[data-project]").filter({ hasText: "project" })).toBeVisible();
   if (isFirstRun) {
@@ -52,7 +51,7 @@ test("unauthenticated users sign in before accessing reports", async ({ page }) 
 
   await page.getByLabel("Password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
 
   const reportResponse = await page.request.get("/get-scan-results");
   expect(reportResponse.ok()).toBeTruthy();
@@ -66,7 +65,7 @@ test("login and workbench have no serious accessibility violations", async ({ pa
   await page.getByLabel("Username").fill("e2e-owner");
   await page.getByLabel("Password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
   results = await new AxeBuilder({ page }).analyze();
   expect(results.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
 });
@@ -76,7 +75,7 @@ test("viewer, operator, and admin permissions are enforced by the API", async ({
   await page.getByLabel("Username").fill("e2e-owner");
   await page.getByLabel("Password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
 
   const me = await (await page.request.get("/api/auth/me")).json();
   const suffix = Date.now();
@@ -120,8 +119,7 @@ test("project dashboard creates and displays a project accessibly", async ({ pag
   await page.getByLabel("Username").fill("e2e-owner");
   await page.getByLabel("Password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await page.goto("/projects");
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
 
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog");
@@ -140,7 +138,7 @@ test("operations console issues and revokes API tokens accessibly", async ({ pag
   await page.getByLabel("Username").fill("e2e-owner");
   await page.getByLabel("Password").fill("e2e-owner-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
   const me = await (await page.request.get("/api/auth/me")).json();
   const users = await (await page.request.get("/api/users")).json();
   const owner = users.users.find((user) => user.username === "e2e-owner");
@@ -156,7 +154,7 @@ test("operations console issues and revokes API tokens accessibly", async ({ pag
   })).status()).toBe(200);
 
   await page.goto("/admin");
-  await expect(page.getByRole("heading", { name: "Administration and operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Administration and audit." })).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
 });
@@ -180,8 +178,9 @@ test("scanner-controlled filenames remain inert text", async ({ page }) => {
     await page.getByLabel("Username").fill("e2e-owner");
     await page.getByLabel("Password").fill("e2e-owner-password");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
   }
+  await page.goto("/lab");
   await expect(page.locator("#uploadFile")).toBeAttached();
   await page.waitForFunction(() => typeof window.addSyslogEntry === "function");
   await page.evaluate(() => { window.AEGIS_XSS_PROBE = 0; });

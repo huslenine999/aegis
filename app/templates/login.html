@@ -3,37 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Sign in | Aegis</title>
-  <style>
-    :root { font-family: system-ui, sans-serif; color-scheme: dark; }
-    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #060a07; color: #e8f5e9; }
-    main { width: min(26rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
-    h1 { margin-top: 0; color: #3dfb57; }
-    label, input, button { display: block; width: 100%; box-sizing: border-box; }
-    label { margin: 1rem 0 .35rem; }
-    input { padding: .75rem; border: 1px solid #55715a; background: #050805; color: inherit; }
-    button,.sso { margin-top: 1.25rem; padding: .8rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; text-align:center; text-decoration:none; }
-    .sso { display:block; border:1px solid #55715a; background:#111a13; color:#e8f5e9; }
-    #error { min-height: 1.5rem; color: #ff6b6b; }
-  </style>
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
 </head>
-<body>
-  <main>
-    <h1>Aegis</h1>
-    <p>Sign in to the security workbench.</p>
-    <p><a href="/welcome" style="color:#a8e6ad">See how Aegis helps small teams ship safely →</a></p>
-    {% if oidc_enabled %}<a class="sso" href="/api/auth/oidc/start">Sign in with your organization</a>{% endif %}
-    <form id="login-form">
-      <label for="username">Username</label>
-      <input id="username" name="username" autocomplete="username" required autofocus>
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <label for="second-factor">Authenticator or recovery code <small>(if enabled)</small></label>
-      <input id="second-factor" name="second-factor" inputmode="numeric" autocomplete="one-time-code">
-      <button type="submit">Sign in</button>
-      <p id="error" role="alert" aria-live="polite"></p>
-    </form>
+<body class="auth-page">
+  <main class="auth-layout">
+    <section class="auth-story" aria-label="Aegis product summary">
+      <div><a class="brand-lockup" href="/welcome"><span>Aegis<small>Private release security</small></span></a><h1>Know what blocks the release—and why.</h1><p>Bring code, dependency, secret, container, and dynamic evidence into one explainable decision without sending private source to another hosted platform.</p></div>
+      <div class="auth-proof"><span>Self-hosted</span><span>Policy-bound</span><span>Auditable evidence</span></div>
+    </section>
+    <section class="auth-card">
+      <span class="eyebrow">Secure workspace</span>
+      <h1>Welcome back.</h1>
+      <p>Sign in to review release decisions and remediation work.</p>
+      {% if oidc_enabled %}<a class="button subtle" href="/api/auth/oidc/start">Continue with your organization</a>{% endif %}
+      <form id="login-form">
+        <label for="username">Username<input id="username" name="username" autocomplete="username" required autofocus></label>
+        <label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+        <label for="second-factor">Authenticator or recovery code <small>(if enabled)</small><input id="second-factor" name="second-factor" inputmode="numeric" autocomplete="one-time-code"></label>
+        <button class="button primary" type="submit">Sign in</button>
+        <p id="error" class="form-message" role="alert" aria-live="polite"></p>
+      </form>
+      <a class="auth-link" href="/welcome">Learn how Aegis protects a release →</a>
+    </section>
   </main>
   <script nonce="{{ request.state.csp_nonce }}">
     document.getElementById("login-form").addEventListener("submit", async (event) => {

@@ -11,12 +11,12 @@ python3 -m venv venv
 ./venv/bin/python -m pip install -e ".[dev,scanner]"
 npm ci
 npx playwright install chromium
-./venv/bin/python -m ruff check app policy_engine.py tests
-./venv/bin/python -m mypy
-./venv/bin/python -m pytest -q --timeout=60 --timeout-method=thread
-npm run test:e2e
-git diff --check
+make verify
 ```
+
+Use `make verify-fast` while iterating when browser coverage is unchanged. The
+full `make verify` target runs linting, type checks, Python tests, Playwright and
+axe checks, and whitespace validation.
 
 New scanners must return a structured tool status, distinguish findings from
 operational failures, write deterministic JSON, and include tests for clean,

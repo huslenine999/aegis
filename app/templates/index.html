@@ -872,12 +872,12 @@
     </style>
     <link rel="stylesheet" href="/static/enhanced-dashboard.css?v=2.5.3">
 </head>
-<body class="view-simple">
+<body class="threat-lab-page">
     <a class="skip-link" href="#workbench-main">Skip to workbench content</a>
     <canvas id="bg-canvas"></canvas>
 
     <nav class="navbar" aria-label="Global navigation">
-        <a class="navbar-brand" href="/" aria-label="Aegis dashboard">
+        <a class="navbar-brand" href="/projects" aria-label="Return to Aegis projects">
             <span class="brand-mark" aria-hidden="true"><span></span></span>
             <span class="brand-copy">
                 <strong>Aegis</strong>
@@ -895,11 +895,8 @@
                 <option value="matrix">THEME: MATRIX DIGITAL RAIN</option>
                 </select>
             </div>
-            <a href="/health" class="system-health"><span aria-hidden="true"></span> Systems nominal</a>
-            <select id="viewSelect" class="view-select" aria-label="Interface mode">
-                <option value="simple">Workbench</option>
-                <option value="tactical">Threat lab</option>
-            </select>
+            <span class="system-health"><span aria-hidden="true"></span> Isolated demo surface</span>
+            <a class="btn btn-secondary" href="/projects">Exit Threat Lab</a>
         </div>
     </nav>
 
@@ -2083,7 +2080,7 @@
         let currentLang = localStorage.getItem('lang') || 'en';
         let explainEnabled = localStorage.getItem('explainMode') === 'true';
         let currentTheme = localStorage.getItem('theme') || 'green';
-        let currentView = localStorage.getItem('view') || 'simple';
+        let currentView = 'tactical';
 
         // Apply Theme
         function setTheme(theme) {
@@ -2371,7 +2368,7 @@
         document.getElementById('themeSelect').addEventListener('change', (e) => {
             setTheme(e.target.value);
         });
-        document.getElementById('viewSelect').addEventListener('change', (e) => {
+        document.getElementById('viewSelect')?.addEventListener('change', (e) => {
             setView(e.target.value);
         });
 

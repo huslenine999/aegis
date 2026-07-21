@@ -25,6 +25,7 @@ module.exports = defineConfig({
       AEGIS_BOOTSTRAP_ADMIN_USERNAME: "e2e-admin",
       AEGIS_BOOTSTRAP_ADMIN_PASSWORD: "e2e-password-change-me",
       AEGIS_SETUP_TOKEN: "e2e-first-run-setup-token",
+      AEGIS_ENABLE_DEMO_LAB: "true",
       AEGIS_DATA_DIR: e2eDataDirectory,
       AEGIS_LOGIN_RATE_LIMIT_PER_MINUTE: "20",
       AEGIS_SKIP_EXTERNAL_SCANNERS: "true"

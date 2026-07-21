@@ -3,57 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Set up Aegis</title>
-  <style>
-    :root { font-family: system-ui, sans-serif; color-scheme: dark; }
-    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #060a07; color: #e8f5e9; }
-    main { width: min(38rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #3dfb57; background: #0b120d; }
-    h1 { margin-top: 0; color: #3dfb57; }
-    .steps, .hint { color: #aab8ab; }
-    label, input, select, button { display: block; width: 100%; box-sizing: border-box; }
-    label { margin: 1rem 0 .35rem; font-weight: 600; }
-    input, select { padding: .75rem; border: 1px solid #687a6b; background: #050805; color: inherit; }
-    small { display: block; margin-top: .3rem; color: #aab8ab; }
-    button { margin-top: 1.5rem; padding: .85rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: wait; }
-    #error { min-height: 1.5rem; color: #ff7b75; }
-  </style>
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
 </head>
-<body>
-  <main>
-    <p class="steps">First-run setup · guided first scan</p>
-    <h1>Configure Aegis</h1>
-    <p>Claim the administrator account, add the first repository, then run the first scan from Projects.</p>
-    <p><a href="/welcome" style="color:#a8e6ad">Read the product overview →</a></p>
-    <p class="hint">To try Aegis without a repository, run <code>aegis demo</code> in a terminal.</p>
-    <form id="setup-form">
-      <label for="workspace-name">Workspace name</label>
-      <input id="workspace-name" value="My security workspace" maxlength="128" required autofocus>
-
-      <label for="repository">Repository URL or path</label>
-      <input id="repository" placeholder="https://github.com/organization/project">
-      <small>This creates your first project automatically. You can leave it blank and create one next.</small>
-
-      <label for="scan-preset">Default scan depth</label>
-      <select id="scan-preset">
-        <option value="quick">Quick — fastest local feedback</option>
-        <option value="standard" selected>Standard — recommended PR gate</option>
-        <option value="deep">Deep — requires isolated Docker/Trivy worker</option>
-      </select>
-
-      <label for="username">Administrator username</label>
-      <input id="username" value="admin" autocomplete="username" minlength="3" maxlength="128" required>
-
-      <label for="password">Administrator password</label>
-      <input id="password" type="password" autocomplete="new-password" minlength="12" required>
-
-      <label for="confirm-password">Confirm password</label>
-      <input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required>
-
-      <button id="submit" type="submit">Finish setup</button>
-      <p id="error" role="alert" aria-live="polite"></p>
-    </form>
+<body class="auth-page">
+  <main class="auth-layout">
+    <section class="auth-story" aria-label="Setup overview">
+      <div><a class="brand-lockup" href="/welcome"><span>Aegis<small>First-run setup</small></span></a><h1>One repository. One policy. One clear decision.</h1><p>Claim the workspace, connect the first approved repository, and start with a release gate your team can explain.</p></div>
+      <div class="auth-proof"><span>Private boundary</span><span>Least privilege</span><span>Signed evidence</span></div>
+    </section>
+    <section class="auth-card">
+      <span class="eyebrow">First-run setup</span>
+      <h1>Configure Aegis.</h1>
+      <p>Create the administrator and optional first project. You can adjust scan depth later.</p>
+      <form id="setup-form">
+        <label for="workspace-name">Workspace name<input id="workspace-name" value="My security workspace" maxlength="128" required autofocus></label>
+        <label for="repository">Repository URL or path<input id="repository" placeholder="https://github.com/organization/project"><small>Leave blank to create a project after setup.</small></label>
+        <label for="scan-preset">Default scan depth<select id="scan-preset"><option value="quick">Quick — fastest local feedback</option><option value="standard" selected>Standard — recommended PR gate</option><option value="deep">Deep — isolated worker required</option></select></label>
+        <label for="username">Administrator username<input id="username" value="admin" autocomplete="username" minlength="3" maxlength="128" required></label>
+        <label for="password">Administrator password<input id="password" type="password" autocomplete="new-password" minlength="12" required></label>
+        <label for="confirm-password">Confirm password<input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required></label>
+        <button id="submit" class="button primary" type="submit">Finish setup</button>
+        <p id="error" class="form-message" role="alert" aria-live="polite"></p>
+      </form>
+      <a class="auth-link" href="/welcome">Read the product overview →</a>
+    </section>
   </main>
   <script nonce="{{ request.state.csp_nonce }}">
     const token = window.location.hash.slice(1);
