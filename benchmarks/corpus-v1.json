@@ -19,6 +19,18 @@
     {"name":"unsafe-tls-disabled","category":"transport","vulnerable":true,"source":"import requests\n\ndef fetch(url: str):\n    return requests.get(url, verify=False, timeout=5)\n"},
     {"name":"unsafe-hardcoded-password","category":"secrets","vulnerable":true,"source":"def connect():\n    password = \"bank-production-password\"\n    return password\n"},
     {"name":"safe-parameterized-sql","category":"sql-injection","vulnerable":false,"source":"def lookup(cursor, username: str):\n    return cursor.execute(\"SELECT id FROM users WHERE username = ?\", (username,))\n"},
-    {"name":"unsafe-interpolated-sql","category":"sql-injection","vulnerable":true,"source":"def lookup(cursor, username: str):\n    return cursor.execute(f\"SELECT id FROM users WHERE username = '{username}'\")\n"}
+    {"name":"unsafe-interpolated-sql","category":"sql-injection","vulnerable":true,"source":"def lookup(cursor, username: str):\n    return cursor.execute(f\"SELECT id FROM users WHERE username = '{username}'\")\n"},
+    {"name":"safe-file-permissions","category":"filesystem","vulnerable":false,"source":"import os\n\ndef protect(path: str):\n    os.chmod(path, 0o600)\n"},
+    {"name":"unsafe-world-writable","category":"filesystem","vulnerable":true,"source":"import os\n\ndef expose(path: str):\n    os.chmod(path, 0o777)\n"},
+    {"name":"safe-loopback-bind","category":"network","vulnerable":false,"source":"HOST = \"127.0.0.1\"\n\ndef bind_address():\n    return HOST\n"},
+    {"name":"unsafe-all-interface-bind","category":"network","vulnerable":true,"source":"HOST = \"0.0.0.0\"\n\ndef bind_address():\n    return HOST\n"},
+    {"name":"safe-absolute-subprocess","category":"command-execution","vulnerable":false,"source":"import subprocess\n\ndef status():\n    return subprocess.run([\"/usr/bin/git\", \"status\"], check=True)\n"},
+    {"name":"unsafe-popen-shell","category":"command-execution","vulnerable":true,"source":"import subprocess\n\ndef execute(command: str):\n    return subprocess.Popen(command, shell=True)\n"},
+    {"name":"safe-secret-from-environment","category":"secrets","vulnerable":false,"source":"import os\n\ndef token():\n    return os.environ[\"SERVICE_TOKEN\"]\n"},
+    {"name":"unsafe-hardcoded-token","category":"secrets","vulnerable":true,"source":"def token():\n    password = \"demo-hardcoded-credential-do-not-use\"\n    return password\n"},
+    {"name":"safe-command-data","category":"command-execution","vulnerable":false,"source":"def command():\n    return [\"date\", \"--iso-8601\"]\n"},
+    {"name":"unsafe-os-system","category":"command-execution","vulnerable":true,"source":"import os\n\ndef execute(command: str):\n    return os.system(command)\n"},
+    {"name":"safe-request-session-timeout","category":"transport","vulnerable":false,"source":"import requests\n\ndef fetch(session: requests.Session, url: str):\n    return session.get(url, timeout=(3, 10))\n"},
+    {"name":"unsafe-request-no-timeout","category":"transport","vulnerable":true,"source":"import requests\n\ndef fetch(url: str):\n    return requests.get(url)\n"}
   ]
 }

@@ -1,5 +1,6 @@
 import os
 import sys
+import socket
 
 from .evidence import evidence_public_key
 
@@ -45,7 +46,13 @@ def validate_worker_configuration() -> None:
 
 def main() -> None:
     validate_worker_configuration()
-    arguments = ["rq", "worker", *sys.argv[1:]]
+    isolated = os.environ.get("AEGIS_ISOLATED_WORKER", "false").lower() in TRUE_VALUES
+    queues = ["default", "deep"] if isolated else ["default"]
+    arguments = [
+        "rq", "worker", "--name",
+        f"aegis-{'isolated' if isolated else 'standard'}-{socket.gethostname()}",
+        *sys.argv[1:], *queues,
+    ]
     os.execvp(arguments[0], arguments)
 
 

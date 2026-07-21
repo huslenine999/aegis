@@ -4,6 +4,17 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added durable finding deduplication, lifecycle events, ownership, due dates,
+  expiring risk acceptance, and GitHub remediation issue handoff.
+- Added immutable per-project policy versions, approval, scan binding, and
+  historical-result simulation.
+- Added optional S3-compatible artifact storage with integrity metadata, KMS
+  encryption, and object-lock retention, plus OIDC authorization-code/PKCE login.
+- Added a dedicated isolated deep-scan queue, recovery verification tooling, and
+  a 30-case release benchmark.
+
 ### Changed
 
 - Added a reproducible controlled-pilot readiness and recovery rehearsal.

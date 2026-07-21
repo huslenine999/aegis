@@ -113,6 +113,14 @@ def load_dependency_tree(project_root: Path) -> list[dict]:
 
 
 def build_report_bundle(scans_dir: Path) -> bytes:
+    artifacts: dict[str, bytes] = {}
+    for path in scans_dir.iterdir():
+        if path.is_file():
+            artifacts[path.name] = path.read_bytes()
+    return build_report_bundle_from_artifacts(artifacts)
+
+
+def build_report_bundle_from_artifacts(artifacts: dict[str, bytes]) -> bytes:
     bundle = BytesIO()
     preferred_files = [
         "report.html",
@@ -123,21 +131,19 @@ def build_report_bundle(scans_dir: Path) -> bytes:
         "suppressions-report.json",
     ]
     raw_patterns = ("*-report.json", "osv-cache.json", "sandbox-status.json")
-    added = set()
+    added: set[str] = set()
 
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
         for filename in preferred_files:
-            path = scans_dir / filename
-            if path.exists() and path.is_file():
-                archive.write(path, filename)
-                added.add(path.resolve())
+            if filename in artifacts:
+                archive.writestr(filename, artifacts[filename])
+                added.add(filename)
 
         for pattern in raw_patterns:
-            for path in sorted(scans_dir.glob(pattern)):
-                resolved = path.resolve()
-                if path.is_file() and resolved not in added:
-                    archive.write(path, f"raw/{path.name}")
-                    added.add(resolved)
+            for filename in sorted(artifacts):
+                if Path(filename).match(pattern) and filename not in added:
+                    archive.writestr(f"raw/{filename}", artifacts[filename])
+                    added.add(filename)
 
         manifest = {
             "bundle_format": "aegis-report-bundle-v1",

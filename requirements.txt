@@ -18,4 +18,6 @@ python-multipart==0.0.31
 websockets==16.0
 psycopg[binary]==3.2.10
 cryptography==49.0.0
+boto3==1.43.52
+PyJWT[crypto]==2.13.0
 semgrep==1.170.0

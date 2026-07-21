@@ -227,6 +227,7 @@ def create_scan_run(
     github_installation_id: int | None = None,
     github_pull_request: int | None = None,
     github_check_run_id: int | None = None,
+    policy_version_id: int | None = None,
 ) -> int:
     with get_connection() as connection:
         project = connection.execute(
@@ -237,11 +238,20 @@ def create_scan_run(
         tenant_id = int(project[0])
         if _tenant_for_user(connection, requested_by) != tenant_id:
             raise ValueError("Scan requester and project belong to different tenants.")
+        if policy_version_id is not None:
+            policy = connection.execute(
+                """SELECT state FROM project_policies
+                   WHERE id = ? AND project_id = ? AND tenant_id = ?""",
+                (policy_version_id, project_id, tenant_id),
+            ).fetchone()
+            if not policy or policy[0] != "approved":
+                raise ValueError("Scans must reference an approved project policy.")
         insert_sql = """INSERT INTO scan_runs
                (job_id, project_id, requested_by, target, preset, state,
                 progress, created_at, tenant_id, source_revision, source_ref,
-                github_installation_id, github_pull_request, github_check_run_id)
-               VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?)"""
+                github_installation_id, github_pull_request, github_check_run_id,
+                policy_version_id)
+               VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?, ?)"""
         if USING_POSTGRES:
             insert_sql += " RETURNING id"
         cursor = connection.execute(
@@ -259,6 +269,7 @@ def create_scan_run(
                 github_installation_id,
                 github_pull_request,
                 github_check_run_id,
+                policy_version_id,
             ),
         )
         run_id = cursor.fetchone()[0] if USING_POSTGRES else getattr(cursor, "lastrowid", None)
@@ -334,17 +345,23 @@ def update_scan_run(
         result_json = None
         completed_at = None
         if result is not None:
-            row = connection.execute(
-                "SELECT project_id FROM scan_runs WHERE id = ?", (run_id,)
-            ).fetchone()
-            previous = connection.execute(
-                """SELECT result_json FROM scan_runs
-                   WHERE project_id = ? AND id != ? AND state = 'completed'
-                   AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1""",
-                (row[0], run_id),
-            ).fetchone()
-            previous_result = json.loads(previous[0]) if previous and previous[0] else {}
-            new_findings = len(_fingerprints(result) - _fingerprints(previous_result))
+            finding_sync = result.get("finding_sync")
+            if isinstance(finding_sync, dict):
+                new_findings = int(finding_sync.get("created", 0)) + int(
+                    finding_sync.get("reopened", 0)
+                )
+            else:
+                row = connection.execute(
+                    "SELECT project_id FROM scan_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                previous = connection.execute(
+                    """SELECT result_json FROM scan_runs
+                       WHERE project_id = ? AND id != ? AND state = 'completed'
+                       AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1""",
+                    (row[0], run_id),
+                ).fetchone()
+                previous_result = json.loads(previous[0]) if previous and previous[0] else {}
+                new_findings = len(_fingerprints(result) - _fingerprints(previous_result))
             result["new_findings"] = new_findings
             result_json = json.dumps(result, separators=(",", ":"))
         if state in {"completed", "failed", "cancelled"}:
@@ -373,7 +390,7 @@ def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
                       state, progress, result_json, new_findings, created_at,
                       completed_at, tenant_id, source_revision, source_ref,
                       github_installation_id, github_pull_request,
-                      github_check_run_id
+                      github_check_run_id, policy_version_id
                FROM scan_runs WHERE id = ?"""
         parameters: tuple = (run_id,)
         if tenant_id is not None:
@@ -401,6 +418,7 @@ def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
         "github_installation_id": int(row[15]) if row[15] is not None else None,
         "github_pull_request": int(row[16]) if row[16] is not None else None,
         "github_check_run_id": int(row[17]) if row[17] is not None else None,
+        "policy_version_id": int(row[18]) if row[18] is not None else None,
     }
 
 
@@ -439,8 +457,9 @@ def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
         if artifacts:
             connection.executemany(
                 """INSERT INTO scan_artifacts
-                   (scan_run_id, name, size_bytes, sha256, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
+                   (scan_run_id, name, size_bytes, sha256, created_at,
+                    backend, storage_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         scan_run_id,
@@ -448,6 +467,8 @@ def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
                         int(artifact["size"]),
                         str(artifact["sha256"]),
                         _now(),
+                        str(artifact.get("backend") or "local"),
+                        artifact.get("storage_key"),
                     )
                     for artifact in artifacts
                 ],
@@ -457,7 +478,7 @@ def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
 def list_scan_artifacts(scan_run_id: int) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
-            """SELECT name, size_bytes, sha256, created_at
+            """SELECT name, size_bytes, sha256, created_at, backend, storage_key
                FROM scan_artifacts WHERE scan_run_id = ? ORDER BY name""",
             (scan_run_id,),
         ).fetchall()
@@ -467,6 +488,8 @@ def list_scan_artifacts(scan_run_id: int) -> list[dict]:
             "size": int(row[1]),
             "sha256": row[2],
             "created_at": row[3],
+            "backend": row[4],
+            "storage_key": row[5],
         }
         for row in rows
     ]
@@ -475,7 +498,7 @@ def list_scan_artifacts(scan_run_id: int) -> list[dict]:
 def get_scan_artifact(scan_run_id: int, name: str) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(
-            """SELECT name, size_bytes, sha256, created_at
+            """SELECT name, size_bytes, sha256, created_at, backend, storage_key
                FROM scan_artifacts WHERE scan_run_id = ? AND name = ?""",
             (scan_run_id, name),
         ).fetchone()
@@ -486,6 +509,8 @@ def get_scan_artifact(scan_run_id: int, name: str) -> dict | None:
         "size": int(row[1]),
         "sha256": row[2],
         "created_at": row[3],
+        "backend": row[4],
+        "storage_key": row[5],
     }
 
 

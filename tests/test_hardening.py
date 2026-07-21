@@ -323,11 +323,15 @@ def test_production_workers_reject_cross_boundary_secrets(monkeypatch):
         validate_notifier_configuration()
 
 
-def test_unsupported_artifact_backend_fails_closed(monkeypatch):
+def test_s3_artifact_backend_requires_a_bucket(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "development")
     monkeypatch.setenv("AEGIS_ARTIFACT_BACKEND", "s3")
-    with pytest.raises(RuntimeError, match="must be local"):
+    monkeypatch.delenv("AEGIS_S3_BUCKET", raising=False)
+    with pytest.raises(RuntimeError, match="AEGIS_S3_BUCKET is required"):
         config.validate_runtime_configuration()
+
+    monkeypatch.setenv("AEGIS_S3_BUCKET", "aegis-evidence")
+    config.validate_runtime_configuration()
 
 
 def test_recent_authentication_can_be_refreshed(tmp_path, monkeypatch):

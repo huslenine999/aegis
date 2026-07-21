@@ -108,9 +108,21 @@ from github_integration import (
     list_repositories,
     github_webhook_enabled,
     create_check_run,
+    create_repository_issue,
     mark_webhook_delivery,
     verify_and_record_webhook,
 )
+from findings import get_finding, list_findings, update_finding
+from policies import (
+    active_policy,
+    approve_policy,
+    create_policy,
+    ensure_active_policy,
+    list_policies,
+    normalize_definition,
+    simulate_policy,
+)
+from oidc import begin_oidc, complete_oidc, oidc_enabled
 from notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
 from audit import list_audit_events, record_audit, verify_audit_chain
 from policy_engine import get_ruff_severity
@@ -122,11 +134,12 @@ from sandbox import (
 )
 from reporting import (
     build_report_bundle,
+    build_report_bundle_from_artifacts,
     calculate_exploitability_score,
     generate_fallback_tree as generate_project_fallback_tree,
     load_dependency_tree,
 )
-from artifact_storage import project_directory, run_directory
+from artifact_storage import S3ArtifactStore, project_directory, run_directory
 
 validate_runtime_configuration()
 configure_logging()
@@ -358,7 +371,51 @@ def login_page(request: Request):
         return RedirectResponse("/setup", status_code=303)
     if principal_from_request(request):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html")
+    return templates.TemplateResponse(
+        request, "login.html", {"oidc_enabled": oidc_enabled()}
+    )
+
+
+def _oidc_callback_url(request: Request) -> str:
+    public_url = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
+    return f"{public_url}/api/auth/oidc/callback" if public_url else str(
+        request.url_for("oidc_callback")
+    )
+
+
+@app.get("/api/auth/oidc/start")
+def oidc_start(request: Request, return_to: str = "/"):
+    try:
+        authorization_url = begin_oidc(_oidc_callback_url(request), return_to)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return RedirectResponse(authorization_url, status_code=303)
+
+
+@app.get("/api/auth/oidc/callback", name="oidc_callback")
+async def oidc_callback(request: Request, code: str = "", state: str = ""):
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="OIDC callback is incomplete.")
+    try:
+        principal, return_to = await asyncio.to_thread(
+            complete_oidc, code, state, _oidc_callback_url(request)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="OIDC login failed.") from exc
+    record_audit(principal.user_id, "auth.oidc_login_succeeded", "session")
+    response = RedirectResponse(return_to, status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        await asyncio.to_thread(create_session, principal),
+        httponly=True,
+        secure=os.environ.get("AEGIS_ENV", "development").lower() == "production",
+        samesite="strict",
+        max_age=int(os.environ.get("AEGIS_SESSION_TTL_SECONDS", "28800")),
+        path="/",
+    )
+    return response
 
 
 @app.get("/account/security", response_class=HTMLResponse)
@@ -636,6 +693,10 @@ def _enqueue_project_scan(
 ) -> dict:
     if preset not in VALID_PRESETS:
         raise HTTPException(status_code=400, detail="Invalid scan preset.")
+    try:
+        policy = ensure_active_policy(project["id"], principal.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     job_id = uuid.uuid4().hex
     run_id = create_scan_run(
         job_id=job_id,
@@ -648,6 +709,7 @@ def _enqueue_project_scan(
         github_installation_id=(github_context or {}).get("installation_id"),
         github_pull_request=(github_context or {}).get("pull_request"),
         github_check_run_id=(github_context or {}).get("check_run_id"),
+        policy_version_id=policy["id"],
     )
     redis_client.hset(
         f"job:{job_id}",
@@ -677,7 +739,10 @@ def _enqueue_project_scan(
         from rq import Queue
         from redis import Redis
 
-        queue = Queue(connection=Redis.from_url(REDIS_URL))
+        queue = Queue(
+            "deep" if preset == "deep" else "default",
+            connection=Redis.from_url(REDIS_URL),
+        )
         queue.enqueue(
             async_scan_task, *arguments, job_timeout=SCAN_JOB_TIMEOUT_SECONDS
         )
@@ -686,7 +751,13 @@ def _enqueue_project_scan(
 
         thread = threading.Thread(target=async_scan_task, args=arguments, daemon=True)
         thread.start()
-    return {"status": "success", "job_id": job_id, "scan_run_id": run_id, "state": "queued"}
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "scan_run_id": run_id,
+        "state": "queued",
+        "policy_version": policy["version"],
+    }
 
 
 @app.get("/projects", response_class=HTMLResponse)
@@ -817,6 +888,31 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _artifact_integrity(metadata: dict, path: Path) -> bool:
+    if metadata.get("backend") == "s3":
+        key = metadata.get("storage_key")
+        return bool(
+            key
+            and S3ArtifactStore().verify(key, metadata["size"], metadata["sha256"])
+        )
+    return (
+        path.is_file()
+        and path.stat().st_size == metadata["size"]
+        and _file_sha256(path) == metadata["sha256"]
+    )
+
+
+def _artifact_bytes(metadata: dict, path: Path) -> bytes:
+    if not _artifact_integrity(metadata, path):
+        raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+    if metadata.get("backend") == "s3":
+        content = S3ArtifactStore().read(metadata["storage_key"])
+        if len(content) != metadata["size"] or hashlib.sha256(content).hexdigest() != metadata["sha256"]:
+            raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+        return content
+    return path.read_bytes()
+
+
 @app.get("/api/projects/{project_id}/scans/{run_id}")
 def project_scan_detail(
     project_id: int, run_id: int, principal=Depends(require_role("viewer"))
@@ -839,12 +935,12 @@ def project_scan_artifacts(
     for metadata in list_scan_artifacts(run_id):
         name = metadata["name"]
         path = report_dir / name
-        if name not in RUN_ARTIFACTS or not path.is_file():
+        if name not in RUN_ARTIFACTS:
             continue
-        integrity = (
-            path.stat().st_size == metadata["size"]
-            and _file_sha256(path) == metadata["sha256"]
-        )
+        try:
+            integrity = _artifact_integrity(metadata, path)
+        except Exception:
+            integrity = False
         artifacts.append(
             {
                 **metadata,
@@ -880,18 +976,14 @@ def project_scan_artifact(
     )
     if artifact_name == "report-bundle.zip":
         recorded = list_scan_artifacts(run_id)
-        if not recorded or not (report_dir / "report.html").is_file():
+        if not recorded or not any(item["name"] == "report.html" for item in recorded):
             raise HTTPException(status_code=404, detail="Report bundle is unavailable.")
+        stored_artifacts = {}
         for metadata in recorded:
             path = report_dir / metadata["name"]
-            if (
-                not path.is_file()
-                or path.stat().st_size != metadata["size"]
-                or _file_sha256(path) != metadata["sha256"]
-            ):
-                raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+            stored_artifacts[metadata["name"]] = _artifact_bytes(metadata, path)
         return Response(
-            content=build_report_bundle(report_dir),
+            content=build_report_bundle_from_artifacts(stored_artifacts),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="aegis-{project_id}-{run_id}.zip"'
@@ -900,19 +992,198 @@ def project_scan_artifact(
     media_type = RUN_ARTIFACTS.get(artifact_name)
     artifact_path = report_dir / artifact_name
     metadata = get_scan_artifact(run_id, artifact_name)
-    if not media_type or not metadata or not artifact_path.is_file():
+    if not media_type or not metadata:
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    if (
-        artifact_path.stat().st_size != metadata["size"]
-        or _file_sha256(artifact_path) != metadata["sha256"]
-    ):
-        raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+    if metadata.get("backend") == "s3":
+        return Response(
+            content=_artifact_bytes(metadata, artifact_path),
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{artifact_name}"'},
+        )
+    if not artifact_path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    _artifact_bytes(metadata, artifact_path)
     return FileResponse(
         str(artifact_path),
         media_type=media_type,
         filename=artifact_name,
         content_disposition_type="attachment",
     )
+
+
+@app.get("/api/projects/{project_id}/findings")
+def project_findings(
+    project_id: int,
+    status: str | None = None,
+    severity: str | None = None,
+    principal=Depends(require_role("viewer")),
+):
+    _project_access(project_id, principal, "viewer")
+    try:
+        findings = list_findings(project_id, status=status, severity=severity)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"findings": findings}
+
+
+@app.get("/api/projects/{project_id}/findings/{finding_id}")
+def project_finding_detail(
+    project_id: int,
+    finding_id: int,
+    principal=Depends(require_role("viewer")),
+):
+    _project_access(project_id, principal, "viewer")
+    finding = get_finding(project_id, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found.")
+    return finding
+
+
+@app.patch("/api/projects/{project_id}/findings/{finding_id}")
+async def project_finding_update(
+    project_id: int,
+    finding_id: int,
+    request: Request,
+    principal=Depends(require_recent_access("operator")),
+):
+    _project_access(project_id, principal, "operator")
+    body = await request.json()
+    try:
+        finding = update_finding(project_id, finding_id, principal.user_id, body)
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Finding not found." else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    record_audit(
+        principal.user_id,
+        "finding.updated",
+        "finding",
+        finding_id,
+        {"project_id": project_id, "status": finding["status"]},
+    )
+    return finding
+
+
+@app.post("/api/projects/{project_id}/findings/{finding_id}/github-issue", status_code=201)
+async def project_finding_github_issue(
+    project_id: int,
+    finding_id: int,
+    request: Request,
+    principal=Depends(require_recent_access("operator")),
+):
+    project = _project_access(project_id, principal, "operator")
+    finding = get_finding(project_id, finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found.")
+    if finding.get("ticket_url"):
+        raise HTTPException(status_code=409, detail="Finding already has a remediation ticket.")
+    repository = project.get("github_full_name")
+    if not repository:
+        raise HTTPException(status_code=400, detail="Project is not linked to a GitHub repository.")
+    body = await request.json()
+    title = str(body.get("title") or f"[{finding['severity']}] {finding['title']}")
+    issue_body = str(body.get("body") or "\n".join([
+        "## Aegis security finding",
+        "",
+        f"- Tool: {finding['tool']}",
+        f"- Rule: {finding['rule_id'] or 'n/a'}",
+        f"- Severity: {finding['severity']}",
+        f"- Location: {finding['path'] or 'n/a'}:{finding['line_number'] or '-'}",
+        f"- First seen scan: {finding['first_seen_run_id']}",
+        f"- Latest scan: {finding['last_seen_run_id']}",
+        "",
+        "Resolve the underlying issue, then run Aegis again to verify remediation.",
+    ]))
+    try:
+        issue = await asyncio.to_thread(
+            create_repository_issue,
+            principal.user_id,
+            repository,
+            title=title,
+            body=issue_body,
+        )
+        finding = update_finding(
+            project_id,
+            finding_id,
+            principal.user_id,
+            {"ticket_url": issue["url"]},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="GitHub issue creation failed.") from exc
+    record_audit(
+        principal.user_id,
+        "finding.github_issue_created",
+        "finding",
+        finding_id,
+        {"project_id": project_id, "issue": issue["number"]},
+    )
+    return {"issue": issue, "finding": finding}
+
+
+@app.get("/api/projects/{project_id}/policies")
+def project_policies(
+    project_id: int, principal=Depends(require_role("viewer"))
+):
+    _project_access(project_id, principal, "viewer")
+    return {"policies": list_policies(project_id), "active": active_policy(project_id)}
+
+
+@app.post("/api/projects/{project_id}/policies", status_code=201)
+async def project_policy_create(
+    project_id: int,
+    request: Request,
+    principal=Depends(require_recent_access("operator")),
+):
+    _project_access(project_id, principal, "admin")
+    body = await request.json()
+    try:
+        policy = create_policy(
+            project_id,
+            principal.user_id,
+            str(body.get("name") or ""),
+            body.get("definition") or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit(
+        principal.user_id, "policy.created", "policy", policy["id"],
+        {"project_id": project_id, "version": policy["version"]},
+    )
+    return policy
+
+
+@app.post("/api/projects/{project_id}/policies/{policy_id}/approve")
+def project_policy_approve(
+    project_id: int,
+    policy_id: int,
+    principal=Depends(require_recent_access("operator")),
+):
+    _project_access(project_id, principal, "admin")
+    try:
+        policy = approve_policy(project_id, policy_id, principal.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    record_audit(
+        principal.user_id, "policy.approved", "policy", policy_id,
+        {"project_id": project_id, "version": policy["version"]},
+    )
+    return policy
+
+
+@app.post("/api/projects/{project_id}/policies/simulate")
+async def project_policy_simulate(
+    project_id: int,
+    request: Request,
+    principal=Depends(require_role("viewer")),
+):
+    _project_access(project_id, principal, "viewer")
+    body = await request.json()
+    try:
+        definition = normalize_definition(body.get("definition") or {})
+        return simulate_policy(project_id, int(body.get("scan_run_id")), definition)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/projects/{project_id}/members")
@@ -2253,6 +2524,20 @@ def readiness():
         if not scan_workers:
             raise HTTPException(status_code=503, detail="No scanner RQ workers are available.")
         worker_state = f"{len(scan_workers)} available"
+        if os.environ.get("AEGIS_ALLOW_DEEP_SCANS", "false").lower() in {
+            "1", "true", "yes", "on"
+        }:
+            isolated_workers = [
+                worker for worker in workers
+                if "deep" in worker.queue_names()
+                and str(getattr(worker, "name", "")).startswith("aegis-isolated-")
+            ]
+            if not isolated_workers:
+                raise HTTPException(
+                    status_code=503,
+                    detail="No isolated deep-scan workers are available.",
+                )
+            worker_state += f", {len(isolated_workers)} isolated"
 
     notifier_required = os.environ.get("AEGIS_REQUIRE_NOTIFIER", "false").lower() in {
         "1",

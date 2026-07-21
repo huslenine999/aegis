@@ -441,6 +441,42 @@ def list_repositories(user_id: int, page: int = 1) -> list[dict]:
     ]
 
 
+def create_repository_issue(
+    user_id: int,
+    repository: str,
+    *,
+    title: str,
+    body: str,
+    labels: list[str] | None = None,
+) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or ""):
+        raise ValueError("GitHub repository identity is invalid.")
+    token = github_token(user_id)
+    if not token:
+        raise ValueError("GitHub is not connected for this user.")
+    response = requests.post(
+        f"{GITHUB_API}/repos/{repository}/issues",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={
+            "title": str(title)[:256],
+            "body": str(body)[:65000],
+            "labels": [str(label)[:50] for label in (labels or [])[:10]],
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return {
+        "number": int(payload["number"]),
+        "url": str(payload["html_url"]),
+        "state": str(payload.get("state") or "open"),
+    }
+
+
 def disconnect_github(user_id: int) -> None:
     with get_connection() as connection:
         connection.execute(

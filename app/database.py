@@ -658,6 +658,230 @@ def _migration_012_webhook_scan_link(cursor) -> None:
     )
 
 
+def _migration_013_durable_findings(cursor) -> None:
+    identity = _identity_id_type()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS security_findings (
+            id {identity},
+            tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            fingerprint TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            rule_id TEXT,
+            title TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+            path TEXT,
+            line_number INTEGER,
+            status TEXT NOT NULL DEFAULT 'open' CHECK (
+                status IN ('open', 'acknowledged', 'accepted', 'false_positive', 'resolved')
+            ),
+            owner_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+            due_at TEXT,
+            ticket_url TEXT,
+            resolution_note TEXT,
+            accepted_until TEXT,
+            first_seen_run_id BIGINT REFERENCES scan_runs(id) ON DELETE SET NULL,
+            last_seen_run_id BIGINT REFERENCES scan_runs(id) ON DELETE SET NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            occurrence_count INTEGER NOT NULL DEFAULT 1 CHECK (occurrence_count > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (project_id, fingerprint)
+        )
+    """)
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS finding_occurrences (
+            id {identity},
+            finding_id BIGINT NOT NULL REFERENCES security_findings(id) ON DELETE CASCADE,
+            scan_run_id BIGINT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+            raw_json TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            UNIQUE (finding_id, scan_run_id)
+        )
+    """)
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS finding_events (
+            id {identity},
+            finding_id BIGINT NOT NULL REFERENCES security_findings(id) ON DELETE CASCADE,
+            actor_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+            event_type TEXT NOT NULL,
+            from_status TEXT,
+            to_status TEXT,
+            note TEXT,
+            details_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_findings_project_status ON security_findings(project_id, status, severity)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_owner ON security_findings(owner_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_findings_last_seen ON security_findings(project_id, last_seen_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_finding_occurrences_run ON finding_occurrences(scan_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_finding_events_finding ON finding_events(finding_id, id)",
+    ):
+        cursor.execute(statement)
+
+
+def _migration_014_versioned_policies(cursor) -> None:
+    identity = _identity_id_type()
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS project_policies (
+            id {identity},
+            tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL CHECK (version > 0),
+            name TEXT NOT NULL,
+            definition_json TEXT NOT NULL,
+            definition_sha256 TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft', 'approved', 'retired')),
+            created_by BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE RESTRICT,
+            approved_by BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            approved_at TEXT,
+            UNIQUE (project_id, version),
+            UNIQUE (project_id, definition_sha256)
+        )
+    """)
+    cursor.execute("ALTER TABLE scan_runs ADD COLUMN policy_version_id BIGINT")
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_project_policies_state ON project_policies(project_id, state, version)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_runs_policy ON scan_runs(policy_version_id)",
+    ):
+        cursor.execute(statement)
+
+
+def _migration_015_external_artifact_metadata(cursor) -> None:
+    if USING_POSTGRES:
+        cursor.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'scan_artifacts'
+        """)
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(scan_artifacts)")
+        columns = {row[1] for row in cursor.fetchall()}
+    if "backend" not in columns:
+        cursor.execute(
+            "ALTER TABLE scan_artifacts ADD COLUMN backend TEXT NOT NULL DEFAULT 'local'"
+        )
+    if "storage_key" not in columns:
+        cursor.execute("ALTER TABLE scan_artifacts ADD COLUMN storage_key TEXT")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_artifacts_backend "
+        "ON scan_artifacts(backend, storage_key)"
+    )
+
+
+def _migration_016_findings_policy_tenant_guards(cursor) -> None:
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_finding_tenant()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM projects p WHERE p.id = NEW.project_id
+                    AND p.tenant_id = NEW.tenant_id
+                ) OR (NEW.owner_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM auth_users u WHERE u.id = NEW.owner_id
+                    AND u.tenant_id = NEW.tenant_id
+                )) THEN RAISE EXCEPTION 'finding tenant mismatch'; END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_policy_tenant()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.created_by
+                    WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                    AND u.tenant_id = NEW.tenant_id
+                ) OR (NEW.approved_by IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM auth_users u WHERE u.id = NEW.approved_by
+                    AND u.tenant_id = NEW.tenant_id
+                )) THEN RAISE EXCEPTION 'policy tenant mismatch'; END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        for table, function in (
+            ("security_findings", "aegis_validate_finding_tenant"),
+            ("project_policies", "aegis_validate_policy_tenant"),
+        ):
+            cursor.execute(f"DROP TRIGGER IF EXISTS {table}_tenant_guard ON {table}")
+            cursor.execute(
+                f"""CREATE TRIGGER {table}_tenant_guard BEFORE INSERT OR UPDATE ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION {function}()"""
+            )
+            cursor.execute(f"DROP TRIGGER IF EXISTS {table}_tenant_immutable ON {table}")
+            cursor.execute(
+                f"""CREATE TRIGGER {table}_tenant_immutable BEFORE UPDATE OF tenant_id ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION aegis_prevent_tenant_change()"""
+            )
+    else:
+        for operation, suffix in (("INSERT", ""), ("UPDATE", "_update")):
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS security_findings_tenant{suffix}_guard
+                BEFORE {operation} ON security_findings
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM projects p WHERE p.id = NEW.project_id
+                    AND p.tenant_id = NEW.tenant_id
+                ) OR (NEW.owner_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM auth_users u WHERE u.id = NEW.owner_id
+                    AND u.tenant_id = NEW.tenant_id
+                ))
+                BEGIN SELECT RAISE(ABORT, 'finding tenant mismatch'); END
+            """)
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS project_policies_tenant{suffix}_guard
+                BEFORE {operation} ON project_policies
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM projects p JOIN auth_users u ON u.id = NEW.created_by
+                    WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                    AND u.tenant_id = NEW.tenant_id
+                ) OR (NEW.approved_by IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM auth_users u WHERE u.id = NEW.approved_by
+                    AND u.tenant_id = NEW.tenant_id
+                ))
+                BEGIN SELECT RAISE(ABORT, 'policy tenant mismatch'); END
+            """)
+        for table in ("security_findings", "project_policies"):
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {table}_tenant_immutable
+                BEFORE UPDATE OF tenant_id ON {table}
+                WHEN OLD.tenant_id != NEW.tenant_id
+                BEGIN SELECT RAISE(ABORT, 'tenant identity is immutable'); END
+            """)
+
+
+def _migration_017_oidc_identity(cursor) -> None:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS oidc_states (
+            state_hash TEXT PRIMARY KEY,
+            verifier_encrypted TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            return_to TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS oidc_identities (
+            issuer TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            last_login_at TEXT NOT NULL,
+            PRIMARY KEY (issuer, subject),
+            UNIQUE (user_id)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_oidc_identity_user ON oidc_identities(user_id)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -671,6 +895,11 @@ MIGRATIONS = (
     Migration(10, "github_app_checks", _migration_010_github_app_checks),
     Migration(11, "tenant_consistency_guards", _migration_011_tenant_consistency_guards),
     Migration(12, "webhook_scan_link", _migration_012_webhook_scan_link),
+    Migration(13, "durable_findings", _migration_013_durable_findings),
+    Migration(14, "versioned_project_policies", _migration_014_versioned_policies),
+    Migration(15, "external_artifact_metadata", _migration_015_external_artifact_metadata),
+    Migration(16, "findings_policy_tenant_guards", _migration_016_findings_policy_tenant_guards),
+    Migration(17, "oidc_identity", _migration_017_oidc_identity),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

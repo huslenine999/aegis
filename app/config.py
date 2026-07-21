@@ -104,11 +104,16 @@ def validate_runtime_configuration() -> None:
     if environment not in {"development", "test", "production"}:
         raise RuntimeError("AEGIS_ENV must be development, test, or production.")
     artifact_backend = os.environ.get("AEGIS_ARTIFACT_BACKEND", "local").strip().lower()
-    if artifact_backend != "local":
-        raise RuntimeError(
-            "AEGIS_ARTIFACT_BACKEND must be local in this build. External object "
-            "storage requires a reviewed backend implementation."
-        )
+    if artifact_backend not in {"local", "s3"}:
+        raise RuntimeError("AEGIS_ARTIFACT_BACKEND must be local or s3.")
+    if artifact_backend == "s3" and not os.environ.get("AEGIS_S3_BUCKET", "").strip():
+        raise RuntimeError("AEGIS_S3_BUCKET is required when AEGIS_ARTIFACT_BACKEND=s3.")
+    try:
+        object_lock_days = int(os.environ.get("AEGIS_S3_OBJECT_LOCK_DAYS", "0") or 0)
+    except ValueError as exc:
+        raise RuntimeError("AEGIS_S3_OBJECT_LOCK_DAYS must be a non-negative integer.") from exc
+    if object_lock_days < 0:
+        raise RuntimeError("AEGIS_S3_OBJECT_LOCK_DAYS must be a non-negative integer.")
     security_profile = os.environ.get("AEGIS_SECURITY_PROFILE", "standard").strip().lower()
     if security_profile not in {"standard", "bank"}:
         raise RuntimeError("AEGIS_SECURITY_PROFILE must be standard or bank.")
@@ -180,6 +185,15 @@ def validate_runtime_configuration() -> None:
     if os.environ.get("AEGIS_GITHUB_CLIENT_ID"):
         if not os.environ.get("AEGIS_GITHUB_CLIENT_SECRET"):
             errors.append("AEGIS_GITHUB_CLIENT_SECRET must be set when GitHub OAuth is enabled")
+    oidc_issuer = os.environ.get("AEGIS_OIDC_ISSUER", "")
+    if oidc_issuer:
+        parsed_issuer = urlparse(oidc_issuer)
+        if parsed_issuer.scheme != "https" or not parsed_issuer.hostname:
+            errors.append("AEGIS_OIDC_ISSUER must be an HTTPS URL")
+        if not os.environ.get("AEGIS_OIDC_CLIENT_ID"):
+            errors.append("AEGIS_OIDC_CLIENT_ID is required when OIDC is enabled")
+        if not os.environ.get("AEGIS_OIDC_CLIENT_SECRET"):
+            errors.append("AEGIS_OIDC_CLIENT_SECRET is required in production")
     github_webhook_secret = os.environ.get("AEGIS_GITHUB_WEBHOOK_SECRET", "")
     if github_webhook_secret and len(github_webhook_secret) < 32:
         errors.append("AEGIS_GITHUB_WEBHOOK_SECRET must contain at least 32 characters")
@@ -198,7 +212,7 @@ def validate_runtime_configuration() -> None:
         errors.append(
             "AEGIS_ISOLATED_WORKER must be true when deep scans are enabled in production"
         )
-    if environment_bool("AEGIS_MULTI_TENANT"):
+    if environment_bool("AEGIS_MULTI_TENANT") and artifact_backend == "local":
         errors.append(
             "AEGIS_MULTI_TENANT must remain false while AEGIS_ARTIFACT_BACKEND=local"
         )

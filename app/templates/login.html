@@ -13,7 +13,8 @@
     label, input, button { display: block; width: 100%; box-sizing: border-box; }
     label { margin: 1rem 0 .35rem; }
     input { padding: .75rem; border: 1px solid #55715a; background: #050805; color: inherit; }
-    button { margin-top: 1.25rem; padding: .8rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; }
+    button,.sso { margin-top: 1.25rem; padding: .8rem; border: 0; background: #3dfb57; color: #031006; font-weight: 700; cursor: pointer; text-align:center; text-decoration:none; }
+    .sso { display:block; border:1px solid #55715a; background:#111a13; color:#e8f5e9; }
     #error { min-height: 1.5rem; color: #ff6b6b; }
   </style>
 </head>
@@ -22,6 +23,7 @@
     <h1>Aegis</h1>
     <p>Sign in to the security workbench.</p>
     <p><a href="/welcome" style="color:#a8e6ad">See how Aegis helps small teams ship safely →</a></p>
+    {% if oidc_enabled %}<a class="sso" href="/api/auth/oidc/start">Sign in with your organization</a>{% endif %}
     <form id="login-form">
       <label for="username">Username</label>
       <input id="username" name="username" autocomplete="username" required autofocus>

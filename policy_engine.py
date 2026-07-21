@@ -251,7 +251,7 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
-def analyze_ruff(report: Any) -> Dict[str, Any]:
+def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
     if report is None or not isinstance(report, list):
         return {
             "tool": "Ruff (SAST)",
@@ -277,7 +277,7 @@ def analyze_ruff(report: Any) -> Dict[str, Any]:
 
     blocking_issues = [
         issue for issue in issues
-        if issue["severity"] in FAIL_ON_RUFF_SEVERITIES
+        if issue["severity"] in (fail_on if fail_on is not None else FAIL_ON_RUFF_SEVERITIES)
     ]
 
     return {
@@ -290,7 +290,7 @@ def analyze_ruff(report: Any) -> Dict[str, Any]:
     }
 
 
-def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_semgrep(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if not report:
         return {
             "tool": "Semgrep",
@@ -324,7 +324,7 @@ def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
 
     blocking_issues = [
         issue for issue in issues
-        if issue["severity"] in FAIL_ON_SEMGREP_SEVERITIES
+        if issue["severity"] in (fail_on if fail_on is not None else FAIL_ON_SEMGREP_SEVERITIES)
     ]
 
     return {
@@ -337,7 +337,7 @@ def analyze_semgrep(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def analyze_safety(report: Any) -> Dict[str, Any]:
+def analyze_safety(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
     """
     Supports Safety JSON output shapes from both 'check' and 'scan' commands.
     """
@@ -377,7 +377,11 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
 
     blocking_count = (
         len(vulnerabilities)
-        if FAIL_ON_SAFETY and "MEDIUM" in FAIL_ON_SEVERITIES
+        if (
+            "MEDIUM" in fail_on
+            if fail_on is not None
+            else FAIL_ON_SAFETY and "MEDIUM" in FAIL_ON_SEVERITIES
+        )
         else 0
     )
     return {
@@ -390,7 +394,7 @@ def analyze_safety(report: Any) -> Dict[str, Any]:
     }
 
 
-def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_osv(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "OSV Dependency Audit",
@@ -413,7 +417,10 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "details": f.get("details"),
         }))
 
-    blocking_issues = [f for f in findings if f["severity"] in FAIL_ON_SEVERITIES]
+    blocking_issues = [
+        f for f in findings
+        if f["severity"] in (fail_on if fail_on is not None else FAIL_ON_SEVERITIES)
+    ]
 
     return {
         "tool": "OSV Dependency Audit",
@@ -425,7 +432,7 @@ def analyze_osv(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_trivy(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
     vulnerabilities = []
 
     if not report:
@@ -450,7 +457,10 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
                 "title": vulnerability.get("Title"),
             }))
 
-    blocking_issues = [v for v in vulnerabilities if v["severity"] in FAIL_ON_TRIVY_SEVERITIES]
+    blocking_issues = [
+        v for v in vulnerabilities
+        if v["severity"] in (fail_on if fail_on is not None else FAIL_ON_TRIVY_SEVERITIES)
+    ]
 
     return {
         "tool": "Trivy",
@@ -462,7 +472,7 @@ def analyze_trivy(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_secrets(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if not report:
         return {
             "tool": "Secrets Scanner",
@@ -484,7 +494,8 @@ def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
                 "line_number": secret.get("line_number"),
             }))
 
-    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+    blocking_count = len(findings) if "HIGH" in threshold else 0
     return {
         "tool": "Secrets Scanner",
         "total_issues": len(findings),
@@ -495,7 +506,7 @@ def analyze_secrets(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_yara(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "YARA Scanner",
@@ -515,7 +526,8 @@ def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "author": f.get("author")
         }))
 
-    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+    blocking_count = len(findings) if "HIGH" in threshold else 0
     return {
         "tool": "YARA Scanner",
         "total_issues": len(findings),
@@ -526,7 +538,7 @@ def analyze_yara(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_clamav(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "ClamAV",
@@ -545,7 +557,8 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "description": f.get("description")
         }))
 
-    blocking_count = len(findings) if "HIGH" in FAIL_ON_SEVERITIES else 0
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+    blocking_count = len(findings) if "HIGH" in threshold else 0
     return {
         "tool": "ClamAV",
         "total_issues": len(findings),
@@ -556,7 +569,7 @@ def analyze_clamav(report: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_zap(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "Aegis DAST Probe",
@@ -578,7 +591,8 @@ def analyze_zap(report: List[Dict[str, Any]]) -> Dict[str, Any]:
             "description": f.get("description"),
             "status": f.get("status")
         }))
-        if is_exposed and "HIGH" in FAIL_ON_SEVERITIES:
+        threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+        if is_exposed and "HIGH" in threshold:
             blocking_count += 1
 
     return {
@@ -986,6 +1000,7 @@ def run_policy_engine(
     operational_failures: List[str] | None = None,
     tool_states: Dict[str, str] | None = None,
     waf_enabled: bool | None = None,
+    fail_on_severities: set[str] | None = None,
 ) -> int:
     if dependency_manifests is None:
         if req_path:
@@ -1027,15 +1042,15 @@ def run_policy_engine(
             osv_findings = []
 
     results = [
-        analyze_ruff(ruff_report),
-        analyze_semgrep(semgrep_report),
-        analyze_safety(safety_report),
-        analyze_osv(osv_findings),
-        analyze_trivy(trivy_report),
-        analyze_secrets(secrets_report),
-        analyze_yara(yara_report),
-        analyze_clamav(clamav_report),
-        analyze_zap(zap_report),
+        analyze_ruff(ruff_report, fail_on_severities),
+        analyze_semgrep(semgrep_report, fail_on_severities),
+        analyze_safety(safety_report, fail_on_severities),
+        analyze_osv(osv_findings, fail_on_severities),
+        analyze_trivy(trivy_report, fail_on_severities),
+        analyze_secrets(secrets_report, fail_on_severities),
+        analyze_yara(yara_report, fail_on_severities),
+        analyze_clamav(clamav_report, fail_on_severities),
+        analyze_zap(zap_report, fail_on_severities),
     ]
 
     state_aliases = {

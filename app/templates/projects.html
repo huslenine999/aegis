@@ -105,6 +105,19 @@
           </div>
           <h3>Scan history</h3>
           <div id="scan-history"><p>No scans yet.</p></div>
+          <h3>Security findings</h3>
+          <div id="findings"><p>No durable findings yet.</p></div>
+          <h3>Policy versions</h3>
+          <form id="policy-form" class="row">
+            <input id="policy-name" aria-label="Policy name" placeholder="High severity gate" required>
+            <select id="policy-threshold" aria-label="Blocking threshold">
+              <option value="medium">Medium and above</option>
+              <option value="high">High and critical</option>
+              <option value="critical">Critical only</option>
+            </select>
+            <button>Create draft</button>
+          </form>
+          <div id="policies"></div>
           <h3>Members</h3>
           <form id="member-form" class="row">
             <input id="member-username" aria-label="Member username" placeholder="username" required>
@@ -208,7 +221,7 @@
       updatePresetNote();
       updateOnboarding();
       await loadProjects();
-      await Promise.all([loadScans(), loadMembers(), loadNotifications()]);
+      await Promise.all([loadScans(), loadFindings(), loadPolicies(), loadMembers(), loadNotifications()]);
     }
     async function loadScans() {
       const response = await api(`/api/projects/${selected.id}/scans`);
@@ -232,6 +245,52 @@
       if (!response.ok) return message((await response.json()).detail || "Scan action failed.", true);
       message(action === "retry" ? "Retry queued." : "Cancellation requested.");
       await loadScans();
+    }
+    async function loadFindings() {
+      const response = await api(`/api/projects/${selected.id}/findings`);
+      if (!response.ok) return;
+      const findings = (await response.json()).findings || [];
+      const canOperate = selected.role !== "viewer";
+      byId("findings").innerHTML = findings.map(finding => `<article class="scan">
+        <div class="row spread"><strong>${escapeHtml(finding.title)}</strong><span><span class="badge">${escapeHtml(finding.severity)}</span> <span class="badge">${escapeHtml(finding.status)}</span></span></div>
+        <small class="muted">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "no rule")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${finding.line_number}` : ""} · seen ${finding.occurrence_count} time(s)</small>
+        <div class="row">
+          ${canOperate && finding.status === "open" ? `<button data-finding-status="${finding.id}:acknowledged">Acknowledge</button>` : ""}
+          ${canOperate && finding.status !== "resolved" ? `<button data-finding-status="${finding.id}:resolved">Mark resolved</button>` : ""}
+          ${canOperate && selected.github_full_name && !finding.ticket_url ? `<button data-finding-ticket="${finding.id}">Create GitHub issue</button>` : ""}
+          ${finding.ticket_url ? `<a href="${escapeHtml(finding.ticket_url)}" target="_blank" rel="noopener">Remediation ticket</a>` : ""}
+        </div>
+      </article>`).join("") || "<p class='muted'>No durable findings yet. Complete a scan to populate this queue.</p>";
+      document.querySelectorAll("[data-finding-status]").forEach(button => button.onclick = async () => {
+        const [id, status] = button.dataset.findingStatus.split(":");
+        const response = await api(`/api/projects/${selected.id}/findings/${id}`, {method:"PATCH", body:JSON.stringify({status})});
+        const data = await response.json();
+        if (!response.ok) return message(data.detail || "Finding update failed.", true);
+        message("Finding updated."); await loadFindings();
+      });
+      document.querySelectorAll("[data-finding-ticket]").forEach(button => button.onclick = async () => {
+        const response = await api(`/api/projects/${selected.id}/findings/${button.dataset.findingTicket}/github-issue`, {method:"POST", body:"{}"});
+        const data = await response.json();
+        if (!response.ok) return message(data.detail || "Issue creation failed.", true);
+        message(`GitHub issue #${data.issue.number} created.`); await loadFindings();
+      });
+    }
+    async function loadPolicies() {
+      const response = await api(`/api/projects/${selected.id}/policies`);
+      if (!response.ok) return;
+      const data = await response.json();
+      const canAdmin = selected.role === "admin";
+      byId("policy-form").hidden = !canAdmin;
+      byId("policies").innerHTML = (data.policies || []).map(policy => `<div class="scan row spread">
+        <span><strong>v${policy.version} · ${escapeHtml(policy.name)}</strong><br><small class="muted">Blocks ${escapeHtml(policy.definition.fail_on_severities.join(", ") || "nothing")} · ${escapeHtml(policy.state)}</small></span>
+        ${canAdmin && policy.state === "draft" ? `<button data-approve-policy="${policy.id}">Approve</button>` : `<span class="badge">${escapeHtml(policy.state)}</span>`}
+      </div>`).join("") || "<p class='muted'>The default version will be created when the first scan starts.</p>";
+      document.querySelectorAll("[data-approve-policy]").forEach(button => button.onclick = async () => {
+        const response = await api(`/api/projects/${selected.id}/policies/${button.dataset.approvePolicy}/approve`, {method:"POST"});
+        const data = await response.json();
+        if (!response.ok) return message(data.detail || "Policy approval failed.", true);
+        message(`Policy v${data.version} approved.`); await loadPolicies();
+      });
     }
     async function loadMembers() {
       const response = await api(`/api/projects/${selected.id}/members`);
@@ -325,6 +384,19 @@
       event.preventDefault(); const response = await api(`/api/projects/${selected.id}/members`, {method:"PUT", body:JSON.stringify({username:byId("member-username").value,role:byId("member-role").value})});
       const data = await response.json(); if (!response.ok) return message(data.detail || "Member update failed.", true);
       event.target.reset(); message("Project member updated."); await loadMembers();
+    };
+    byId("policy-form").onsubmit = async event => {
+      event.preventDefault();
+      const thresholds = {
+        medium:["MEDIUM","HIGH","CRITICAL"], high:["HIGH","CRITICAL"], critical:["CRITICAL"]
+      };
+      const response = await api(`/api/projects/${selected.id}/policies`, {method:"POST", body:JSON.stringify({
+        name:byId("policy-name").value,
+        definition:{schema_version:1,fail_on_severities:thresholds[byId("policy-threshold").value],required_tools:[]}
+      })});
+      const data = await response.json();
+      if (!response.ok) return message(data.detail || "Policy creation failed.", true);
+      event.target.reset(); message(`Policy v${data.version} created as a draft.`); await loadPolicies();
     };
     byId("notification-type").onchange = () => {
       byId("notification-destination").placeholder = byId("notification-type").value === "email" ? "security@example.com" : "HTTPS webhook URL";

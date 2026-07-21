@@ -36,8 +36,10 @@ from scanners import configure_semgrep_environment
 from scanners import scanner_subprocess_environment
 from scanners import write_semgrep_rules
 from projects import get_project, get_scan_run, record_scan_artifacts, update_scan_run
+from findings import sync_findings
+from policies import get_policy
 from evidence import canonical_json, sign_manifest
-from artifact_storage import run_directory
+from artifact_storage import publish_artifacts, run_directory
 from github_integration import complete_check_run, github_installation_token, github_token
 from notifications import queue_project_notification
 from sandbox import (
@@ -506,19 +508,21 @@ def _cleanup_expired_artifacts(current_job_id: str) -> None:
                 continue
 
 
-def _finalize_artifacts(scan_run_id: int, report_dir: Path) -> None:
-    artifacts = []
-    for name in sorted(RECORDED_ARTIFACT_NAMES):
-        path = report_dir / name
-        if not path.is_file():
-            continue
-        digest = hashlib.sha256()
-        with path.open("rb") as artifact:
-            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
-                digest.update(chunk)
-        artifacts.append(
-            {"name": name, "size": path.stat().st_size, "sha256": digest.hexdigest()}
-        )
+def _finalize_artifacts(
+    scan_run_id: int,
+    report_dir: Path,
+    *,
+    tenant_id: int,
+    project_id: int,
+    job_id: str,
+) -> None:
+    artifacts = publish_artifacts(
+        report_dir,
+        RECORDED_ARTIFACT_NAMES,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        job_id=job_id,
+    )
     record_scan_artifacts(scan_run_id, artifacts)
 
 
@@ -536,6 +540,13 @@ def async_scan_task(
 ):
     external_project_dir = None
     project = get_project(project_id) if project_id else None
+    scan_run = get_scan_run(scan_run_id) if scan_run_id else None
+    policy = (
+        get_policy(scan_run["policy_version_id"], project_id)
+        if scan_run and scan_run.get("policy_version_id")
+        else None
+    )
+    policy_definition = policy["definition"] if policy else None
     report_dir = run_directory(
         SCANS_DIR,
         job_id,
@@ -1003,6 +1014,13 @@ def async_scan_task(
             )
 
         operational_failures = tool_statuses.failures()
+        if policy_definition:
+            tool_states = tool_statuses.states()
+            for required_tool in policy_definition.get("required_tools", []):
+                if tool_states.get(required_tool) != "completed":
+                    operational_failures.append(
+                        f"Required tool {required_tool} did not complete."
+                    )
         policy_exit_code = run_policy_engine(
             scan_dir=report_dir,
             html_path=report_dir / "report.html",
@@ -1012,6 +1030,11 @@ def async_scan_task(
             operational_failures=operational_failures or None,
             tool_states=tool_statuses.states(),
             waf_enabled=waf_enabled,
+            fail_on_severities=(
+                set(policy_definition["fail_on_severities"])
+                if policy_definition
+                else None
+            ),
         )
         mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
 
@@ -1073,6 +1096,16 @@ def async_scan_task(
             "blocked_by": blocking_tools,
             "sandbox_status": "active" if sandbox_active else "unavailable",
             "artifact_base": f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts" if project_id and scan_run_id else None,
+            "policy_version": (
+                {
+                    "id": policy["id"],
+                    "version": policy["version"],
+                    "name": policy["name"],
+                    "sha256": policy["sha256"],
+                }
+                if policy
+                else None
+            ),
         }
         policy_digest = hashlib.sha256(canonical_json(policy_summary)).hexdigest()
         target_identity = (
@@ -1097,6 +1130,7 @@ def async_scan_task(
                 "policy_status": final_status,
                 "policy_exit_code": policy_exit_code,
                 "policy_sha256": policy_digest,
+                "policy_version": result_payload["policy_version"],
                 "operational_failures": operational_failures,
                 "tools": [dict(item) for item in tool_statuses.records],
                 "artifacts": _artifact_inventory(report_dir),
@@ -1106,13 +1140,22 @@ def async_scan_task(
         if scan_run_id is None:
             _mirror_latest_reports(report_dir)
         else:
-            _finalize_artifacts(scan_run_id, report_dir)
+            if not project or project_id is None:
+                raise ValueError("Project metadata is required to finalize scan artifacts.")
+            _finalize_artifacts(
+                scan_run_id,
+                report_dir,
+                tenant_id=project["tenant_id"],
+                project_id=project_id,
+                job_id=job_id,
+            )
 
         if final_status == "ERROR":
             raise ScanOperationalFailure(policy_summary.get("reason", "Scanner operational failure"), result_payload)
 
         # 5. State: REPORTING -> COMPLETED
         if scan_run_id:
+            result_payload["finding_sync"] = sync_findings(scan_run_id, result_payload)
             update_scan_run(
                 scan_run_id, state="completed", progress=100, result=result_payload
             )

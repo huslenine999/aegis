@@ -396,7 +396,8 @@ npm run test:e2e
 git diff --check
 ```
 
-Current baseline: **180 Python tests** and **7 Playwright/axe browser tests**.
+Current baseline: **185 Python tests**, a **30-case scanner benchmark**, and
+**7 Playwright/axe browser tests**.
 CI also enforces focused type checks, full Ruff linting, browser authentication
 flows, and serious/critical accessibility checks.
 
@@ -413,10 +414,14 @@ AEGIS_ENABLE_DEMO_LAB=true ./venv/bin/python -m uvicorn app.main:app \
 Aegis is suitable for a controlled internal production pilot after a real Docker
 deployment rehearsal and backup/restore drill.
 
-Before operating it as a public multi-tenant SaaS:
+The application now includes durable finding lifecycles, immutable project policy
+versions, GitHub remediation issue handoff, optional OIDC, and an S3-compatible
+artifact backend with KMS/object-lock controls. Before operating it as a public
+multi-tenant SaaS:
 
-- move the run-scoped local artifact backend to tenant-scoped object storage;
-- add password recovery and enterprise identity federation;
+- configure and independently review the S3, KMS, object-lock, and OIDC adapters;
+- operate and test recovery using [docs/OPERATIONS.md](docs/OPERATIONS.md);
+- add password recovery and a break-glass identity procedure;
 - move private-repository credential minting behind a short-lived broker;
 - run scanners in an ephemeral fleet with deny-by-default egress;
 - run load, failover, penetration, and disaster-recovery testing;
