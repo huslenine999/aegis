@@ -5,13 +5,14 @@
 Install the command-line scanner in an isolated environment:
 
 ```bash
-pipx install aegis-security-console
+pipx install "aegis-security-console[scanner]"
 aegis demo
 aegis scan .
 ```
 
 If the package has not reached PyPI yet, install the current repository
-revision with `pipx install "git+https://github.com/huslenine999/aegis.git"`.
+revision with
+`pipx install "git+https://github.com/huslenine999/aegis.git#egg=aegis-security-console[scanner]"`.
 
 ## Complete local stack
 

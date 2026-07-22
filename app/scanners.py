@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -102,12 +103,30 @@ def scanner_subprocess_environment() -> dict[str, str]:
     return environment
 
 
+def find_runtime_executable(name: str, python_executable: str | None = None) -> str | None:
+    """Find a scanner on PATH or beside the active Python/pipx interpreter."""
+    located = shutil.which(name)
+    if located:
+        return located
+    executable_name = f"{name}.exe" if os.name == "nt" else name
+    adjacent = Path(python_executable or sys.executable).parent / executable_name
+    is_executable = adjacent.is_file() and (
+        os.name == "nt" or os.access(adjacent, os.X_OK)
+    )
+    return str(adjacent) if is_executable else None
+
+
 def configure_semgrep_environment(environment: dict[str, str] | None = None):
     target = os.environ if environment is None else environment
+    temp_dir = Path(tempfile.gettempdir())
     target.setdefault("SEMGREP_SEND_METRICS", "off")
     target.setdefault(
+        "SEMGREP_SETTINGS_FILE",
+        str(temp_dir / "aegis-semgrep-settings.yml"),
+    )
+    target.setdefault(
         "SEMGREP_LOG_FILE",
-        str(Path(tempfile.gettempdir()) / "aegis-semgrep.log"),
+        str(temp_dir / "aegis-semgrep.log"),
     )
     try:
         import certifi

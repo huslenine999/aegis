@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aegis-security-console"
-version = "2.3.0"
+version = "2.4.0"
 description = "Private, explainable release-security scanner and self-hosted workbench"
 readme = "README.md"
 requires-python = ">=3.11"

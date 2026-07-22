@@ -20,7 +20,7 @@ The package is published only by a version tag after release approval. Before
 the first tagged PyPI release, install directly from the repository:
 
 ```bash
-pipx install "git+https://github.com/huslenine999/aegis.git"
+pipx install "git+https://github.com/huslenine999/aegis.git#egg=aegis-security-console[scanner]"
 ```
 
 ## Readiness is unhealthy

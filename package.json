@@ -1,6 +1,6 @@
 {
   "name": "aegis",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Private, explainable release-security scanner and self-hosted workbench",
   "main": "bin/cli.js",
   "bin": {
