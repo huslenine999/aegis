@@ -4,6 +4,8 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-07-22
+
 ### Added
 
 - Added durable finding deduplication, lifecycle events, ownership, due dates,
@@ -27,6 +29,14 @@ All notable changes to the Aegis project will be documented in this file.
 - Normalize common GitHub repository inputs before cloning and ensure worker
   failures transition PostgreSQL scan records out of the queued state.
 - Correct scanner-only and full-workbench installation guidance.
+- Route PostgreSQL bulk inserts through a database cursor so production
+  artifact metadata writes use psycopg's supported `executemany` API.
+- Keep Semgrep settings and log files in writable temporary storage for
+  read-only worker containers.
+- Discover Semgrep beside the active virtual-environment or pipx interpreter
+  even when that directory is not present in the caller's `PATH`.
+- Exclude the generated `.env.aegis` workbench secrets file from repository
+  self-scans and document the full scanner extra for Standard scans.
 
 ### Removed
 

@@ -49,11 +49,17 @@ Install a published Aegis release in an isolated environment:
 pipx install aegis-security-console
 ```
 
+For Standard scans with Semgrep included, install the scanner extra:
+
+```bash
+pipx install "aegis-security-console[scanner]"
+```
+
 If PyPI reports that no matching distribution exists before the first tagged
 release is published, install the current repository revision instead:
 
 ```bash
-pipx install "git+https://github.com/huslenine999/aegis.git"
+pipx install "git+https://github.com/huslenine999/aegis.git#egg=aegis-security-console[scanner]"
 ```
 
 Check the available scanner dependencies, then run the built-in demonstration:

@@ -17,7 +17,7 @@ completed versions in `schema_migrations`.
 For a published release image:
 
 ```bash
-export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.3.0
+export AEGIS_IMAGE=ghcr.io/huslenine999/aegis:v2.4.0
 docker compose pull dashboard worker
 docker compose up -d --no-build
 ```

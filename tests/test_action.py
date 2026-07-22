@@ -106,7 +106,7 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     workflow = (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
 
     assert "uses: ./" not in workflow
-    assert "ref: 395f4479c3f092b416bf13e2c3b45323db777ef1" in workflow
+    assert "ref: 1d60daa9efa001eb36716e5656db514f809b8b6d" in workflow
     assert "python -m pip install ./trusted-aegis" in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
@@ -135,6 +135,19 @@ def test_security_gate_shell_script_has_valid_bash_syntax(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_container_smoke_starts_all_readiness_services():
+    workflow = yaml.safe_load(
+        (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
+    )
+    steps = workflow["jobs"]["container-smoke"]["steps"]
+    start_step = next(step for step in steps if step.get("name") == "Start production stack")
+    log_step = next(step for step in steps if step.get("name") == "Show container logs")
+
+    required_services = {"postgres", "redis", "dashboard", "worker", "notifier"}
+    assert required_services <= set(start_step["run"].split())
+    assert required_services <= set(log_step["run"].split())
 
 
 def test_published_action_e2e_asserts_outputs_and_reports():

@@ -4,6 +4,7 @@ scan:
   timeout: 120
   sarif: aegis.sarif
   exclude_paths:
+    - .env.aegis
     - app/demo_lab.py
     - app/scanners.py
     - app/templates/report_template.html
@@ -50,6 +51,27 @@ scan:
       reason: Worker intentionally invokes configured scanner executables from the runtime PATH.
       approved_by: security-owner
       ticket: AEGIS-RISK-006
+      expires_at: 2027-07-20
+    - tool: Ruff
+      rule: S608
+      path: app/database.py
+      reason: Migration trigger identifiers are selected only from hardcoded internal tuples; no request or configuration value enters the SQL text.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-010
+      expires_at: 2027-07-20
+    - tool: Ruff
+      rule: S608
+      path: app/findings.py
+      reason: Finding filters and update columns are assembled only from fixed internal allowlists while every external value remains parameterized.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-011
+      expires_at: 2027-07-20
+    - tool: Ruff
+      rule: S310
+      path: scripts/pilot_readiness.py
+      reason: The rehearsal client opens only the two hardcoded localhost health endpoints created by this script.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-012
       expires_at: 2027-07-20
     - tool: Secrets
       rule: Hex High Entropy String

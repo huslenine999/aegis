@@ -33,6 +33,7 @@ from scanners import run_dast_scan as shared_run_dast_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import DEFAULT_IGNORED_DIRS
 from scanners import configure_semgrep_environment
+from scanners import find_runtime_executable
 from scanners import scanner_subprocess_environment
 from scanners import write_semgrep_rules
 from projects import (
@@ -852,11 +853,11 @@ def async_scan_task(
                     semgrep_rules_path.parent.mkdir(exist_ok=True, parents=True)
                     write_semgrep_rules(semgrep_rules_path)
                 
-                semgrep_bin = Path(python_bin).parent / "semgrep"
-                if not semgrep_bin.exists():
+                semgrep_bin = find_runtime_executable("semgrep", python_bin)
+                if not semgrep_bin:
                     semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
                 else:
-                    semgrep_cmd = [str(semgrep_bin), "scan", "--config", str(semgrep_rules_path), "--json"]
+                    semgrep_cmd = [semgrep_bin, "scan", "--config", str(semgrep_rules_path), "--json"]
                 semgrep_environment = scanner_subprocess_environment()
                 configure_semgrep_environment(semgrep_environment)
                 semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]

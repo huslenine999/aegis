@@ -26,6 +26,7 @@ from scanners import run_clamav_scan as shared_run_clamav_scan
 from scanners import run_dast_scan as shared_run_dast_scan
 from scanners import run_yara_scan as shared_run_yara_scan
 from scanners import configure_semgrep_environment
+from scanners import find_runtime_executable
 from scanners import write_semgrep_rules
 from scan_status import ToolStatusTracker
 from cli_output import print_ascii_report, print_timing_summary
@@ -776,7 +777,7 @@ def execute_scan(
         write_semgrep_rules(semgrep_rules_path)
 
     # Find semgrep binary in virtual env or system
-    semgrep_bin = shutil.which("semgrep")
+    semgrep_bin = find_runtime_executable("semgrep")
     if fast:
         print("ℹ️  [SAST:Semgrep] Fast mode enabled, skipping Semgrep rule check.")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
@@ -1096,7 +1097,7 @@ def run_doctor(json_output: bool = False) -> int:
     except importlib.metadata.PackageNotFoundError:
         checks[-1] = {"name": "ruff", "ok": False, "detail": "python module missing"}
 
-    semgrep_bin = shutil.which("semgrep")
+    semgrep_bin = find_runtime_executable("semgrep")
     add_check("semgrep", semgrep_bin is not None, semgrep_bin or "not found")
     trivy_bin = shutil.which("trivy")
     add_check("trivy", trivy_bin is not None, trivy_bin or "not found")

@@ -67,7 +67,7 @@ class PostgresConnection:
         return self._connection.execute(self._sql(statement), parameters)
 
     def executemany(self, statement: str, parameters):
-        return self._connection.executemany(self._sql(statement), parameters)
+        return self.cursor().executemany(statement, parameters)
 
     def cursor(self):
         return PostgresCursor(self._connection.cursor())
