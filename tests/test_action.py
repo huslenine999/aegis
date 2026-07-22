@@ -68,6 +68,42 @@ def test_all_external_actions_use_immutable_commit_shas():
             )
 
 
+def test_container_release_workflows_pin_buildx_setup():
+    expected = (
+        "uses: docker/setup-buildx-action@"
+        "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0"
+    )
+
+    for name in ("release-build.yml", "container-release.yml"):
+        assert expected in (WORKFLOWS_PATH / name).read_text()
+
+
+def test_manual_container_release_checks_out_validated_tag():
+    workflow_path = WORKFLOWS_PATH / "container-release.yml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    job = workflow["jobs"]["publish-container"]
+    checkout = next(
+        step for step in job["steps"] if step.get("name") == "Checkout tagged source"
+    )
+    validation = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Validate release tag and package version"
+    )
+    publish = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Publish versioned container image"
+    )
+
+    assert job["environment"] == "container-release"
+    assert checkout["with"]["ref"] == "${{ inputs.release_tag }}"
+    assert 're.fullmatch(r"v[0-9]+\\.[0-9]+\\.[0-9]+"' in validation["run"]
+    assert "version != python_version or version != npm_version" in validation["run"]
+    assert '-t "$IMAGE:$VERSION"' in publish["run"]
+    assert '-t "$IMAGE:latest"' in publish["run"]
+
+
 def test_repository_has_no_tracked_absolute_symlinks():
     tracked_files = subprocess.run(
         ["git", "ls-files", "-s"],

@@ -4,6 +4,11 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Initialize a pinned Docker Buildx builder before provenance-enabled image
+  publication and provide a protected recovery workflow for immutable release tags.
+
 ## [2.4.0] - 2026-07-22
 
 ### Added

@@ -1,0 +1,93 @@
+name: Container Release
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable release tag to publish
+        required: true
+        type: string
+
+jobs:
+  publish-container:
+    name: Approve and Publish Tagged Container
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: container-release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Validate release tag and package version
+        id: source
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python - "$RELEASE_TAG" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          release_tag = sys.argv[1]
+          if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag):
+              raise SystemExit("release_tag must have the form vMAJOR.MINOR.PATCH")
+          version = release_tag.removeprefix("v")
+          python_version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
+          npm_version = json.loads(pathlib.Path("package.json").read_text())["version"]
+          if version != python_version or version != npm_version:
+              raise SystemExit(
+                  f"Version mismatch: tag={version}, python={python_version}, npm={npm_version}"
+              )
+          PY
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish versioned container image
+        id: publish
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx build \
+            --provenance=mode=max \
+            --sbom=true \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            -t "$IMAGE:$VERSION" \
+            -t "$IMAGE:latest" \
+            --metadata-file build-metadata.json \
+            --push .
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          metadata = json.load(open("build-metadata.json"))
+          print(f"digest={metadata['containerimage.digest']}")
+          PY
+
+      - name: Attest published container digest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
