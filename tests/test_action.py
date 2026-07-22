@@ -137,6 +137,19 @@ def test_security_gate_shell_script_has_valid_bash_syntax(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_container_smoke_starts_all_readiness_services():
+    workflow = yaml.safe_load(
+        (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
+    )
+    steps = workflow["jobs"]["container-smoke"]["steps"]
+    start_step = next(step for step in steps if step.get("name") == "Start production stack")
+    log_step = next(step for step in steps if step.get("name") == "Show container logs")
+
+    required_services = {"postgres", "redis", "dashboard", "worker", "notifier"}
+    assert required_services <= set(start_step["run"].split())
+    assert required_services <= set(log_step["run"].split())
+
+
 def test_published_action_e2e_asserts_outputs_and_reports():
     workflow = (WORKFLOWS_PATH / "action-e2e.yml").read_text()
 

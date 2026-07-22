@@ -223,7 +223,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml build
 
       - name: Start production stack
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker notifier
 
       - name: Verify readiness and worker scan
         shell: bash
@@ -270,7 +270,7 @@ jobs:
 
       - name: Show container logs
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color dashboard worker postgres redis
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color dashboard worker notifier postgres redis
 
       - name: Stop production stack
         if: always()
