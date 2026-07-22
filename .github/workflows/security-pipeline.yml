@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: huslenine999/aegis
-          ref: 395f4479c3f092b416bf13e2c3b45323db777ef1
+          ref: 1d60daa9efa001eb36716e5656db514f809b8b6d
           path: trusted-aegis
           persist-credentials: false
 
@@ -198,6 +198,9 @@ jobs:
           echo "AEGIS_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "AEGIS_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
           echo "AEGIS_ENCRYPTION_KEY=$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
+          echo "AEGIS_TOKEN_PEPPER=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AEGIS_AUDIT_HMAC_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AEGIS_EVIDENCE_SIGNING_KEY=$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
           echo "AEGIS_METRICS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
           echo "AEGIS_DOMAIN=localhost" >> "$GITHUB_ENV"
