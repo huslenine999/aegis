@@ -93,6 +93,7 @@ from projects import (
     list_scan_runs,
     get_scan_artifact,
     list_scan_artifacts,
+    normalize_github_repository_url,
     remove_project_member,
     require_project_role,
     set_project_member,
@@ -471,6 +472,10 @@ async def complete_setup(request: Request):
         raise HTTPException(status_code=400, detail="Workspace name is required.")
     if len(repository) > 512:
         raise HTTPException(status_code=400, detail="Repository value is too long.")
+    try:
+        repository = normalize_github_repository_url(repository)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if scan_preset not in {"quick", "standard", "deep"}:
         raise HTTPException(status_code=400, detail="Invalid scan preset.")
     settings = {
@@ -808,8 +813,10 @@ async def projects_create(
     preset = str(body.get("scan_preset", "standard")).lower()
     if not name or len(name) > 128:
         raise HTTPException(status_code=400, detail="Project name is required.")
-    if repository_url and not repository_url.startswith("https://github.com/"):
-        raise HTTPException(status_code=400, detail="Only HTTPS GitHub repositories are supported.")
+    try:
+        repository_url = normalize_github_repository_url(repository_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not re.fullmatch(r"[A-Za-z0-9._/-]{1,255}", default_branch):
         raise HTTPException(status_code=400, detail="Invalid default branch.")
     try:
@@ -840,8 +847,10 @@ async def project_update(
     preset = str(body.get("scan_preset", project["scan_preset"])).lower()
     if not name or len(name) > 128:
         raise HTTPException(status_code=400, detail="Project name is required.")
-    if repository_url and not repository_url.startswith("https://github.com/"):
-        raise HTTPException(status_code=400, detail="Only HTTPS GitHub repositories are supported.")
+    try:
+        repository_url = normalize_github_repository_url(repository_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not re.fullmatch(r"[A-Za-z0-9._/-]{1,255}", default_branch):
         raise HTTPException(status_code=400, detail="Invalid default branch.")
     try:

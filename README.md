@@ -43,10 +43,17 @@ Aegis provides one workflow:
 
 ## CLI evaluation
 
-Install Aegis in an isolated environment:
+Install a published Aegis release in an isolated environment:
 
 ```bash
 pipx install aegis-security-console
+```
+
+If PyPI reports that no matching distribution exists before the first tagged
+release is published, install the current repository revision instead:
+
+```bash
+pipx install "git+https://github.com/huslenine999/aegis.git"
 ```
 
 Check the available scanner dependencies, then run the built-in demonstration:
@@ -97,8 +104,9 @@ aegis verify-evidence ./scan-manifest.json --public-key YOUR_PINNED_KEY
 
 ## Local workbench
 
-The full workbench is started from a source checkout because it includes the
-Compose topology and deployment configuration.
+The full workbench is started from a source checkout because the scanner-only
+Python package does not include the Compose topology and deployment
+configuration.
 
 ```bash
 git clone https://github.com/huslenine999/aegis.git

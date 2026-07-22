@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import hashlib
 import pytest
+from types import SimpleNamespace
 
 
 def configure_project_database(tmp_path, monkeypatch):
@@ -46,6 +47,74 @@ def test_projects_are_membership_scoped(tmp_path, monkeypatch):
     assert owner_projects[0]["role"] == "admin"
     assert projects.list_projects(11, "operator") == []
     assert projects.project_role(project_id, 10, "operator") == "admin"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("github.com/example/api", "https://github.com/example/api.git"),
+        ("example/api", "https://github.com/example/api.git"),
+        ("https://github.com/example/api", "https://github.com/example/api.git"),
+        ("https://github.com/example/api.git/", "https://github.com/example/api.git"),
+    ],
+)
+def test_github_repository_urls_are_normalized(value, expected):
+    assert projects.normalize_github_repository_url(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://github.com/example/api",
+        "https://gitlab.com/example/api",
+        "https://github.com/example/api/issues",
+        "https://user@github.com/example/api",
+        "https://github.com/example/api?tab=readme",
+    ],
+)
+def test_invalid_repository_urls_are_rejected(value):
+    with pytest.raises(ValueError):
+        projects.normalize_github_repository_url(value)
+
+
+def test_project_creation_persists_normalized_repository_url(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="API",
+        repository_url="github.com/example/api",
+        github_full_name="",
+        default_branch="main",
+        scan_preset="standard",
+        user_id=10,
+    )
+
+    assert projects.get_project(project_id)["repository_url"] == (
+        "https://github.com/example/api.git"
+    )
+
+
+def test_failure_update_does_not_send_an_untyped_null_parameter(monkeypatch):
+    statements = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, statement, parameters=()):
+            statements.append((statement, parameters))
+            return SimpleNamespace()
+
+    monkeypatch.setattr(projects, "get_connection", lambda: Connection())
+
+    projects.update_scan_run(7, state="failed", progress=100)
+
+    statement, parameters = statements[-1]
+    assert "result_json" not in statement
+    assert len(parameters) == 4
+    assert all(parameter is not None for parameter in parameters)
 
 
 def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeypatch):

@@ -35,7 +35,13 @@ from scanners import DEFAULT_IGNORED_DIRS
 from scanners import configure_semgrep_environment
 from scanners import scanner_subprocess_environment
 from scanners import write_semgrep_rules
-from projects import get_project, get_scan_run, record_scan_artifacts, update_scan_run
+from projects import (
+    get_project,
+    get_scan_run,
+    normalize_github_repository_url,
+    record_scan_artifacts,
+    update_scan_run,
+)
 from findings import sync_findings
 from policies import get_policy
 from evidence import canonical_json, sign_manifest
@@ -317,7 +323,8 @@ def _clone_github_project(
         clone_command.append("--no-checkout")
     else:
         clone_command.extend(["--single-branch", "--branch", project["default_branch"]])
-    clone_command.extend(["--", project["repository_url"], str(destination)])
+    repository_url = normalize_github_repository_url(project["repository_url"])
+    clone_command.extend(["--", repository_url, str(destination)])
     result = subprocess.run(
         clone_command,
         env=environment,

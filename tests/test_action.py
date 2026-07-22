@@ -93,12 +93,13 @@ def test_repository_has_no_tracked_absolute_symlinks():
     )
 
 
-def test_redis_runtime_can_drop_to_its_unprivileged_user():
+def test_redis_runtime_starts_as_its_unprivileged_user():
     compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
     redis_service = compose["services"]["redis"]
 
+    assert redis_service["user"] == "999:1000"
     assert redis_service["cap_drop"] == ["ALL"]
-    assert set(redis_service["cap_add"]) == {"SETGID", "SETUID"}
+    assert "cap_add" not in redis_service
 
 
 def test_security_gate_uses_trusted_scanner_and_policy_revision():

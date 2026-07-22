@@ -100,6 +100,13 @@ jobs:
               raise SystemExit(f"Wheel is missing required files: {sorted(missing)}")
           PY
 
+      - name: Smoke-test wheel entry point
+        shell: bash
+        run: |
+          python -m venv --system-site-packages /tmp/aegis-wheel-smoke
+          /tmp/aegis-wheel-smoke/bin/python -m pip install --no-deps --force-reinstall dist/*.whl
+          /tmp/aegis-wheel-smoke/bin/aegis version
+
       - name: Generate release checksums
         working-directory: dist
         run: sha256sum *.whl > SHA256SUMS
@@ -120,6 +127,39 @@ jobs:
             benchmark-results.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload PyPI distributions
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-pypi:
+    name: Approve and Publish Python Package
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production-release
+      url: https://pypi.org/project/aegis-security-console/
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download attested Python distribution
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1.14
 
   publish-container:
     name: Approve and Publish Container

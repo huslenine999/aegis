@@ -8,12 +8,24 @@ Install the command-line scanner in an isolated environment:
 pipx install aegis-security-console
 aegis demo
 aegis scan .
-aegis start
 ```
+
+If the package has not reached PyPI yet, install the current repository
+revision with `pipx install "git+https://github.com/huslenine999/aegis.git"`.
 
 ## Complete local stack
 
-Clone the repository, then run:
+The complete stack requires the deployment files from a source checkout:
+
+```bash
+git clone https://github.com/huslenine999/aegis.git
+cd aegis
+python3 -m venv venv
+./venv/bin/python -m pip install -e ".[dev,scanner]"
+./venv/bin/aegis start
+```
+
+After the first start, manage it from the same checkout:
 
 ```bash
 aegis start

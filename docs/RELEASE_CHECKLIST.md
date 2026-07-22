@@ -2,6 +2,10 @@
 
 Use this checklist before tagging a public release.
 
+Before the first public tag, register the pending PyPI Trusted Publisher for
+project `aegis-security-console`, owner `huslenine999`, repository `aegis`,
+workflow `release-build.yml`, and environment `production-release`.
+
 Start by generating the consolidated repository-side evidence:
 
 ```bash
@@ -43,8 +47,10 @@ service restart, then removes only its temporary containers and volumes.
     orchestration code is incrementally typed.
 16. Confirm every non-strict scan summary used as release evidence has an empty
     `operational_failures` list.
-17. Verify the wheel against `SHA256SUMS` and confirm the published container has
-    BuildKit SBOM and provenance attestations before promoting the tag.
+17. Verify the wheel against `SHA256SUMS`, install the tagged version with
+    `pipx install aegis-security-console==<version>`, and confirm the published
+    container has BuildKit SBOM and provenance attestations before promoting the
+    tag.
 18. Verify a signed `scan-manifest.json` with the deployment's pinned Ed25519
     public key and reject any manifest whose artifact hashes do not match.
 19. Run `python scripts/run_security_benchmark.py --output benchmark-results.json`

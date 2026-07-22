@@ -20,15 +20,12 @@ services:
     image: redis:7.4.9-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     command: ["redis-server", "--appendonly", "yes", "--loglevel", "warning"]
     restart: unless-stopped
+    user: "999:1000"
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      # The official image starts as root only long enough to switch to redis.
-      - SETGID
-      - SETUID
     pids_limit: 128
     expose:
       - "6379"

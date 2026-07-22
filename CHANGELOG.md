@@ -20,6 +20,13 @@ All notable changes to the Aegis project will be documented in this file.
 - Added a reproducible controlled-pilot readiness and recovery rehearsal.
 - Tightened scanner/notifier secret boundaries and local artifact-backend claims.
 - Consolidated development verification and current production limitations.
+- Added tag-gated PyPI Trusted Publishing and a wheel entry-point smoke test.
+
+### Fixed
+
+- Normalize common GitHub repository inputs before cloning and ensure worker
+  failures transition PostgreSQL scan records out of the queued state.
+- Correct scanner-only and full-workbench installation guidance.
 
 ### Removed
 

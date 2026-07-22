@@ -1,5 +1,7 @@
 import json
+import re
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 try:
     from database import USING_POSTGRES, get_connection
@@ -9,10 +11,47 @@ except ImportError:
 
 PROJECT_ROLE_LEVEL = {"viewer": 10, "operator": 20, "admin": 30}
 VALID_PRESETS = {"quick", "standard", "deep"}
+GITHUB_PATH_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_github_repository_url(repository_url: str) -> str:
+    """Return a clone-safe HTTPS GitHub URL from common onboarding inputs."""
+    value = str(repository_url or "").strip()
+    if not value:
+        return ""
+    if any(character in value for character in ("\r", "\n", "\0")):
+        raise ValueError("Invalid GitHub repository URL.")
+    if value.startswith("www.github.com/"):
+        value = value.removeprefix("www.")
+    if value.startswith("github.com/"):
+        value = f"https://{value}"
+    elif GITHUB_PATH_PATTERN.fullmatch(value.rstrip("/")):
+        value = f"https://github.com/{value.rstrip('/')}"
+
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Only HTTPS GitHub repositories are supported.")
+    path = parsed.path.strip("/")
+    if not GITHUB_PATH_PATTERN.fullmatch(path):
+        raise ValueError(
+            "GitHub repository must be in owner/repository form."
+        )
+    owner, repository = path.removesuffix(".git").split("/", 1)
+    if owner in {".", ".."} or repository in {".", ".."}:
+        raise ValueError("Invalid GitHub repository URL.")
+    return f"https://github.com/{owner}/{repository}.git"
 
 
 def _tenant_for_user(connection, user_id: int) -> int:
@@ -36,6 +75,7 @@ def create_project(
 ) -> int:
     if scan_preset not in VALID_PRESETS:
         raise ValueError("Invalid scan preset.")
+    repository_url = normalize_github_repository_url(repository_url)
     with get_connection() as connection:
         user_tenant_id = _tenant_for_user(connection, user_id)
         if tenant_id is not None and int(tenant_id) != user_tenant_id:
@@ -178,6 +218,7 @@ def update_project(
 ) -> None:
     if scan_preset not in VALID_PRESETS:
         raise ValueError("Invalid scan preset.")
+    repository_url = normalize_github_repository_url(repository_url)
     with get_connection() as connection:
         cursor = connection.execute(
             """UPDATE projects SET name = ?, repository_url = ?,
@@ -366,22 +407,31 @@ def update_scan_run(
             result_json = json.dumps(result, separators=(",", ":"))
         if state in {"completed", "failed", "cancelled"}:
             completed_at = _now()
-        connection.execute(
-            """UPDATE scan_runs SET state = ?, progress = ?,
-               result_json = COALESCE(?, result_json),
-               new_findings = CASE WHEN ? IS NULL THEN new_findings ELSE ? END,
-               completed_at = COALESCE(?, completed_at)
-               WHERE id = ?""",
-            (
-                state,
-                progress,
-                result_json,
-                result_json,
-                new_findings,
-                completed_at,
-                run_id,
-            ),
-        )
+        if result_json is None:
+            # Avoid passing an untyped NULL through COALESCE/CASE. PostgreSQL
+            # cannot infer that placeholder's type, which used to make the
+            # worker's error handler fail and leave scan runs stuck as queued.
+            connection.execute(
+                """UPDATE scan_runs SET state = ?, progress = ?,
+                   completed_at = COALESCE(?, completed_at)
+                   WHERE id = ?""",
+                (state, progress, completed_at, run_id),
+            )
+        else:
+            connection.execute(
+                """UPDATE scan_runs SET state = ?, progress = ?,
+                   result_json = ?, new_findings = ?,
+                   completed_at = COALESCE(?, completed_at)
+                   WHERE id = ?""",
+                (
+                    state,
+                    progress,
+                    result_json,
+                    new_findings,
+                    completed_at,
+                    run_id,
+                ),
+            )
 
 
 def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
