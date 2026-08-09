@@ -21,9 +21,9 @@ COPY pyproject.toml uv.lock ./
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir "uv==0.11.25" \
-    && UV_PROJECT_ENVIRONMENT=/app/.venv uv sync --locked --no-dev --extra scanner --no-install-project \
-    && python -m pip uninstall -y uv \
+    && /usr/local/bin/python -m pip install --no-cache-dir "uv==0.11.25" \
+    && UV_PROJECT_ENVIRONMENT=/app/.venv /usr/local/bin/uv sync --locked --no-dev --extra scanner --no-install-project \
+    && /usr/local/bin/python -m pip uninstall -y uv \
     && groupadd --system aegis \
     && useradd --system --gid aegis --create-home --home-dir /home/aegis aegis \
     && mkdir -p /data \

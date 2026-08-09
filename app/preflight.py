@@ -24,8 +24,10 @@ def _authentication_required() -> bool:
 def validate_startup_configuration() -> None:
     """Validate runtime configuration and the effective server boundary."""
     validate_runtime_configuration()
+    # Containers intentionally listen on all interfaces; production auth and
+    # bind validation run before Uvicorn starts.
     validate_server_bind(
-        os.environ.get("AEGIS_HOST", "0.0.0.0"),
+        os.environ.get("AEGIS_HOST", "0.0.0.0"),  # noqa: S104
         auth_required=_authentication_required(),
     )
 
@@ -38,7 +40,7 @@ def main() -> None:
             "uvicorn",
             "app.main:app",
             "--host",
-            os.environ.get("AEGIS_HOST", "0.0.0.0"),
+            os.environ.get("AEGIS_HOST", "0.0.0.0"),  # noqa: S104
             "--port",
             "5001",
         ]

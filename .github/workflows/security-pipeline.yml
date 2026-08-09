@@ -122,7 +122,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv sync --locked --extra dev --extra scanner
-          uv run --locked python -m pip check
+          uv pip check
 
       - name: Python syntax check
         run: |

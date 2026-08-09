@@ -175,6 +175,7 @@ def test_container_runtime_is_hardened_and_persistent():
     assert "FROM python:3.11.15-slim-bookworm@sha256:" in dockerfile
     assert "uv==0.11.25" in dockerfile
     assert "uv sync --locked" in dockerfile
+    assert "/usr/local/bin/python -m pip uninstall -y uv" in dockerfile
     assert "USER aegis" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "AEGIS_ENV=production" in dockerfile
@@ -236,7 +237,11 @@ def test_dependency_workflow_uses_locked_python_and_node_installs():
     assert "npm ci" in security_workflow
     assert "npm install" not in security_workflow
     assert "uv sync --locked" in security_workflow
+    assert "uv pip check" in security_workflow
+    assert "python -m pip check" not in security_workflow
     assert "uv sync --locked" in release_workflow
+    assert "uv pip check" in release_workflow
+    assert "python -m pip check" not in release_workflow
     assert "uv.lock" in security_workflow
     assert {item["package-ecosystem"] for item in dependabot["updates"]} >= {
         "docker",

@@ -41,7 +41,7 @@ jobs:
       - name: Install release dependencies
         run: |
           uv sync --locked --extra dev --extra scanner
-          uv run --locked python -m pip check
+          uv pip check
 
       - name: Verify tag and package versions
         if: startsWith(github.ref, 'refs/tags/')
