@@ -12,10 +12,7 @@ from urllib.parse import quote
 from fastapi import HTTPException, Request, WebSocket
 from cryptography.fernet import Fernet, InvalidToken
 
-try:
-    from database import get_connection
-except ImportError:
-    from .database import get_connection
+from .database import get_connection
 
 
 SESSION_COOKIE = "aegis_session"

@@ -3,6 +3,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 import app.main as app_main
+import app.database as database
+import app.observability as observability
 
 @pytest.fixture
 def client():
@@ -96,3 +98,95 @@ def test_stream_telemetry_active_sandbox(client):
              assert payload["latency"] <= 10.0
              assert len(payload["logs"]) == 1
              assert "GET /ping" in payload["logs"][0]["text"]
+
+
+def test_job_sandbox_lookup_does_not_fall_back_to_global_container(monkeypatch):
+    class JobStore:
+        def __init__(self):
+            self.values = {}
+
+        def hget(self, name, key):
+            return self.values.get((name, key))
+
+    store = JobStore()
+    store.values[("job:authorized", "sandbox_container_id")] = b"aegis-sandbox-container-authorized"
+    monkeypatch.setattr(app_main, "redis_client", store)
+
+    assert (
+        app_main._job_sandbox_container("authorized")
+        == "aegis-sandbox-container-authorized"
+    )
+    assert app_main._job_sandbox_container("other") is None
+
+
+def test_operational_metrics_are_shared_and_exposed(monkeypatch):
+    store = database.InMemoryRedis()
+    monkeypatch.setattr(database, "redis_client", store)
+    monkeypatch.setattr(
+        observability,
+        "_operational_metrics",
+        {name: 0.0 for name in observability._OPERATIONAL_METRICS},
+    )
+
+    observability.record_scan_queue_age(2.5)
+    observability.record_worker_failure()
+    observability.record_worker_failure()
+    observability.record_notification_failure()
+    observability.record_audit_integrity_failure()
+    observability.record_artifact_integrity_failure()
+
+    rendered = observability.render_metrics()
+    assert "aegis_scan_queue_age_seconds 2.500000" in rendered
+    assert "aegis_worker_failures_total 2.000000" in rendered
+    assert "aegis_notification_failures_total 1.000000" in rendered
+    assert "aegis_audit_integrity_failures_total 1.000000" in rendered
+    assert "aegis_artifact_integrity_failures_total 1.000000" in rendered
+    assert "# TYPE aegis_worker_failures_total counter" in rendered
+
+
+def test_operational_metrics_ignore_invalid_queue_age_and_support_legacy_redis(monkeypatch):
+    class LegacyRedis:
+        def __init__(self):
+            self.values = {}
+
+        def hget(self, name, key):
+            return self.values.get((name, key))
+
+        def hset(self, name, key, value):
+            self.values[(name, key)] = str(value).encode()
+
+    store = LegacyRedis()
+    monkeypatch.setattr(database, "redis_client", store)
+    monkeypatch.setattr(
+        observability,
+        "_operational_metrics",
+        {name: 0.0 for name in observability._OPERATIONAL_METRICS},
+    )
+
+    observability.record_scan_queue_age(-1.0)
+    observability.record_scan_queue_age(float("nan"))
+    observability.record_worker_failure()
+
+    assert observability.render_metrics().count("aegis_scan_queue_age_seconds 0.000000") == 1
+    assert "aegis_worker_failures_total 1.000000" in observability.render_metrics()
+
+
+def test_operational_metrics_tolerate_redis_errors(monkeypatch):
+    class BrokenRedis:
+        def hget(self, name, key):
+            raise ValueError("unavailable")
+
+        def hset(self, name, key, value):
+            raise OSError("unavailable")
+
+    monkeypatch.setattr(database, "redis_client", BrokenRedis())
+    monkeypatch.setattr(
+        observability,
+        "_operational_metrics",
+        {name: 0.0 for name in observability._OPERATIONAL_METRICS},
+    )
+
+    observability.record_scan_queue_age(1.0)
+    observability.record_worker_failure()
+
+    assert "aegis_scan_queue_age_seconds 1.000000" in observability.render_metrics()

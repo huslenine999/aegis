@@ -5,10 +5,8 @@ import logging
 import os
 from datetime import datetime, timezone
 
-try:
-    from database import get_connection
-except ImportError:
-    from .database import get_connection
+from .database import get_connection
+from .observability import record_audit_integrity_failure
 
 
 LOGGER = logging.getLogger("aegis.audit")
@@ -111,18 +109,24 @@ def verify_audit_chain(tenant_id: int = 1) -> dict:
         ).fetchall()
     previous_hash = GENESIS_HASH
     for row in rows:
+        try:
+            details = json.loads(row[5])
+        except (TypeError, json.JSONDecodeError):
+            record_audit_integrity_failure()
+            return {"valid": False, "events": len(rows), "failed_event_id": int(row[0])}
         event = {
             "actor_id": row[1],
             "action": row[2],
             "resource_type": row[3],
             "resource_id": row[4],
-            "details": json.loads(row[5]),
+            "details": details,
             "created_at": row[6],
             "tenant_id": tenant_id,
         }
         if row[7] != previous_hash or not hmac.compare_digest(
             row[8], _event_hash(previous_hash, event)
         ):
+            record_audit_integrity_failure()
             return {"valid": False, "events": len(rows), "failed_event_id": int(row[0])}
         previous_hash = row[8]
     return {"valid": True, "events": len(rows), "head_hash": previous_hash}

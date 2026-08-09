@@ -36,9 +36,9 @@ pip install -r "$AEGIS_DIR/requirements.txt"
 export AEGIS_DATA_DIR="$AEGIS_HOME"
 export AEGIS_HOST="${AEGIS_HOST:-127.0.0.1}"
 if [ $# -gt 0 ]; then
-  python "$AEGIS_DIR/app/cli.py" "$@"
+  PYTHONPATH="$AEGIS_DIR${PYTHONPATH:+:$PYTHONPATH}" python -m app.cli "$@"
 else
   echo "🛡️ Starting Aegis Security Console..."
   echo "Access the dashboard at http://127.0.0.1:5001"
-  python "$AEGIS_DIR/app/main.py"
+  PYTHONPATH="$AEGIS_DIR${PYTHONPATH:+:$PYTHONPATH}" python -m app.main
 fi

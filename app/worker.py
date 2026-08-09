@@ -13,43 +13,35 @@ import queue as thread_queue
 import threading
 from pathlib import Path
 
-# Add project root to sys.path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-sys.path.append(str(Path(__file__).resolve().parent))
-
-from database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, get_connection, redis_client
-from config import environment_positive_int
-try:
-    from .dependencies import discover_dependency_manifests, first_requirements_manifest
-except ImportError:
-    from dependencies import (  # type: ignore[no-redef]
-        discover_dependency_manifests,
-        first_requirements_manifest,
-    )
+from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, get_connection, redis_client
+from .config import environment_positive_int
+from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
-from scan_status import ToolStatusTracker
-from scanners import run_clamav_scan as shared_run_clamav_scan
-from scanners import run_dast_scan as shared_run_dast_scan
-from scanners import run_yara_scan as shared_run_yara_scan
-from scanners import DEFAULT_IGNORED_DIRS
-from scanners import configure_semgrep_environment
-from scanners import find_runtime_executable
-from scanners import scanner_subprocess_environment
-from scanners import write_semgrep_rules
-from projects import (
+from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner
+from .scan_status import ToolStatusTracker
+from .scanners import run_clamav_scan as shared_run_clamav_scan
+from .scanners import run_dast_scan as shared_run_dast_scan
+from .scanners import run_yara_scan as shared_run_yara_scan
+from .scanners import DEFAULT_IGNORED_DIRS
+from .scanners import configure_semgrep_environment
+from .scanners import find_runtime_executable
+from .scanners import scanner_subprocess_environment
+from .scanners import write_semgrep_rules
+from .projects import (
     get_project,
     get_scan_run,
     normalize_github_repository_url,
     record_scan_artifacts,
     update_scan_run,
 )
-from findings import sync_findings
-from policies import get_policy
-from evidence import canonical_json, sign_manifest
-from artifact_storage import publish_artifacts, run_directory
-from github_integration import complete_check_run, github_installation_token, github_token
-from notifications import queue_project_notification
-from sandbox import (
+from .findings import sync_findings
+from .policies import get_policy
+from .evidence import canonical_json, sign_manifest
+from .artifact_storage import publish_artifacts, run_directory
+from .github_integration import complete_check_run, github_installation_token, github_token
+from .notifications import queue_project_notification
+from .observability import record_scan_queue_age, record_worker_failure
+from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     create_sandbox_network, run_sandbox_container, wait_for_container,
     run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
@@ -155,6 +147,36 @@ def publish_job_event(job_id: str, event_type: str, data: dict):
         for key in (f"job:{job_id}", f"job_logs:{job_id}"):
             if hasattr(redis_client, "expire"):
                 redis_client.expire(key, JOB_RETENTION_SECONDS)
+
+
+def _set_job_sandbox_container(job_id: str, container_name: str) -> None:
+    """Bind the ephemeral sandbox to the job that owns its telemetry."""
+    redis_client.hset(
+        f"job:{job_id}",
+        "sandbox_container_id",
+        container_name,
+    )
+
+
+def _clear_job_sandbox_container(job_id: str) -> None:
+    hdel = getattr(redis_client, "hdel", None)
+    if callable(hdel):
+        hdel(f"job:{job_id}", "sandbox_container_id")
+    else:
+        # Keep compatibility with the minimal test Redis adapter.
+        redis_client.hset(f"job:{job_id}", "sandbox_container_id", "")
+
+
+def _cleanup_job_sandbox(
+    job_id: str,
+    container_name: str,
+    image_tag: str,
+    network_name: str,
+) -> None:
+    try:
+        stop_and_cleanup_sandbox(container_name, image_tag, network_name)
+    finally:
+        _clear_job_sandbox_container(job_id)
 
 def load_waf_rules_from_db():
     conn = get_connection()
@@ -288,6 +310,17 @@ def _check_cancelled(job_id: str) -> None:
     value = redis_client.hget(f"job:{job_id}", "cancel_requested")
     if value and str(value.decode() if isinstance(value, bytes) else value) == "1":
         raise ScanCancelled()
+
+
+def _record_queue_age(job_id: str) -> None:
+    queued_at = redis_client.hget(f"job:{job_id}", "queued_at")
+    try:
+        queued_timestamp = float(
+            queued_at.decode() if isinstance(queued_at, bytes) else queued_at
+        )
+    except (TypeError, ValueError):
+        return
+    record_scan_queue_age(max(0.0, time.time() - queued_timestamp))
 
 
 def _clone_github_project(
@@ -535,8 +568,8 @@ def _finalize_artifacts(
 
 
 def async_scan_task(
-    job_id: str,
-    target: str,
+    payload: ScanJobPayload | str,
+    target: str | None = None,
     custom_file_path: str | None = None,
     waf_enabled: bool = False,
     scan_run_id: int | None = None,
@@ -546,6 +579,35 @@ def async_scan_task(
     source_revision: str | None = None,
     github_installation_id: int | None = None,
 ):
+    if isinstance(payload, ScanJobPayload):
+        job_payload = payload
+    else:
+        if target is None:
+            raise ValueError("Legacy scan calls must provide a target.")
+        job_payload = ScanJobPayload(
+            job_id=payload,
+            target=target,
+            custom_file_path=custom_file_path,
+            waf_enabled=waf_enabled,
+            scan_run_id=scan_run_id,
+            project_id=project_id,
+            requested_by=requested_by,
+            preset=preset,
+            source_revision=source_revision,
+            github_installation_id=github_installation_id,
+        )
+    job_id = job_payload.job_id
+    target = job_payload.target
+    assert target is not None
+    custom_file_path = job_payload.custom_file_path
+    waf_enabled = job_payload.waf_enabled
+    scan_run_id = job_payload.scan_run_id
+    project_id = job_payload.project_id
+    requested_by = job_payload.requested_by
+    preset = job_payload.preset
+    source_revision = job_payload.source_revision
+    github_installation_id = job_payload.github_installation_id
+
     external_project_dir = None
     project = get_project(project_id) if project_id else None
     scan_run = get_scan_run(scan_run_id) if scan_run_id else None
@@ -565,7 +627,8 @@ def async_scan_task(
     report_dir.mkdir(parents=True, exist_ok=True)
     _cleanup_expired_artifacts(job_id)
     tool_statuses = ToolStatusTracker()
-    mark_tool = tool_statuses.mark
+    runner = ScanRunner(RedisEventSink(job_id), tool_statuses)
+    mark_tool = runner.mark_tool
 
     def write_json(path: Path, value) -> None:
         path.write_text(json.dumps(value, indent=2))
@@ -619,7 +682,9 @@ def async_scan_task(
                 target = "project"
         
         # 1. State: QUEUED -> RUNNING
-        publish_job_event(job_id, "state", {"state": "running", "progress": 10})
+        _record_queue_age(job_id)
+        redis_client.hset(f"job:{job_id}", "started_at", time.time())
+        runner.transition("running", 10)
         if scan_run_id:
             update_scan_run(scan_run_id, state="running", progress=10)
         _check_cancelled(job_id)
@@ -764,6 +829,8 @@ def async_scan_task(
         sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
         sandbox_temp_dir = report_dir / "sandbox" / sandbox_uuid
         host_port = None
+        sandbox_started = False
+        sandbox_cleanup_required = False
 
         def find_free_port() -> int:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -779,10 +846,12 @@ def async_scan_task(
                 publish_job_event(job_id, "log", {"text": f"[SANDBOX] Scaffolding sandbox on port {container_port}", "color": "var(--text-main)"})
                 
                 if build_sandbox_image(sandbox_temp_dir, sandbox_image):
+                    sandbox_cleanup_required = True
                     publish_job_event(job_id, "log", {"text": f"[SANDBOX] Built image {sandbox_image}", "color": "var(--primary)"})
 
                     if not create_sandbox_network(sandbox_network):
                         raise RuntimeError("failed to create isolated sandbox network")
+                    sandbox_cleanup_required = True
 
                     if run_sandbox_container(
                         sandbox_image,
@@ -792,6 +861,8 @@ def async_scan_task(
                         waf_enabled,
                         sandbox_network,
                     ):
+                        sandbox_started = True
+                        _set_job_sandbox_container(job_id, sandbox_container)
                         publish_job_event(job_id, "log", {"text": f"[SANDBOX] Running container at 127.0.0.1:{host_port}", "color": "var(--primary)"})
                         
                         target_url = f"http://127.0.0.1:{host_port}"
@@ -822,7 +893,7 @@ def async_scan_task(
             pass
 
         # 2. State: RUNNING -> ANALYZING
-        publish_job_event(job_id, "state", {"state": "analyzing", "progress": 30})
+        runner.transition("analyzing", 30)
         if scan_run_id:
             update_scan_run(scan_run_id, state="analyzing", progress=30)
         _check_cancelled(job_id)
@@ -1003,7 +1074,7 @@ def async_scan_task(
             mark_tool("Trivy", "skipped", detail="scan preset")
 
         # 3. State: ANALYZING -> CORRELATING
-        publish_job_event(job_id, "state", {"state": "correlating", "progress": 70})
+        runner.transition("correlating", 70)
         if scan_run_id:
             update_scan_run(scan_run_id, state="correlating", progress=70)
         _check_cancelled(job_id)
@@ -1047,7 +1118,7 @@ def async_scan_task(
         mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
 
         # 4. State: CORRELATING -> REPORTING
-        publish_job_event(job_id, "state", {"state": "reporting", "progress": 90})
+        runner.transition("reporting", 90)
         if scan_run_id:
             update_scan_run(scan_run_id, state="reporting", progress=90)
         _check_cancelled(job_id)
@@ -1055,14 +1126,18 @@ def async_scan_task(
         time.sleep(1.0) # Visual transition pause
 
         # Clean up Sandbox Container & Context
-        if sandbox_image and sandbox_container:
+        if sandbox_cleanup_required:
             try:
                 publish_job_event(job_id, "log", {"text": "[SANDBOX] Cleaning up ephemeral Docker sandbox...", "color": "var(--text-muted)"})
-                stop_and_cleanup_sandbox(
+                _cleanup_job_sandbox(
+                    job_id,
                     sandbox_container, sandbox_image, sandbox_network
                 )
             except Exception as e:
                 publish_job_event(job_id, "log", {"text": f"[SANDBOX Cleanup Error] {e}", "color": "var(--danger)"})
+            finally:
+                sandbox_started = False
+                sandbox_cleanup_required = False
         if sandbox_temp_dir and sandbox_temp_dir.exists():
             try:
                 shutil.rmtree(sandbox_temp_dir)
@@ -1192,14 +1267,14 @@ def async_scan_task(
                 },
             )
         publish_job_event(job_id, "result", {"result": result_payload})
-        publish_job_event(job_id, "state", {"state": "completed", "progress": 100})
+        runner.transition("completed", 100)
         publish_job_event(job_id, "log", {"text": "[OK] GATE VERDICT READY: Scan execution completed successfully.", "color": "var(--primary)"})
         
     except ScanCancelled:
         if scan_run_id:
             update_scan_run(scan_run_id, state="cancelled", progress=100)
         _complete_github_scan_check(scan_run_id, project, "cancelled", "The Aegis scan was cancelled.")
-        publish_job_event(job_id, "state", {"state": "cancelled", "progress": 100})
+        runner.transition("cancelled", 100)
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Scan cancelled by user.", "color": "var(--secondary)"})
         if project_id:
             project = get_project(project_id)
@@ -1208,11 +1283,12 @@ def async_scan_task(
                 "job_id": job_id,
             })
     except ScanOperationalFailure as exc:
+        record_worker_failure()
         if scan_run_id:
             update_scan_run(scan_run_id, state="failed", progress=100, result=exc.result)
         _complete_github_scan_check(scan_run_id, project, "failure", f"Scanner evidence was incomplete: {str(exc)[:500]}")
         publish_job_event(job_id, "result", {"result": exc.result})
-        publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
+        runner.transition("failed", 100)
         publish_job_event(job_id, "log", {"text": f"[ERROR] Security evidence is incomplete: {exc}", "color": "var(--danger)"})
         redis_client.hset(f"job:{job_id}", "error", str(exc))
         if project_id:
@@ -1224,10 +1300,11 @@ def async_scan_task(
             })
         raise
     except Exception as e:
+        record_worker_failure()
         if scan_run_id:
             update_scan_run(scan_run_id, state="failed", progress=100)
         _complete_github_scan_check(scan_run_id, project, "failure", f"Scan execution failed: {str(e)[:500]}")
-        publish_job_event(job_id, "state", {"state": "failed", "progress": 100})
+        runner.transition("failed", 100)
         publish_job_event(job_id, "log", {"text": f"[FATAL] Scan job execution failed: {e}", "color": "var(--danger)"})
         redis_client.hset(f"job:{job_id}", "error", str(e))
         if project_id:
@@ -1239,5 +1316,15 @@ def async_scan_task(
             })
         raise e
     finally:
+        if locals().get("sandbox_cleanup_required"):
+            _cleanup_job_sandbox(
+                job_id,
+                locals().get("sandbox_container", ""),
+                locals().get("sandbox_image", ""),
+                locals().get("sandbox_network", ""),
+            )
+        cleanup_temp_dir = locals().get("sandbox_temp_dir")
+        if isinstance(cleanup_temp_dir, Path) and cleanup_temp_dir.exists():
+            shutil.rmtree(cleanup_temp_dir, ignore_errors=True)
         if external_project_dir:
             shutil.rmtree(external_project_dir, ignore_errors=True)

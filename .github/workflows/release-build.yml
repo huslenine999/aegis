@@ -30,14 +30,18 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.25"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install release dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[dev,scanner]"
-          python -m pip check
+          uv sync --locked --extra dev --extra scanner
+          uv run --locked python -m pip check
 
       - name: Verify tag and package versions
         if: startsWith(github.ref, 'refs/tags/')
@@ -62,16 +66,22 @@ jobs:
 
       - name: Run release tests
         run: |
-          python -m compileall -q app policy_engine.py tests
-          ruff check app policy_engine.py tests
-          mypy
-          pytest -q --timeout=60 --timeout-method=thread
+          uv run --locked python -m compileall -q app policy_engine.py tests
+          uv run --locked ruff check app policy_engine.py tests
+          uv run --locked mypy
+          uv run --locked pytest -q --timeout=60 --timeout-method=thread \
+            --cov=app.observability \
+            --cov=app.preflight \
+            --cov=app.rate_limit \
+            --cov=app.scan_engine \
+            --cov=app.security_middleware \
+            --cov-report=term-missing
 
       - name: Run scanner behavior benchmark
-        run: python scripts/run_security_benchmark.py --output benchmark-results.json
+        run: uv run --locked python scripts/run_security_benchmark.py --output benchmark-results.json
 
       - name: Build wheel
-        run: python -m pip wheel . --no-deps --wheel-dir dist
+        run: uv run --locked python -m pip wheel . --no-deps --wheel-dir dist
 
       - name: Validate wheel contents
         shell: bash

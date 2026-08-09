@@ -15,10 +15,8 @@ from urllib.parse import urlparse
 import urllib3
 from cryptography.fernet import Fernet
 
-try:
-    from database import get_connection
-except ImportError:
-    from .database import get_connection
+from .database import get_connection
+from .observability import record_notification_failure
 
 
 CHANNEL_TYPES = {"webhook", "slack", "teams", "email"}
@@ -267,6 +265,7 @@ def send_project_notification(project_id: int, event: str, payload: dict) -> Non
                 (project_id,),
             ).fetchall()
     except Exception:
+        record_notification_failure()
         return
     for row in rows:
         if event not in row[3].split(","):
@@ -278,6 +277,7 @@ def send_project_notification(project_id: int, event: str, payload: dict) -> Non
             except Exception:
                 pass
         except Exception as exc:
+            record_notification_failure()
             try:
                 _record_delivery(int(row[0]), event, "failed", str(exc))
             except Exception:
@@ -314,6 +314,7 @@ def queue_project_notification(project_id: int, event: str, payload: dict) -> bo
         )
         return True
     except Exception:
+        record_notification_failure()
         LOGGER.exception(
             "Failed to enqueue notification",
             extra={"project_id": project_id, "event": event},
@@ -360,6 +361,7 @@ def queue_test_channel(channel_id: int, project_id: int) -> bool:
         )
         return True
     except Exception:
+        record_notification_failure()
         LOGGER.exception(
             "Failed to enqueue test notification",
             extra={"project_id": project_id, "channel_id": channel_id},

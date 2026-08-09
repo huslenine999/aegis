@@ -1017,6 +1017,18 @@ class InMemoryRedis:
             return val.encode()
         return val
 
+    def hdel(self, name, *keys):
+        with self.lock:
+            values = self.storage.get(name, {})
+            deleted = 0
+            for key in keys:
+                if isinstance(key, bytes):
+                    key = key.decode("utf-8")
+                if key in values:
+                    del values[key]
+                    deleted += 1
+            return deleted
+
     def rpush(self, name, *values):
         with self.lock:
             if name not in self.lists:
@@ -1046,6 +1058,16 @@ class InMemoryRedis:
             current = int(self.storage.get(name, 0))
             self.storage[name] = current + 1
             return current + 1
+
+    def hincrby(self, name, key, amount=1):
+        with self.lock:
+            values = self.storage.setdefault(name, {})
+            current = values.get(key, b"0")
+            if isinstance(current, bytes):
+                current = current.decode()
+            updated = int(current) + int(amount)
+            values[key] = str(updated).encode()
+            return updated
 
     def ttl(self, name):
         return -1

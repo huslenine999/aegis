@@ -25,9 +25,10 @@ not considered complete merely because an environment variable exists.
 ### Scan and artifact trust
 
 - New project artifacts use tenant/project/run-scoped filesystem paths.
-- `AEGIS_ARTIFACT_BACKEND` accepts only `local` in this build, and production
-  rejects multi-tenant mode with that backend. Unsupported storage values fail
-  startup instead of creating a decorative assurance claim.
+- `AEGIS_ARTIFACT_BACKEND` accepts `local` or the reviewed S3-compatible backend;
+  unsupported storage values fail startup instead of creating a decorative
+  assurance claim. Production still rejects multi-tenant mode with local
+  storage, and the current topology uses one isolated deployment per tenant.
 - Artifact metadata includes SHA-256 size and integrity records.
 - Scan manifests are signed with Ed25519 and contain source identity, revision,
   policy digest, scanner state, operational failures, and artifact hashes.
@@ -98,9 +99,11 @@ The following cannot be completed safely with repository code alone:
 7. An independent penetration test, legal terms, DPA, support SLA, and incident
    response exercise.
 
-`AEGIS_MULTI_TENANT=true` is intentionally rejected in production until the
-external artifact backend exists. Sell one tenant per isolated deployment in
-the meantime.
+`AEGIS_MULTI_TENANT=true` is intentionally rejected in production while the
+broader tenant-isolation, object-store tenancy, and operational control plane
+remain under review. The S3-compatible artifact backend exists for durable
+single-tenant deployments; sell one tenant per isolated deployment in the
+meantime.
 
 ## Verification baseline
 

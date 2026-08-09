@@ -3,10 +3,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-try:
-    from database import USING_POSTGRES, get_connection
-except ImportError:
-    from .database import USING_POSTGRES, get_connection
+from .database import USING_POSTGRES, get_connection
 
 
 PROJECT_ROLE_LEVEL = {"viewer": 10, "operator": 20, "admin": 30}

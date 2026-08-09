@@ -10,12 +10,8 @@ from urllib.parse import urlencode, urlparse
 import requests
 from cryptography.fernet import Fernet
 
-try:
-    from auth import Principal
-    from database import USING_POSTGRES, get_connection
-except ImportError:
-    from .auth import Principal
-    from .database import USING_POSTGRES, get_connection
+from .auth import Principal
+from .database import USING_POSTGRES, get_connection
 
 
 def oidc_enabled() -> bool:

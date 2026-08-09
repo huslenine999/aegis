@@ -2,6 +2,7 @@ import pytest
 import os
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+from fastapi.testclient import TestClient
 
 
 os.environ.setdefault("AEGIS_ENABLE_DEMO_LAB", "true")
@@ -26,6 +27,15 @@ def preserve_checked_in_reports():
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(content)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def application_lifespan():
+    """Exercise the same startup path used by the ASGI server."""
+    from app.main import app
+
+    with TestClient(app):
+        yield
 
 class MockRedis:
     def __init__(self, *args, **kwargs):

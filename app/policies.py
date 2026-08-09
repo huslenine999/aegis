@@ -3,12 +3,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-try:
-    from database import USING_POSTGRES, get_connection
-    from findings import extract_findings
-except ImportError:
-    from .database import USING_POSTGRES, get_connection
-    from .findings import extract_findings
+from .database import USING_POSTGRES, get_connection
+from .findings import extract_findings
 
 
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}

@@ -47,7 +47,7 @@ def local_environment_values() -> dict[str, str]:
 
 
 def read_environment_file(path: Path) -> dict[str, str]:
-    values = {}
+    values: dict[str, str] = {}
     if not path.exists():
         return values
     for line in path.read_text().splitlines():
@@ -302,6 +302,7 @@ def run_backup(
                 "pg_dump",
                 "--clean",
                 "--if-exists",
+                "--format=plain",
                 "-U",
                 "aegis",
                 "-d",
@@ -324,7 +325,14 @@ def run_backup(
             print("Report backup failed.", file=sys.stderr)
             return EXIT_OPERATIONAL_ERROR
         (root / "manifest.json").write_text(
-            json.dumps({"created_at": datetime.now(timezone.utc).isoformat(), "version": package_version}, indent=2)
+            json.dumps(
+                {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "version": package_version,
+                    "database_format": "plain-sql",
+                },
+                indent=2,
+            )
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:

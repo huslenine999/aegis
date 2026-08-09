@@ -98,6 +98,43 @@ print(json.dumps({"scan_dir": str(SCAN_DIR)}))
     assert json.loads(result.stdout)["scan_dir"] == str(tmp_path / "scans")
 
 
+def test_application_factory_returns_route_bearing_app(tmp_path, monkeypatch):
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("AEGIS_DATA_DIR", str(tmp_path))
+    application = create_app()
+    with TestClient(application) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/ready").status_code == 200
+        assert client.get("/api/projects").status_code == 200
+
+
+def test_importing_main_does_not_create_runtime_database(tmp_path):
+    code = """
+from app.database import DB_PATH
+import app.main
+print(DB_PATH.exists())
+"""
+    environment = {
+        **os.environ,
+        "AEGIS_DATA_DIR": str(tmp_path),
+        "AEGIS_ENV": "test",
+        "AEGIS_ENABLE_DEMO_LAB": "false",
+        "REDIS_URL": "redis://127.0.0.1:6399/0",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "False"
+
+
 def test_worker_dependency_scan_does_not_fall_back_to_project_requirements(tmp_path):
     target = tmp_path / "target"
     target.mkdir()
@@ -136,8 +173,14 @@ def test_container_runtime_is_hardened_and_persistent():
     services = compose["services"]
 
     assert "FROM python:3.11.15-slim-bookworm@sha256:" in dockerfile
+    assert "uv==0.11.25" in dockerfile
+    assert "uv sync --locked" in dockerfile
     assert "USER aegis" in dockerfile
     assert "HEALTHCHECK" in dockerfile
+    assert "AEGIS_ENV=production" in dockerfile
+    assert "AEGIS_REQUIRE_AUTH=true" in dockerfile
+    assert "AEGIS_CORS_ORIGINS=" not in dockerfile
+    assert 'ENTRYPOINT ["python", "-m", "app.preflight"]' in dockerfile
     assert 'CMD ["uvicorn", "app.main:app"' in dockerfile
 
     assert "ports" not in services["redis"]
@@ -168,7 +211,67 @@ def test_container_runtime_is_hardened_and_persistent():
         "-m",
         "app.notifier_entrypoint",
     ]
+    assert services["postgres"]["image"].endswith(
+        "@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa"
+    )
+    assert services["proxy"]["image"].endswith(
+        "@sha256:ae4458638da8e1a91aafffb231c5f8778e964bca650c8a8cb23a7e8ac557aa3c"
+    )
+    assert services["worker"]["healthcheck"]["test"][0] == "CMD"
+    assert "Worker.all" in services["worker"]["healthcheck"]["test"][-1]
+    assert services["notifier"]["healthcheck"]["test"][0] == "CMD"
+    assert "notifications" in services["notifier"]["healthcheck"]["test"][-1]
     assert services["proxy"]["depends_on"]["dashboard"]["condition"] == "service_started"
+
+
+def test_dependency_workflow_uses_locked_python_and_node_installs():
+    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+    package_lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text())
+    dependabot = yaml.safe_load((PROJECT_ROOT / ".github/dependabot.yml").read_text())
+    security_workflow = (PROJECT_ROOT / ".github/workflows/security-pipeline.yml").read_text()
+    release_workflow = (PROJECT_ROOT / ".github/workflows/release-build.yml").read_text()
+
+    assert package["engines"]["node"] == ">=18.0.0"
+    assert package_lock["packages"][""]["engines"]["node"] == ">=18.0.0"
+    assert "npm ci" in security_workflow
+    assert "npm install" not in security_workflow
+    assert "uv sync --locked" in security_workflow
+    assert "uv sync --locked" in release_workflow
+    assert "uv.lock" in security_workflow
+    assert {item["package-ecosystem"] for item in dependabot["updates"]} >= {
+        "docker",
+        "github-actions",
+        "npm",
+        "pip",
+    }
+
+
+def test_container_preflight_rejects_missing_production_configuration(monkeypatch):
+    from app.preflight import validate_startup_configuration
+
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.setenv("AEGIS_HOST", "0.0.0.0")
+    for name in (
+        "AEGIS_ADMIN_TOKEN",
+        "AEGIS_ALLOWED_HOSTS",
+        "AEGIS_AUDIT_HMAC_KEY",
+        "AEGIS_BOOTSTRAP_ADMIN_PASSWORD",
+        "AEGIS_CORS_ORIGINS",
+        "AEGIS_ENCRYPTION_KEY",
+        "AEGIS_METRICS_TOKEN",
+        "AEGIS_PUBLIC_URL",
+        "AEGIS_REQUIRE_AUTH",
+        "AEGIS_REQUIRE_NOTIFIER",
+        "AEGIS_REQUIRE_REDIS",
+        "AEGIS_REQUIRE_WORKER",
+        "AEGIS_SESSION_SECRET",
+        "AEGIS_TOKEN_PEPPER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AEGIS_ENABLE_DEMO_LAB", "false")
+
+    with pytest.raises(RuntimeError, match="Invalid production configuration"):
+        validate_startup_configuration()
 
 
 def test_security_headers_are_added_to_dynamic_responses():

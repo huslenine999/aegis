@@ -6,10 +6,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-try:
-    from .dependencies import discover_dependency_manifests, first_requirements_manifest
-except ImportError:
-    from dependencies import discover_dependency_manifests, first_requirements_manifest
+from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import (
     analyze_clamav,
     analyze_osv,
@@ -71,7 +68,7 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
 
 def generate_fallback_tree(project_root: Path) -> list[dict]:
     requirements_manifest = first_requirements_manifest(discover_dependency_manifests(project_root))
-    tree = []
+    tree: list[dict] = []
     if requirements_manifest:
         try:
             content = requirements_manifest.path.read_text()

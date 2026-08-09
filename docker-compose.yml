@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17.5-alpine
+    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
     restart: unless-stopped
     environment:
       POSTGRES_DB: aegis
@@ -175,7 +175,11 @@ services:
     tmpfs:
       - /tmp:size=512m,mode=1777
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('default' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   notifier:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
@@ -209,10 +213,14 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('notifications' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   proxy:
-    image: caddy:2.10.0-alpine
+    image: caddy:2.10.0-alpine@sha256:ae4458638da8e1a91aafffb231c5f8778e964bca650c8a8cb23a7e8ac557aa3c
     restart: unless-stopped
     depends_on:
       dashboard:

@@ -12,11 +12,9 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-try:
-    from database import get_connection
-except ImportError:
-    from .database import get_connection
+from .database import get_connection
 
 
 GITHUB_API = "https://api.github.com"
@@ -77,6 +75,8 @@ def github_app_jwt() -> str:
     signing_input = f"{header}.{claims}".encode()
     try:
         private_key = serialization.load_pem_private_key(encoded_key.encode(), password=None)
+        if not isinstance(private_key, RSAPrivateKey):
+            raise ValueError("GitHub App key is not an RSA private key.")
         signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     except (ValueError, TypeError, AttributeError) as exc:
         raise RuntimeError("AEGIS_GITHUB_APP_PRIVATE_KEY must be a valid RSA PEM key.") from exc
@@ -155,7 +155,7 @@ def complete_check_run(
     allowed = {"success", "failure", "neutral", "cancelled", "timed_out", "action_required"}
     if conclusion not in allowed:
         raise ValueError("GitHub check conclusion is invalid.")
-    output = {"title": title[:255], "summary": summary[:65000]}
+    output: dict[str, object] = {"title": title[:255], "summary": summary[:65000]}
     if annotations:
         output["annotations"] = annotations[:50]
     payload = {

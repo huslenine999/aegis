@@ -53,6 +53,7 @@ dev = [
   "httpx==0.28.1",
   "mypy==1.18.2",
   "pytest==9.1.1",
+  "pytest-cov==6.2.1",
   "pytest-timeout==2.3.1",
 ]
 
@@ -84,6 +85,7 @@ files = [
   "app/cli.py",
   "app/database.py",
   "app/findings.py",
+  "app/health_routes.py",
   "app/notifications.py",
   "app/oidc.py",
   "app/projects.py",
@@ -93,10 +95,34 @@ files = [
   "app/sandbox.py",
   "app/scanners.py",
   "app/main.py",
+  "app/config.py",
+  "app/observability.py",
+  "app/preflight.py",
+  "app/scan_engine.py",
   "app/worker.py",
   "app/worker_entrypoint.py",
   "app/notifier_entrypoint.py",
   "policy_engine.py",
+]
+
+[tool.coverage.run]
+# The suite invokes the CLI in child processes; line coverage keeps those
+# subprocess data files compatible across the pytest-cov and CLI runtimes.
+branch = false
+source = [
+  "app.observability",
+  "app.preflight",
+  "app.rate_limit",
+  "app.scan_engine",
+  "app.security_middleware",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from cryptography.fernet import Fernet
 
 

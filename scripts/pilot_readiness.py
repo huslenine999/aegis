@@ -294,7 +294,20 @@ def docker_rehearsal() -> list[CheckResult]:
 
             dump_check, dump_process = run_check(
                 "database backup",
-                [*compose, "exec", "-T", "postgres", "pg_dump", "--clean", "--if-exists", "-U", "aegis", "-d", "aegis"],
+                [
+                    *compose,
+                    "exec",
+                    "-T",
+                    "postgres",
+                    "pg_dump",
+                    "--clean",
+                    "--if-exists",
+                    "--format=plain",
+                    "-U",
+                    "aegis",
+                    "-d",
+                    "aegis",
+                ],
                 timeout=180,
             )
             results.append(dump_check)

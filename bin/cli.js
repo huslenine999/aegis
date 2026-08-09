@@ -15,8 +15,6 @@ const installStamp = path.join(venvDir, '.aegis-install-stamp');
 // Package directories
 const packageRoot = path.join(__dirname, '..');
 const requirementsPath = path.join(packageRoot, 'requirements.txt');
-const mainPyPath = path.join(packageRoot, 'app', 'main.py');
-
 function checkPython() {
     try {
         execSync('python3 --version', { stdio: 'ignore' });
@@ -76,14 +74,11 @@ async function setupEnv() {
 async function run() {
     await setupEnv();
     const args = process.argv.slice(2);
-    const cliPyPath = path.join(packageRoot, 'app', 'cli.py');
     
-    let targetScript = mainPyPath;
-    let runArgs = [mainPyPath];
+    let runArgs = ['-m', 'app.main'];
     
     if (args.length > 0) {
-        targetScript = cliPyPath;
-        runArgs = [cliPyPath, ...args];
+        runArgs = ['-m', 'app.cli', ...args];
     } else {
         console.log('🛡️ Starting Aegis Security Console...');
         console.log('Access the dashboard at http://127.0.0.1:5001');
@@ -91,7 +86,12 @@ async function run() {
     
     const appProcess = spawn(pythonBin, runArgs, {
         stdio: 'inherit',
-        env: { ...process.env, AEGIS_DATA_DIR: aegisHome, AEGIS_HOST: '127.0.0.1' }
+        env: {
+            ...process.env,
+            AEGIS_DATA_DIR: aegisHome,
+            AEGIS_HOST: '127.0.0.1',
+            PYTHONPATH: [packageRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        }
     });
 
     appProcess.on('close', (code) => {

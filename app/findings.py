@@ -5,10 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-try:
-    from database import USING_POSTGRES, get_connection
-except ImportError:
-    from .database import USING_POSTGRES, get_connection
+from .database import USING_POSTGRES, get_connection
 
 
 FINDING_STATUSES = {

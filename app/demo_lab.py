@@ -9,10 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-try:
-    from .database import DB_PATH, DOWNLOAD_DIR
-except ImportError:
-    from database import DB_PATH, DOWNLOAD_DIR  # type: ignore[no-redef]
+from .database import DB_PATH, DOWNLOAD_DIR
 
 
 router = APIRouter(tags=["demo-lab"])
@@ -132,4 +129,4 @@ if __name__ == "__main__":
         return {"status": "running", "service": "aegis-demo-lab"}
 
     Path(DOWNLOAD_DIR).mkdir(exist_ok=True, parents=True)
-    uvicorn.run(app, host="0.0.0.0", port=5001)
+    uvicorn.run(app, host="127.0.0.1", port=5001)

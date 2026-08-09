@@ -106,11 +106,13 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            pyproject.toml
-            requirements.txt
-            requirements-dev.txt
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.25"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -119,25 +121,24 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[dev,scanner]"
-          python -m pip check
+          uv sync --locked --extra dev --extra scanner
+          uv run --locked python -m pip check
 
       - name: Python syntax check
         run: |
-          python -m compileall -q app policy_engine.py tests
+          uv run --locked python -m compileall -q app policy_engine.py tests
 
       - name: Python lint and type checks
         run: |
-          ruff check app policy_engine.py tests
-          mypy
+          uv run --locked ruff check app policy_engine.py tests
+          uv run --locked mypy
 
       - name: Validate Semgrep rules
         env:
           SEMGREP_LOG_FILE: /tmp/aegis-semgrep.log
           SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
         run: |
-          semgrep scan \
+          uv run --locked semgrep scan \
             --metrics off \
             --disable-version-check \
             --config rules/semgrep_rules.yaml \
@@ -146,31 +147,37 @@ jobs:
       - name: Validate package metadata
         run: |
           node -e "const p=require('./package.json'); if (p.bin.aegis !== './bin/cli.js') process.exit(1)"
-          python -m pip wheel . --no-deps --wheel-dir dist
-          aegis version
+          uv run --locked python -m pip wheel . --no-deps --wheel-dir dist
+          uv run --locked aegis version
 
       - name: Validate composite Action contract
         run: |
-          pytest -q tests/test_action.py
+          uv run --locked pytest -q tests/test_action.py
 
       - name: CLI help checks
         run: |
-          python app/cli.py --help
-          python app/cli.py scan --help
-          python app/cli.py version
-          python app/cli.py doctor --json
+          uv run --locked python -m app.cli --help
+          uv run --locked python -m app.cli scan --help
+          uv run --locked python -m app.cli version
+          uv run --locked python -m app.cli doctor --json
 
       - name: Focused tests
         run: |
-          pytest tests/test_cli.py tests/test_policy.py
+          uv run --locked pytest tests/test_cli.py tests/test_policy.py
 
       - name: Full non-Docker test suite
         run: |
-          pytest -q --timeout=60 --timeout-method=thread
+          uv run --locked pytest -q --timeout=60 --timeout-method=thread \
+            --cov=app.observability \
+            --cov=app.preflight \
+            --cov=app.rate_limit \
+            --cov=app.scan_engine \
+            --cov=app.security_middleware \
+            --cov-report=term-missing
 
       - name: Install browser test dependencies
         run: |
-          npm install
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Browser authentication and accessibility tests
@@ -178,7 +185,7 @@ jobs:
 
       - name: SARIF smoke scan
         run: |
-          python app/cli.py scan . --config aegis.yml --fast --sarif --json
+          uv run --locked python -m app.cli scan . --config aegis.yml --fast --sarif --json
 
   container-smoke:
     name: Production Container Smoke
@@ -190,6 +197,21 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.25"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install integration test dependencies
+        run: uv sync --locked --extra dev --extra scanner
 
       - name: Configure production smoke environment
         shell: bash
@@ -267,6 +289,13 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.html
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.md
           docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
+
+      - name: Run real Compose scan lifecycle integration
+        env:
+          AEGIS_COMPOSE_INTEGRATION: "1"
+          AEGIS_INTEGRATION_BASE_URL: http://localhost:5001
+        run: |
+          uv run --locked pytest -q tests/integration/test_compose_scan_lifecycle.py tests/integration/test_compose_recovery.py
 
       - name: Show container logs
         if: always()

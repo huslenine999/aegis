@@ -14,25 +14,23 @@ import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Add project root to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.append(str(PROJECT_ROOT))
-sys.path.append(str(PROJECT_ROOT / "app"))
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
-from config import config_bool, config_list, load_config
-from dependencies import discover_dependency_manifests, first_requirements_manifest
-from scanners import run_clamav_scan as shared_run_clamav_scan
-from scanners import run_dast_scan as shared_run_dast_scan
-from scanners import run_yara_scan as shared_run_yara_scan
-from scanners import configure_semgrep_environment
-from scanners import find_runtime_executable
-from scanners import write_semgrep_rules
-from scan_status import ToolStatusTracker
-from cli_output import print_ascii_report, print_timing_summary
-import cli_stack
-from evidence import canonical_json, sign_manifest, verify_manifest
-from sandbox import (
+from .config import config_bool, config_list, load_config
+from .dependencies import discover_dependency_manifests, first_requirements_manifest
+from .scanners import run_clamav_scan as shared_run_clamav_scan
+from .scanners import run_dast_scan as shared_run_dast_scan
+from .scanners import run_yara_scan as shared_run_yara_scan
+from .scanners import configure_semgrep_environment
+from .scanners import find_runtime_executable
+from .scanners import write_semgrep_rules
+from .scan_status import ToolStatusTracker
+from .scan_engine import CliEventSink, ScanEvent, ScanRunner
+from .cli_output import print_ascii_report, print_timing_summary
+from . import cli_stack
+from .evidence import canonical_json, sign_manifest, verify_manifest
+from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     create_sandbox_network, run_sandbox_container, wait_for_container,
     run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
@@ -574,6 +572,15 @@ def log_scanner_event(message: str, level: str = "info"):
     reset = "\033[0m" if color else ""
     print(f"  {color}{message}{reset}")
 
+
+def _emit_cli_event(event: ScanEvent) -> None:
+    if event.event_type != "log":
+        return
+    text = event.data.get("text")
+    if isinstance(text, str):
+        level = event.data.get("level", "info")
+        log_scanner_event(text, level if isinstance(level, str) else "info")
+
 def run_dast_scan(target_url: str | None = None, *, internal_port: int = 5001):
     return shared_run_dast_scan(
         target_url, internal_port=internal_port, log=log_scanner_event
@@ -598,7 +605,8 @@ def execute_scan(
     total_start = time.perf_counter()
     started_at = utc_timestamp()
     tool_statuses = ToolStatusTracker()
-    mark_tool = tool_statuses.mark
+    runner = ScanRunner(CliEventSink(_emit_cli_event), tool_statuses)
+    mark_tool = runner.mark_tool
 
     submitted_target = Path(target_path_str).expanduser().absolute()
     if not submitted_target.exists():
@@ -613,6 +621,7 @@ def execute_scan(
         return EXIT_OPERATIONAL_ERROR
     validate_untrusted_tree(submitted_target, ignored_names=IGNORED_DIRS)
     target_path = submitted_target.resolve()
+    runner.transition("running", 0)
 
     if config_path and not Path(config_path).expanduser().is_file():
         raise ValueError(f"Config file does not exist: {Path(config_path).expanduser()}")

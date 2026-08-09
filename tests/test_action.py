@@ -25,7 +25,9 @@ def test_action_exposes_stable_production_outputs():
 
     assert action["inputs"]["strict"]["default"] == "true"
     assert set(action["outputs"]) >= {"decision", "summary-json", "exit-code"}
-    assert '${AEGIS_ACTION_PATH}[scanner]' in ACTION_PATH.read_text()
+    action_text = ACTION_PATH.read_text()
+    assert '--require-hashes -r "${AEGIS_ACTION_PATH}/requirements.txt"' in action_text
+    assert 'pip install --no-deps "${AEGIS_ACTION_PATH}"' in action_text
 
 
 def test_release_package_versions_match():

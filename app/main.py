@@ -1,4 +1,5 @@
 import os
+import ipaddress
 import re
 import sys
 import time
@@ -10,21 +11,12 @@ import hashlib
 import uuid
 import secrets
 import shutil
-from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Add the current directory and project root to sys.path to allow imports
-sys.path.append(str(Path(__file__).resolve().parent))
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-
-# Ensure the virtual environment's bin/Scripts directory is in PATH so that packages
-# invoking subprocesses (like semgrep) can find their corresponding executables.
-sys_exec_dir = os.path.dirname(sys.executable)
-if sys_exec_dir and sys_exec_dir not in os.environ.get("PATH", "").split(os.pathsep):
-    os.environ["PATH"] = sys_exec_dir + os.pathsep + os.environ.get("PATH", "")
-
-from fastapi import Depends, FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi import APIRouter, Depends, FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +24,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.datastructures import UploadFile
 from werkzeug.utils import secure_filename
 
-from database import (
+from .database import (
     BASE_DIR,
     DOWNLOAD_DIR,
     PROJECT_ROOT,
@@ -45,13 +37,13 @@ from database import (
     set_application_state,
     redis_client,
 )
-from config import (
+from .config import (
     environment_list,
     environment_positive_int,
     validate_runtime_configuration,
     validate_server_bind,
 )
-from auth import (
+from .auth import (
     AUTH_REQUIRED,
     Principal,
     SESSION_COOKIE,
@@ -74,14 +66,19 @@ from auth import (
     session_authentication_is_recent,
     websocket_principal,
 )
-from observability import ObservabilityMiddleware, configure_logging, recent_requests, render_metrics
-from rate_limit import RateLimitMiddleware, allow_websocket
-from security_middleware import (
+from .observability import (
+    ObservabilityMiddleware,
+    configure_logging,
+    recent_requests,
+    record_artifact_integrity_failure,
+)
+from .rate_limit import RateLimitMiddleware, allow_websocket
+from .security_middleware import (
     RequestBodyLimitMiddleware,
     SecurityHeadersMiddleware,
     WafASGIMiddleware,
 )
-from projects import (
+from .projects import (
     VALID_PRESETS,
     create_project,
     create_scan_run,
@@ -99,7 +96,7 @@ from projects import (
     set_project_member,
     update_project,
 )
-from github_integration import (
+from .github_integration import (
     begin_oauth,
     complete_oauth,
     disconnect_github,
@@ -113,8 +110,8 @@ from github_integration import (
     mark_webhook_delivery,
     verify_and_record_webhook,
 )
-from findings import get_finding, list_findings, update_finding
-from policies import (
+from .findings import get_finding, list_findings, update_finding
+from .policies import (
     active_policy,
     approve_policy,
     create_policy,
@@ -123,29 +120,28 @@ from policies import (
     normalize_definition,
     simulate_policy,
 )
-from oidc import begin_oidc, complete_oidc, oidc_enabled
-from notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
-from audit import list_audit_events, record_audit, verify_audit_chain
+from .oidc import begin_oidc, complete_oidc, oidc_enabled
+from .notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
+from .audit import list_audit_events, record_audit, verify_audit_chain
 from policy_engine import get_ruff_severity
-from sandbox import (
+from .sandbox import (
     get_active_sandbox_container,
     get_sandbox_logs,
     get_sandbox_stats,
     is_docker_available,
 )
-from reporting import (
+from .reporting import (
     build_report_bundle,
     build_report_bundle_from_artifacts,
     calculate_exploitability_score,
     generate_fallback_tree as generate_project_fallback_tree,
     load_dependency_tree,
 )
-from artifact_storage import S3ArtifactStore, project_directory, run_directory
+from .artifact_storage import S3ArtifactStore, project_directory, run_directory
+from .health_routes import router as health_router
+from .scan_engine import ScanJobPayload
 
-validate_runtime_configuration()
-configure_logging()
-
-app = FastAPI(title="Aegis DevSecOps Console")
+router = APIRouter()
 DEMO_LAB_ENABLED = os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower() in {"1", "true", "yes", "on"}
 ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
@@ -173,25 +169,12 @@ RUN_ARTIFACTS = {
     "scan-manifest.json": "application/json",
 }
 
-# Enable CORS for convenience
+# Enable CORS for convenience.
 def parse_cors_origins() -> list[str]:
     raw_origins = os.environ.get("AEGIS_CORS_ORIGINS", "http://127.0.0.1:5001,http://localhost:5001")
     return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=parse_cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-allowed_hosts = environment_list("AEGIS_ALLOWED_HOSTS")
-if allowed_hosts:
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
-
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
 def require_demo_lab_enabled():
@@ -213,6 +196,35 @@ def require_access(minimum_role: str):
         return role_dependency(request)
 
     return dependency
+
+
+def _request_is_loopback(request: Request) -> bool:
+    """Return whether the direct client for a local-only surface is loopback."""
+    client = request.client
+    host = client.host.strip().lower() if client and client.host else ""
+    # Starlette's TestClient uses a synthetic peer name. Treat it as local only
+    # outside production; real production requests must carry an IP address.
+    if host == "testclient":
+        return os.environ.get("AEGIS_ENV", "development").lower() != "production"
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def require_demo_lab_access(
+    request: Request,
+    principal=Depends(require_access("admin")),
+):
+    require_demo_lab_enabled()
+    if not _request_is_loopback(request):
+        raise HTTPException(
+            status_code=403,
+            detail="The Aegis demo lab is available only from a loopback client.",
+        )
+    return principal
 
 
 def require_recent_access(minimum_role: str):
@@ -241,12 +253,13 @@ def require_recent_access(minimum_role: str):
 
 
 if DEMO_LAB_ENABLED:
-    try:
-        from demo_lab import router as demo_lab_router
-    except ImportError:
-        from .demo_lab import router as demo_lab_router
+    from .demo_lab import router as demo_lab_router
 
-    app.include_router(demo_lab_router, dependencies=[Depends(require_demo_lab_enabled)])
+    router.include_router(
+        demo_lab_router,
+        prefix="/demo-lab",
+        dependencies=[Depends(require_demo_lab_access)],
+    )
 
 # Global state for the WAF toggle (demo only)
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
@@ -301,10 +314,6 @@ def save_waf_rules_to_db(rules):
 def generate_fallback_tree():
     return generate_project_fallback_tree(PROJECT_ROOT)
 
-# Use environment variables for secrets. The console does not ship fallback
-# application secrets; demo-only credentials live in app/demo_lab.py.
-app.state.secret_key = os.environ.get("SECRET_KEY")
-
 # Public acquisition is intentionally separate from the authenticated workbench.
 # This keeps the console's security boundary unchanged while giving prospective
 # users a clear place to understand the product and request a pilot.
@@ -313,39 +322,65 @@ COMMERCIAL_CONTACT_URL = os.environ.get(
     "https://github.com/huslenine999/aegis/issues/new",
 )
 
-# Initialize directories safely
-DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
-SCANS_DIR.mkdir(exist_ok=True, parents=True)
-
-sample_file = DOWNLOAD_DIR / "sample.txt"
-if not sample_file.exists():
-    sample_file.write_text("This is a safe sample file.\n")
-
-initialize_database()
-ensure_bootstrap_admin()
-ensure_development_admin()
-WAF_ENABLED = bool(get_application_state("waf_enabled", WAF_ENABLED))
-
-
 def setup_is_available() -> bool:
     return bool(os.environ.get("AEGIS_SETUP_TOKEN")) and not bool(
         get_application_state("setup_completed", False)
     )
 
 
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RateLimitMiddleware, redis_client=redis_client)
-app.add_middleware(ObservabilityMiddleware)
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Initialize mutable runtime state only when the ASGI app starts."""
+    global WAF_ENABLED
 
-app.add_middleware(
-    WafASGIMiddleware,
-    enabled=lambda: WAF_ENABLED,
-    load_rules=load_waf_rules_from_db,
-)
-app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
+    validate_runtime_configuration()
+    configure_logging()
+    DOWNLOAD_DIR.mkdir(exist_ok=True, parents=True)
+    SCANS_DIR.mkdir(exist_ok=True, parents=True)
+
+    sample_file = DOWNLOAD_DIR / "sample.txt"
+    if not sample_file.exists():
+        sample_file.write_text("This is a safe sample file.\n")
+
+    initialize_database()
+    ensure_bootstrap_admin()
+    ensure_development_admin()
+    WAF_ENABLED = bool(get_application_state("waf_enabled", WAF_ENABLED))
+    application.state.secret_key = os.environ.get("SECRET_KEY")
+    yield
+
+
+def create_app() -> FastAPI:
+    """Build a fully configured Aegis ASGI application."""
+    application = FastAPI(title="Aegis DevSecOps Console", lifespan=lifespan)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=parse_cors_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    allowed_hosts = environment_list("AEGIS_ALLOWED_HOSTS")
+    if allowed_hosts:
+        application.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+    application.mount(
+        "/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static"
+    )
+    application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(RateLimitMiddleware, redis_client=redis_client)
+    application.add_middleware(ObservabilityMiddleware)
+    application.add_middleware(
+        WafASGIMiddleware,
+        enabled=lambda: WAF_ENABLED,
+        load_rules=load_waf_rules_from_db,
+    )
+    application.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
+    application.include_router(router)
+    application.include_router(health_router)
+    return application
 
 # REST Router Endpoints
-@app.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 def index(request: Request):
     if setup_is_available():
         return RedirectResponse("/setup", status_code=303)
@@ -354,19 +389,15 @@ def index(request: Request):
     return RedirectResponse("/projects", status_code=303)
 
 
-@app.get("/lab", response_class=HTMLResponse)
-def threat_lab(request: Request):
+@router.get("/lab", response_class=HTMLResponse)
+def threat_lab(request: Request, _principal=Depends(require_demo_lab_access)):
     """Keep the intentionally theatrical demo surface separate from project work."""
     if setup_is_available():
         return RedirectResponse("/setup", status_code=303)
-    if AUTH_REQUIRED and not principal_from_request(request):
-        return RedirectResponse("/login", status_code=303)
-    if not DEMO_LAB_ENABLED:
-        raise HTTPException(status_code=404, detail="Threat Lab is not enabled.")
     return templates.TemplateResponse(request, "index.html", {"threat_lab": True})
 
 
-@app.get("/welcome", response_class=HTMLResponse)
+@router.get("/welcome", response_class=HTMLResponse)
 def commercial_landing(request: Request):
     """Public product page for visitors who are not ready to sign in."""
     return templates.TemplateResponse(
@@ -378,7 +409,7 @@ def commercial_landing(request: Request):
         },
     )
 
-@app.get("/login", response_class=HTMLResponse)
+@router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     if setup_is_available():
         return RedirectResponse("/setup", status_code=303)
@@ -396,7 +427,7 @@ def _oidc_callback_url(request: Request) -> str:
     )
 
 
-@app.get("/api/auth/oidc/start")
+@router.get("/api/auth/oidc/start")
 def oidc_start(request: Request, return_to: str = "/"):
     try:
         authorization_url = begin_oidc(_oidc_callback_url(request), return_to)
@@ -405,7 +436,7 @@ def oidc_start(request: Request, return_to: str = "/"):
     return RedirectResponse(authorization_url, status_code=303)
 
 
-@app.get("/api/auth/oidc/callback", name="oidc_callback")
+@router.get("/api/auth/oidc/callback", name="oidc_callback")
 async def oidc_callback(request: Request, code: str = "", state: str = ""):
     if not code or not state:
         raise HTTPException(status_code=400, detail="OIDC callback is incomplete.")
@@ -431,14 +462,14 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
     return response
 
 
-@app.get("/account/security", response_class=HTMLResponse)
+@router.get("/account/security", response_class=HTMLResponse)
 def account_security_page(request: Request):
     if AUTH_REQUIRED and not principal_from_request(request):
         return RedirectResponse("/login", status_code=303)
     return templates.TemplateResponse(request, "account_security.html")
 
 
-@app.get("/setup", response_class=HTMLResponse)
+@router.get("/setup", response_class=HTMLResponse)
 def setup_page(request: Request):
     if not os.environ.get("AEGIS_SETUP_TOKEN"):
         raise HTTPException(status_code=404, detail="Setup is not enabled.")
@@ -447,7 +478,7 @@ def setup_page(request: Request):
     return templates.TemplateResponse(request, "setup.html")
 
 
-@app.post("/api/setup")
+@router.post("/api/setup")
 async def complete_setup(request: Request):
     if not setup_is_available():
         raise HTTPException(status_code=404, detail="Setup is not available.")
@@ -529,7 +560,7 @@ async def complete_setup(request: Request):
     return response
 
 
-@app.post("/api/auth/login")
+@router.post("/api/auth/login")
 async def login(request: Request):
     try:
         body = await request.json()
@@ -570,7 +601,7 @@ async def login(request: Request):
     return response
 
 
-@app.get("/api/auth/me")
+@router.get("/api/auth/me")
 def current_user(request: Request, principal=Depends(require_role("viewer"))):
     with get_connection() as connection:
         mfa = connection.execute(
@@ -587,7 +618,7 @@ def current_user(request: Request, principal=Depends(require_role("viewer"))):
     }
 
 
-@app.post("/api/auth/reauth")
+@router.post("/api/auth/reauth")
 async def reauthenticate(
     request: Request, principal=Depends(require_role("viewer"))
 ):
@@ -608,7 +639,7 @@ async def reauthenticate(
     return {"status": "reauthenticated"}
 
 
-@app.post("/api/auth/mfa/setup")
+@router.post("/api/auth/mfa/setup")
 async def mfa_setup(
     request: Request, principal=Depends(require_recent_access("viewer"))
 ):
@@ -628,7 +659,7 @@ async def mfa_setup(
     return setup
 
 
-@app.post("/api/auth/mfa/confirm")
+@router.post("/api/auth/mfa/confirm")
 async def mfa_confirm(
     request: Request, principal=Depends(require_recent_access("viewer"))
 ):
@@ -654,7 +685,7 @@ async def mfa_confirm(
     return response
 
 
-@app.delete("/api/auth/mfa")
+@router.delete("/api/auth/mfa")
 async def mfa_disable(
     request: Request, principal=Depends(require_recent_access("viewer"))
 ):
@@ -676,7 +707,7 @@ async def mfa_disable(
     return response
 
 
-@app.get("/api/settings")
+@router.get("/api/settings")
 def workspace_settings(principal=Depends(require_role("viewer"))):
     return get_application_state(
         "workspace_settings",
@@ -736,21 +767,21 @@ def _enqueue_project_scan(
             "owner_id": principal.user_id,
             "project_id": project["id"],
             "scan_run_id": run_id,
+            "queued_at": time.time(),
         },
     )
-    from worker import async_scan_task
+    from .worker import async_scan_task
 
-    arguments = (
-        job_id,
-        "project",
-        None,
-        WAF_ENABLED,
-        run_id,
-        project["id"],
-        principal.user_id,
-        preset,
-        (github_context or {}).get("head_sha"),
-        (github_context or {}).get("installation_id"),
+    payload = ScanJobPayload(
+        job_id=job_id,
+        target="project",
+        waf_enabled=WAF_ENABLED,
+        scan_run_id=run_id,
+        project_id=project["id"],
+        requested_by=principal.user_id,
+        preset=preset,
+        source_revision=(github_context or {}).get("head_sha"),
+        github_installation_id=(github_context or {}).get("installation_id"),
     )
     if REDIS_AVAILABLE:
         from rq import Queue
@@ -760,13 +791,11 @@ def _enqueue_project_scan(
             "deep" if preset == "deep" else "default",
             connection=Redis.from_url(REDIS_URL),
         )
-        queue.enqueue(
-            async_scan_task, *arguments, job_timeout=SCAN_JOB_TIMEOUT_SECONDS
-        )
+        queue.enqueue(async_scan_task, payload, job_timeout=SCAN_JOB_TIMEOUT_SECONDS)
     else:
         import threading
 
-        thread = threading.Thread(target=async_scan_task, args=arguments, daemon=True)
+        thread = threading.Thread(target=async_scan_task, args=(payload,), daemon=True)
         thread.start()
     return {
         "status": "success",
@@ -777,7 +806,7 @@ def _enqueue_project_scan(
     }
 
 
-@app.get("/projects", response_class=HTMLResponse)
+@router.get("/projects", response_class=HTMLResponse)
 def projects_page(request: Request):
     if AUTH_REQUIRED and not principal_from_request(request):
         return RedirectResponse("/login", status_code=303)
@@ -788,12 +817,12 @@ def projects_page(request: Request):
     )
 
 
-@app.get("/admin", response_class=HTMLResponse)
+@router.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request, principal=Depends(require_access("admin"))):
     return templates.TemplateResponse(request, "admin.html")
 
 
-@app.get("/api/projects")
+@router.get("/api/projects")
 def projects_index(principal=Depends(require_role("viewer"))):
     return {
         "projects": list_projects(
@@ -802,7 +831,7 @@ def projects_index(principal=Depends(require_role("viewer"))):
     }
 
 
-@app.post("/api/projects", status_code=201)
+@router.post("/api/projects", status_code=201)
 async def projects_create(
     request: Request, principal=Depends(require_access("operator"))
 ):
@@ -835,7 +864,7 @@ async def projects_create(
     return {"id": project_id, "name": name}
 
 
-@app.patch("/api/projects/{project_id}")
+@router.patch("/api/projects/{project_id}")
 async def project_update(
     project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
@@ -867,7 +896,7 @@ async def project_update(
     return {"id": project_id, "name": name, "scan_preset": preset}
 
 
-@app.delete("/api/projects/{project_id}")
+@router.delete("/api/projects/{project_id}")
 def project_delete(
     project_id: int, principal=Depends(require_recent_access("operator"))
 ):
@@ -889,7 +918,7 @@ def project_delete(
     return {"status": "deleted"}
 
 
-@app.get("/api/projects/{project_id}/scans")
+@router.get("/api/projects/{project_id}/scans")
 def project_scans(
     project_id: int, principal=Depends(require_role("viewer"))
 ):
@@ -929,23 +958,25 @@ def _artifact_integrity(metadata: dict, path: Path) -> bool:
 
 def _artifact_bytes(metadata: dict, path: Path) -> bytes:
     if not _artifact_integrity(metadata, path):
+        record_artifact_integrity_failure()
         raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
     if metadata.get("backend") == "s3":
         content = S3ArtifactStore().read(metadata["storage_key"])
         if len(content) != metadata["size"] or hashlib.sha256(content).hexdigest() != metadata["sha256"]:
+            record_artifact_integrity_failure()
             raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
         return content
     return path.read_bytes()
 
 
-@app.get("/api/projects/{project_id}/scans/{run_id}")
+@router.get("/api/projects/{project_id}/scans/{run_id}")
 def project_scan_detail(
     project_id: int, run_id: int, principal=Depends(require_role("viewer"))
 ):
     return _authorized_scan(project_id, run_id, principal)
 
 
-@app.get("/api/projects/{project_id}/scans/{run_id}/artifacts")
+@router.get("/api/projects/{project_id}/scans/{run_id}/artifacts")
 def project_scan_artifacts(
     project_id: int, run_id: int, principal=Depends(require_role("viewer"))
 ):
@@ -966,6 +997,8 @@ def project_scan_artifacts(
             integrity = _artifact_integrity(metadata, path)
         except Exception:
             integrity = False
+        if not integrity:
+            record_artifact_integrity_failure()
         artifacts.append(
             {
                 **metadata,
@@ -985,7 +1018,7 @@ def project_scan_artifacts(
     return {"artifacts": artifacts}
 
 
-@app.get("/api/projects/{project_id}/scans/{run_id}/artifacts/{artifact_name}")
+@router.get("/api/projects/{project_id}/scans/{run_id}/artifacts/{artifact_name}")
 def project_scan_artifact(
     project_id: int,
     run_id: int,
@@ -1016,18 +1049,18 @@ def project_scan_artifact(
         )
     media_type = RUN_ARTIFACTS.get(artifact_name)
     artifact_path = report_dir / artifact_name
-    metadata = get_scan_artifact(run_id, artifact_name)
-    if not media_type or not metadata:
+    artifact_metadata = get_scan_artifact(run_id, artifact_name)
+    if not media_type or not artifact_metadata:
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    if metadata.get("backend") == "s3":
+    if artifact_metadata.get("backend") == "s3":
         return Response(
-            content=_artifact_bytes(metadata, artifact_path),
+            content=_artifact_bytes(artifact_metadata, artifact_path),
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{artifact_name}"'},
         )
     if not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    _artifact_bytes(metadata, artifact_path)
+    _artifact_bytes(artifact_metadata, artifact_path)
     return FileResponse(
         str(artifact_path),
         media_type=media_type,
@@ -1036,7 +1069,7 @@ def project_scan_artifact(
     )
 
 
-@app.get("/api/projects/{project_id}/findings")
+@router.get("/api/projects/{project_id}/findings")
 def project_findings(
     project_id: int,
     status: str | None = None,
@@ -1051,7 +1084,7 @@ def project_findings(
     return {"findings": findings}
 
 
-@app.get("/api/projects/{project_id}/findings/{finding_id}")
+@router.get("/api/projects/{project_id}/findings/{finding_id}")
 def project_finding_detail(
     project_id: int,
     finding_id: int,
@@ -1064,7 +1097,7 @@ def project_finding_detail(
     return finding
 
 
-@app.patch("/api/projects/{project_id}/findings/{finding_id}")
+@router.patch("/api/projects/{project_id}/findings/{finding_id}")
 async def project_finding_update(
     project_id: int,
     finding_id: int,
@@ -1088,7 +1121,7 @@ async def project_finding_update(
     return finding
 
 
-@app.post("/api/projects/{project_id}/findings/{finding_id}/github-issue", status_code=201)
+@router.post("/api/projects/{project_id}/findings/{finding_id}/github-issue", status_code=201)
 async def project_finding_github_issue(
     project_id: int,
     finding_id: int,
@@ -1146,7 +1179,7 @@ async def project_finding_github_issue(
     return {"issue": issue, "finding": finding}
 
 
-@app.get("/api/projects/{project_id}/policies")
+@router.get("/api/projects/{project_id}/policies")
 def project_policies(
     project_id: int, principal=Depends(require_role("viewer"))
 ):
@@ -1154,7 +1187,7 @@ def project_policies(
     return {"policies": list_policies(project_id), "active": active_policy(project_id)}
 
 
-@app.post("/api/projects/{project_id}/policies", status_code=201)
+@router.post("/api/projects/{project_id}/policies", status_code=201)
 async def project_policy_create(
     project_id: int,
     request: Request,
@@ -1178,7 +1211,7 @@ async def project_policy_create(
     return policy
 
 
-@app.post("/api/projects/{project_id}/policies/{policy_id}/approve")
+@router.post("/api/projects/{project_id}/policies/{policy_id}/approve")
 def project_policy_approve(
     project_id: int,
     policy_id: int,
@@ -1196,7 +1229,7 @@ def project_policy_approve(
     return policy
 
 
-@app.post("/api/projects/{project_id}/policies/simulate")
+@router.post("/api/projects/{project_id}/policies/simulate")
 async def project_policy_simulate(
     project_id: int,
     request: Request,
@@ -1211,7 +1244,7 @@ async def project_policy_simulate(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/projects/{project_id}/members")
+@router.get("/api/projects/{project_id}/members")
 def project_members(
     project_id: int, principal=Depends(require_role("viewer"))
 ):
@@ -1219,7 +1252,7 @@ def project_members(
     return {"members": list_project_members(project_id)}
 
 
-@app.put("/api/projects/{project_id}/members")
+@router.put("/api/projects/{project_id}/members")
 async def project_member_set(
     project_id: int,
     request: Request,
@@ -1239,7 +1272,7 @@ async def project_member_set(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.delete("/api/projects/{project_id}/members/{user_id}")
+@router.delete("/api/projects/{project_id}/members/{user_id}")
 def project_member_remove(
     project_id: int,
     user_id: int,
@@ -1257,13 +1290,13 @@ def project_member_remove(
     return {"status": "removed"}
 
 
-@app.get("/api/projects/{project_id}/notifications")
+@router.get("/api/projects/{project_id}/notifications")
 def project_notifications(project_id: int, principal=Depends(require_role("viewer"))):
     _project_access(project_id, principal, "admin")
     return {"channels": list_channels(project_id), "types": sorted(CHANNEL_TYPES)}
 
 
-@app.post("/api/projects/{project_id}/notifications", status_code=201)
+@router.post("/api/projects/{project_id}/notifications", status_code=201)
 async def project_notification_create(
     project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
@@ -1284,7 +1317,7 @@ async def project_notification_create(
     return {"id": channel_id}
 
 
-@app.delete("/api/projects/{project_id}/notifications/{channel_id}")
+@router.delete("/api/projects/{project_id}/notifications/{channel_id}")
 def project_notification_delete(
     project_id: int, channel_id: int, principal=Depends(require_recent_access("operator"))
 ):
@@ -1295,7 +1328,7 @@ def project_notification_delete(
     return {"status": "deleted"}
 
 
-@app.post("/api/projects/{project_id}/notifications/{channel_id}/test")
+@router.post("/api/projects/{project_id}/notifications/{channel_id}/test")
 def project_notification_test(
     project_id: int, channel_id: int, principal=Depends(require_recent_access("operator"))
 ):
@@ -1310,7 +1343,7 @@ def project_notification_test(
     return {"status": "queued"}
 
 
-@app.post("/api/projects/{project_id}/scans", status_code=202)
+@router.post("/api/projects/{project_id}/scans", status_code=202)
 async def project_scan_start(
     project_id: int,
     request: Request,
@@ -1322,7 +1355,7 @@ async def project_scan_start(
     return _enqueue_project_scan(project, principal, preset)
 
 
-@app.post("/api/scans/{run_id}/cancel", status_code=202)
+@router.post("/api/scans/{run_id}/cancel", status_code=202)
 def project_scan_cancel(
     run_id: int, principal=Depends(require_access("operator"))
 ):
@@ -1337,7 +1370,7 @@ def project_scan_cancel(
     return {"status": "cancellation_requested", "scan_run_id": run_id}
 
 
-@app.post("/api/scans/{run_id}/retry", status_code=202)
+@router.post("/api/scans/{run_id}/retry", status_code=202)
 def project_scan_retry(
     run_id: int, principal=Depends(require_access("operator"))
 ):
@@ -1356,7 +1389,7 @@ def _github_callback_url(request: Request) -> str:
     )
 
 
-@app.post("/api/github/webhook", status_code=202)
+@router.post("/api/github/webhook", status_code=202)
 async def github_webhook(request: Request):
     """Authenticate, deduplicate, and record GitHub App webhook deliveries."""
     if not github_webhook_enabled():
@@ -1482,7 +1515,7 @@ async def github_webhook(request: Request):
     }
 
 
-@app.get("/api/github/status")
+@router.get("/api/github/status")
 def github_status(principal=Depends(require_role("viewer"))):
     return {
         "enabled": github_enabled(),
@@ -1490,7 +1523,7 @@ def github_status(principal=Depends(require_role("viewer"))):
     }
 
 
-@app.get("/api/github/connect")
+@router.get("/api/github/connect")
 def github_connect(request: Request, principal=Depends(require_recent_access("viewer"))):
     try:
         url = begin_oauth(principal.user_id, _github_callback_url(request))
@@ -1499,7 +1532,7 @@ def github_connect(request: Request, principal=Depends(require_recent_access("vi
     return RedirectResponse(url, status_code=302)
 
 
-@app.get("/api/github/callback", name="github_callback")
+@router.get("/api/github/callback", name="github_callback")
 def github_callback(request: Request, code: str = "", state: str = ""):
     if not code or not state:
         return RedirectResponse("/projects?github=denied", status_code=303)
@@ -1510,7 +1543,7 @@ def github_callback(request: Request, code: str = "", state: str = ""):
     return RedirectResponse("/projects?github=connected", status_code=303)
 
 
-@app.get("/api/github/repositories")
+@router.get("/api/github/repositories")
 def github_repositories(
     page: int = 1, principal=Depends(require_role("viewer"))
 ):
@@ -1522,13 +1555,13 @@ def github_repositories(
         raise HTTPException(status_code=502, detail="GitHub API request failed.") from exc
 
 
-@app.post("/api/github/disconnect")
+@router.post("/api/github/disconnect")
 def github_disconnect(principal=Depends(require_recent_access("viewer"))):
     disconnect_github(principal.user_id)
     return {"status": "disconnected"}
 
 
-@app.post("/api/github/import", status_code=201)
+@router.post("/api/github/import", status_code=201)
 async def github_import(
     request: Request, principal=Depends(require_access("operator"))
 ):
@@ -1551,7 +1584,7 @@ async def github_import(
     return {"id": project_id, "name": repository["name"]}
 
 
-@app.post("/api/auth/logout")
+@router.post("/api/auth/logout")
 def logout(request: Request, principal=Depends(require_role("viewer"))):
     record_audit(principal.user_id, "auth.logout", "session")
     revoke_session(request.cookies.get(SESSION_COOKIE, ""))
@@ -1560,7 +1593,7 @@ def logout(request: Request, principal=Depends(require_role("viewer"))):
     return response
 
 
-@app.get("/api/users")
+@router.get("/api/users")
 def list_users(principal=Depends(require_access("admin"))):
     with get_connection() as connection:
         rows = connection.execute(
@@ -1582,7 +1615,7 @@ def list_users(principal=Depends(require_access("admin"))):
     }
 
 
-@app.post("/api/users", status_code=201)
+@router.post("/api/users", status_code=201)
 async def create_user(request: Request, principal=Depends(require_recent_access("admin"))):
     body = await request.json()
     username = str(body.get("username", "")).strip()
@@ -1615,7 +1648,7 @@ async def create_user(request: Request, principal=Depends(require_recent_access(
     return {"username": username, "role": role}
 
 
-@app.patch("/api/users/{user_id}")
+@router.patch("/api/users/{user_id}")
 async def update_user(
     user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
@@ -1676,7 +1709,7 @@ async def update_user(
     return {"id": user_id, "username": user[0], **details}
 
 
-@app.post("/api/users/{user_id}/tokens", status_code=201)
+@router.post("/api/users/{user_id}/tokens", status_code=201)
 async def create_api_token(
     user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
@@ -1749,7 +1782,7 @@ async def create_api_token(
     }
 
 
-@app.get("/api/tokens")
+@router.get("/api/tokens")
 def list_api_tokens(principal=Depends(require_access("admin"))):
     with get_connection() as connection:
         rows = connection.execute(
@@ -1777,7 +1810,7 @@ def list_api_tokens(principal=Depends(require_access("admin"))):
     }
 
 
-@app.delete("/api/tokens/{token_id}")
+@router.delete("/api/tokens/{token_id}")
 def revoke_api_token(token_id: int, principal=Depends(require_recent_access("admin"))):
     with get_connection() as connection:
         cursor = connection.execute(
@@ -1791,7 +1824,7 @@ def revoke_api_token(token_id: int, principal=Depends(require_recent_access("adm
     return {"status": "revoked"}
 
 
-@app.get("/api/admin/diagnostics")
+@router.get("/api/admin/diagnostics")
 def admin_diagnostics(principal=Depends(require_access("admin"))):
     database_status = "connected"
     try:
@@ -1829,34 +1862,34 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
     }
 
 
-@app.get("/api/admin/audit")
+@router.get("/api/admin/audit")
 def admin_audit(limit: int = 100, principal=Depends(require_access("admin"))):
     return {"events": list_audit_events(limit, principal.tenant_id)}
 
 
-@app.get("/api/admin/audit/verify")
+@router.get("/api/admin/audit/verify")
 def admin_audit_verify(principal=Depends(require_access("admin"))):
     return verify_audit_chain(principal.tenant_id)
 
 
-@app.get("/api/admin/requests")
+@router.get("/api/admin/requests")
 def admin_request_log(limit: int = 100, principal=Depends(require_access("admin"))):
     return {"requests": recent_requests(limit)}
 
 
-@app.get("/report", response_class=HTMLResponse, dependencies=[Depends(require_access("admin"))])
+@router.get("/report", response_class=HTMLResponse, dependencies=[Depends(require_access("admin"))])
 def get_report():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
         return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
     return HTMLResponse(report_path.read_text())
 
-@app.get("/download-sbom", dependencies=[Depends(require_access("admin"))])
+@router.get("/download-sbom", dependencies=[Depends(require_access("admin"))])
 def download_sbom():
     sbom_path = SCANS_DIR / "sbom.json"
     if not sbom_path.exists():
         from policy_engine import generate_cyclonedx_sbom
-        from dependencies import discover_dependency_manifests
+        from .dependencies import discover_dependency_manifests
         try:
             generate_cyclonedx_sbom(discover_dependency_manifests(PROJECT_ROOT), sbom_path)
         except Exception as e:
@@ -1869,7 +1902,7 @@ def download_sbom():
     )
 
 
-@app.get("/download-report-bundle", dependencies=[Depends(require_access("admin"))])
+@router.get("/download-report-bundle", dependencies=[Depends(require_access("admin"))])
 def download_report_bundle():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
@@ -1884,20 +1917,20 @@ def download_report_bundle():
         },
     )
 
-@app.post("/toggle-waf", dependencies=[Depends(require_recent_access("admin"))])
+@router.post("/toggle-waf", dependencies=[Depends(require_recent_access("admin"))])
 def toggle_waf():
     global WAF_ENABLED
     WAF_ENABLED = not WAF_ENABLED
     set_application_state("waf_enabled", WAF_ENABLED)
     return {"status": "success", "waf_enabled": WAF_ENABLED}
 
-@app.get("/get-waf-rules", dependencies=[Depends(require_role("viewer"))])
+@router.get("/get-waf-rules", dependencies=[Depends(require_role("viewer"))])
 def get_waf_rules():
     global WAF_ENABLED
     rules = load_waf_rules_from_db()
     return {"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED}
 
-@app.post("/save-waf-rules", dependencies=[Depends(require_recent_access("admin"))])
+@router.post("/save-waf-rules", dependencies=[Depends(require_recent_access("admin"))])
 async def save_waf_rules(request: Request):
     try:
         data = await request.json()
@@ -1933,7 +1966,7 @@ async def save_waf_rules(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/get-scan-results", dependencies=[Depends(require_access("admin"))])
+@router.get("/get-scan-results", dependencies=[Depends(require_access("admin"))])
 def get_scan_results():
     global WAF_ENABLED
     def load_json_safe(path):
@@ -2022,7 +2055,7 @@ def get_scan_results():
         "bundle_url": "/download-report-bundle" if latest_report.exists() else None
     }
 
-@app.get("/get-dependency-graph", dependencies=[Depends(require_access("admin"))])
+@router.get("/get-dependency-graph", dependencies=[Depends(require_access("admin"))])
 def get_dependency_graph():
     vulnerable_packages = set()
     safety_path = SCANS_DIR / "safety-report.json"
@@ -2124,7 +2157,7 @@ def get_dependency_graph():
         "links": links
     }
 
-@app.post("/run-scan")
+@router.post("/run-scan")
 async def run_scan(request: Request, principal=Depends(require_access("operator"))):
     if os.environ.get("VERCEL"):
         raise HTTPException(status_code=400, detail="Security scans are not supported in the Vercel serverless environment.")
@@ -2182,12 +2215,25 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
     job_id = uuid.uuid4().hex
     
     # Write initial job status in Redis hash
-    redis_client.hset(f"job:{job_id}", "state", "queued")
-    redis_client.hset(f"job:{job_id}", "progress", 0)
-    redis_client.hset(f"job:{job_id}", "owner_id", principal.user_id)
+    redis_client.hset(
+        f"job:{job_id}",
+        mapping={
+            "state": "queued",
+            "progress": 0,
+            "owner_id": principal.user_id,
+            "queued_at": time.time(),
+        },
+    )
 
     # Import worker task logic
-    from worker import async_scan_task
+    from .worker import async_scan_task
+
+    payload = ScanJobPayload(
+        job_id=job_id,
+        target=target_name,
+        custom_file_path=custom_file_path,
+        waf_enabled=WAF_ENABLED,
+    )
 
     if REDIS_AVAILABLE:
         from rq import Queue
@@ -2197,10 +2243,7 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
         q = Queue(connection=r_conn)
         q.enqueue(
             async_scan_task,
-            job_id,
-            target_name,
-            custom_file_path,
-            WAF_ENABLED,
+            payload,
             job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
         )
     else:
@@ -2208,7 +2251,7 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
         # Run scan task in a background thread in-process
         thread = threading.Thread(
             target=async_scan_task,
-            args=(job_id, target_name, custom_file_path, WAF_ENABLED)
+            args=(payload,)
         )
         thread.daemon = True
         thread.start()
@@ -2219,7 +2262,7 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
         "state": "queued"
     }
 
-@app.websocket("/ws/scan/{job_id}")
+@router.websocket("/ws/scan/{job_id}")
 async def websocket_scan(websocket: WebSocket, job_id: str):
     principal = websocket_principal(websocket, "viewer")
     if not principal:
@@ -2276,7 +2319,7 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         })
         
     # 3. Stream updates
-    metrics_task = asyncio.create_task(stream_telemetry_metrics_ws(websocket))
+    metrics_task = asyncio.create_task(stream_telemetry_metrics_ws(websocket, job_id))
     
     try:
         while True:
@@ -2295,13 +2338,24 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         pubsub.unsubscribe(f"job_channel:{job_id}")
         pubsub.close()
 
-async def stream_telemetry_metrics_ws(websocket: WebSocket):
+def _job_sandbox_container(job_id: str) -> str | None:
+    value = redis_client.hget(f"job:{job_id}", "sandbox_container_id")
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    if not isinstance(value, str) or not value:
+        return None
+    if not value.startswith("aegis-sandbox-container-"):
+        return None
+    return value
+
+
+async def stream_telemetry_metrics_ws(websocket: WebSocket, job_id: str):
     sent_logs = set()
     import random
     
     while True:
         try:
-            container_name = get_active_sandbox_container()
+            container_name = _job_sandbox_container(job_id)
             if container_name:
                 stats = get_sandbox_stats(container_name)
                 cpu = stats.get("cpu", 0.0)
@@ -2384,8 +2438,8 @@ async def stream_telemetry_metrics_ws(websocket: WebSocket):
             await asyncio.sleep(1.0)
 
 # Legacy /stream-telemetry SSE endpoint
-@app.get("/stream-telemetry")
-async def stream_telemetry(principal=Depends(require_role("viewer"))):
+@router.get("/stream-telemetry")
+async def stream_telemetry(principal=Depends(require_access("admin"))):
     async def generate_stream():
         sent_logs = set()
         iterations = 0
@@ -2463,163 +2517,7 @@ async def stream_telemetry(principal=Depends(require_role("viewer"))):
             
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
-@app.get("/health")
-def health():
-    return {
-        "status": "running",
-        "service": "aegis-security-console",
-        "demo_lab_enabled": DEMO_LAB_ENABLED,
-    }
-
-
-@app.get("/.well-known/security.txt", response_class=PlainTextResponse)
-def security_txt():
-    contact = os.environ.get(
-        "AEGIS_SECURITY_CONTACT",
-        "https://github.com/huslenine999/aegis/security/advisories/new",
-    )
-    policy = os.environ.get(
-        "AEGIS_SECURITY_POLICY_URL",
-        "https://github.com/huslenine999/aegis/security/policy",
-    )
-    if not contact.startswith(("https://", "mailto:")) or any(
-        value in contact for value in ("\r", "\n")
-    ):
-        contact = "https://github.com/huslenine999/aegis/security/advisories/new"
-    if not policy.startswith("https://") or any(value in policy for value in ("\r", "\n")):
-        policy = "https://github.com/huslenine999/aegis/security/policy"
-    expires = (datetime.now(timezone.utc) + timedelta(days=365)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    lines = [
-        f"Contact: {contact}",
-        f"Expires: {expires}",
-        "Preferred-Languages: en",
-        f"Policy: {policy}",
-    ]
-    public_url = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
-    if public_url.startswith("https://"):
-        lines.append(f"Canonical: {public_url}/.well-known/security.txt")
-    return "\n".join(lines) + "\n"
-
-
-@app.get("/ready")
-def readiness():
-    try:
-        with get_connection() as connection:
-            connection.execute("SELECT 1").fetchone()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Database is not ready.") from exc
-
-    redis_required = os.environ.get("AEGIS_REQUIRE_REDIS", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if redis_required and not REDIS_AVAILABLE:
-        raise HTTPException(status_code=503, detail="Redis is required but unavailable.")
-
-    redis_state = "in-memory" if not REDIS_AVAILABLE else "connected"
-    try:
-        redis_client.ping()
-    except Exception as exc:
-        if redis_required:
-            raise HTTPException(status_code=503, detail="Redis is not ready.") from exc
-        redis_state = "unavailable"
-
-    worker_state = "not-required"
-    notifier_state = "not-required"
-    worker_required = os.environ.get("AEGIS_REQUIRE_WORKER", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if worker_required:
-        if not REDIS_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Worker readiness requires Redis.")
-        try:
-            from rq import Worker
-
-            workers = Worker.all(connection=redis_client)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="Worker readiness could not be verified.") from exc
-        scan_workers = [worker for worker in workers if "default" in worker.queue_names()]
-        if not scan_workers:
-            raise HTTPException(status_code=503, detail="No scanner RQ workers are available.")
-        worker_state = f"{len(scan_workers)} available"
-        if os.environ.get("AEGIS_ALLOW_DEEP_SCANS", "false").lower() in {
-            "1", "true", "yes", "on"
-        }:
-            isolated_workers = [
-                worker for worker in workers
-                if "deep" in worker.queue_names()
-                and str(getattr(worker, "name", "")).startswith("aegis-isolated-")
-            ]
-            if not isolated_workers:
-                raise HTTPException(
-                    status_code=503,
-                    detail="No isolated deep-scan workers are available.",
-                )
-            worker_state += f", {len(isolated_workers)} isolated"
-
-    notifier_required = os.environ.get("AEGIS_REQUIRE_NOTIFIER", "false").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if notifier_required:
-        if not REDIS_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Notifier readiness requires Redis.")
-        try:
-            from rq import Worker
-
-            workers = Worker.all(connection=redis_client)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="Notifier readiness could not be verified.") from exc
-        notifier_workers = [
-            worker for worker in workers if "notifications" in worker.queue_names()
-        ]
-        if not notifier_workers:
-            raise HTTPException(status_code=503, detail="No notifier RQ workers are available.")
-        notifier_state = f"{len(notifier_workers)} available"
-
-    return {
-        "status": "ready",
-        "service": "aegis-security-console",
-        "redis": redis_state,
-        "worker": worker_state,
-        "notifier": notifier_state,
-    }
-
-
-@app.get("/metrics", response_class=PlainTextResponse)
-def metrics(request: Request):
-    metrics_token = os.environ.get("AEGIS_METRICS_TOKEN", "")
-    supplied = request.headers.get("authorization", "")
-    token_valid = (
-        metrics_token
-        and supplied.startswith("Bearer ")
-        and hmac.compare_digest(supplied[7:].strip(), metrics_token)
-    )
-    principal = principal_from_request(request)
-    principal_valid = bool(
-        principal
-        and principal.role == "admin"
-        and (
-            principal.auth_method != "token"
-            or "*" in principal.scopes
-            or "admin" in principal.scopes
-        )
-    )
-    if not token_valid and not principal_valid:
-        raise HTTPException(status_code=401, detail="Metrics authentication required.")
-    return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
-
-
-@app.get("/export-dossier", dependencies=[Depends(require_access("admin"))])
+@router.get("/export-dossier", dependencies=[Depends(require_access("admin"))])
 def export_dossier():
     def load_json(path):
         if not path.exists():
@@ -3016,11 +2914,13 @@ FINDINGS:
         }
     )
 
+app = create_app()
+
+
 if __name__ == "__main__":
     import uvicorn
-    initialize_database()
     host = validate_server_bind(
         os.environ.get("AEGIS_HOST", "127.0.0.1"),
         auth_required=AUTH_REQUIRED,
     )
-    uvicorn.run("main:app", host=host, port=5001, reload=False)
+    uvicorn.run("app.main:app", host=host, port=5001, reload=False)

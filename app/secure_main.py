@@ -4,14 +4,10 @@ import sqlite3
 import subprocess  # nosec
 from pathlib import Path
 
-# Add the current directory to sys.path to allow imports when running from root
-import sys
-sys.path.append(str(Path(__file__).resolve().parent))
-
 from flask import Flask, jsonify, request
 
 # In a secure app, you'd import database logic securely
-from database import DB_PATH
+from .database import DB_PATH
 
 app = Flask(__name__)
 

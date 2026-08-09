@@ -1573,7 +1573,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/user?name=admin" class="link">/user?name=admin</a>
+                            <a href="/demo-lab/user?name=admin" class="link">/demo-lab/user?name=admin</a>
                             <span class="badge badge-danger" style="margin-left: auto;">SQLi</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_sqli" style="display: none;">
@@ -1583,7 +1583,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/ping?host=127.0.0.1" class="link">/ping?host=127.0.0.1</a>
+                            <a href="/demo-lab/ping?host=127.0.0.1" class="link">/demo-lab/ping?host=127.0.0.1</a>
                             <span class="badge badge-danger" style="margin-left: auto;">RCE</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_rce" style="display: none;">
@@ -1602,7 +1602,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/calculate?expr=2+2" class="link">/calculate?expr=2+2</a>
+                            <a href="/demo-lab/calculate?expr=2+2" class="link">/demo-lab/calculate?expr=2+2</a>
                             <span class="badge badge-danger" style="margin-left: auto;">EVAL</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_eval" style="display: none;">
@@ -1612,7 +1612,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">POST</span>
-                            <span class="link">/load-profile</span>
+                            <span class="link">/demo-lab/load-profile</span>
                             <span class="badge badge-danger" style="margin-left: auto;">PICKLE</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_pickle" style="display: none;">
@@ -1631,7 +1631,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/download?file=sample.txt" class="link">/download?file=sample.txt</a>
+                            <a href="/demo-lab/download?file=sample.txt" class="link">/demo-lab/download?file=sample.txt</a>
                             <span class="badge badge-warning" style="margin-left: auto;">LFI</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_lfi" style="display: none;">
@@ -1641,7 +1641,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/hash?value=password123" class="link">/hash?value=password123</a>
+                            <a href="/demo-lab/hash?value=password123" class="link">/demo-lab/hash?value=password123</a>
                             <span class="badge badge-warning" style="margin-left: auto;">MD5</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_md5" style="display: none;">
@@ -1660,7 +1660,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/xss?msg=Welcome" class="link">/xss?msg=Welcome</a>
+                            <a href="/demo-lab/xss?msg=Welcome" class="link">/demo-lab/xss?msg=Welcome</a>
                             <span class="badge badge-danger" style="margin-left: auto;">XSS</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_xss" style="display: none;">
@@ -1670,7 +1670,7 @@
                     <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
                         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
                             <span class="method">GET</span>
-                            <a href="/ssrf?url=http://127.0.0.1:5001/health" class="link">/ssrf?url=http://127.0.0.1:5001/health</a>
+                            <a href="/demo-lab/ssrf?url=http://127.0.0.1:5001/health" class="link">/demo-lab/ssrf?url=http://127.0.0.1:5001/health</a>
                             <span class="badge badge-danger" style="margin-left: auto;">SSRF</span>
                         </div>
                         <div class="explainer-subtext mono" data-i18n="desc_ssrf" style="display: none;">
@@ -2918,11 +2918,11 @@ BIOGRAPHY: Active penetration specialist focused on cloud container leaks. Lever
         setTimeout(reveal, 100);
 
         const vectors = {
-            sqli: { payload: "' OR '1'='1", endpoint: '/user?name=' },
-            rce: { payload: "; cat /etc/passwd", endpoint: '/ping?host=127.0.0.1' },
-            traversal: { payload: "../../app/main.py", endpoint: '/download?file=' },
-            xss: { payload: "<script>alert('XSS')<\/script>", endpoint: '/xss?msg=' },
-            ssrf: { payload: "http://169.254.169.254/latest/meta-data/", endpoint: '/ssrf?url=' }
+            sqli: { payload: "' OR '1'='1", endpoint: '/demo-lab/user?name=' },
+            rce: { payload: "; cat /etc/passwd", endpoint: '/demo-lab/ping?host=127.0.0.1' },
+            traversal: { payload: "../../app/main.py", endpoint: '/demo-lab/download?file=' },
+            xss: { payload: "<script>alert('XSS')<\/script>", endpoint: '/demo-lab/xss?msg=' },
+            ssrf: { payload: "http://169.254.169.254/latest/meta-data/", endpoint: '/demo-lab/ssrf?url=' }
         };
 
         const terminal = document.getElementById('terminal');

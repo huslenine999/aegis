@@ -65,11 +65,15 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Set `AEGIS_ARTIFACT_RETENTION_DAYS` to the approved evidence-retention
   period. Run downloads remain authorized by project membership and include
   SHA-256 integrity metadata.
-- Keep `AEGIS_ARTIFACT_BACKEND=local`. This release rejects any other value so
-  an environment variable cannot imply an object-storage control that has not
-  been implemented and reviewed.
-- Keep `AEGIS_MULTI_TENANT=false`. Until an external object-storage backend is
-  available, deploy one isolated Aegis stack per customer tenant.
+- Set `AEGIS_ARTIFACT_BACKEND=local` for filesystem evidence or `s3` for the
+  reviewed S3-compatible backend. When using S3, set `AEGIS_S3_BUCKET`,
+  `AEGIS_S3_REGION` when required by the provider, and use the deployment
+  identity or environment credentials with write/read access only to the
+  configured prefix. Enable bucket versioning, private access, KMS encryption,
+  and object lock when the evidence policy requires them.
+- Keep `AEGIS_MULTI_TENANT=false`. S3 provides durable artifact storage, but the
+  current production topology remains one isolated Aegis stack per customer
+  tenant.
 - Generate and protect a unique 32-byte Ed25519 seed for
   `AEGIS_EVIDENCE_SIGNING_KEY`. Keep the private seed on workers only and pin
   the public key used by `aegis verify-evidence` in the customer's trust
@@ -129,14 +133,17 @@ Before upgrading:
 3. Smoke-test the new image against a staging restore.
 
 After upgrading, verify `/ready`, `/metrics`, login, project listing, a quick
-scan, worker logs, and notification delivery.
+scan, worker logs, notification delivery, and the worker/notifier health status
+reported by `docker compose ps`.
 
 Rollback is image-first: redeploy the previous image tag and restore the
 pre-upgrade database only if a migration or data change prevents the previous
 image from starting. Keep at least one known-good image and one pre-upgrade
 database backup until the new release has completed a full scan cycle.
 
-Back up before upgrades:
+Back up before upgrades. `aegis backup` stores a plain SQL PostgreSQL dump in
+`database.sql` together with the generated scan artifacts; restore replays that
+dump with `psql` after stopping the application services:
 
 ```bash
 aegis backup --output backups/pre-upgrade.zip
@@ -147,6 +154,15 @@ Restore requires explicit confirmation:
 
 ```bash
 aegis restore backups/pre-upgrade.zip --yes
+```
+
+The recovery path is intentionally plain SQL rather than PostgreSQL's custom
+format. Run the Compose recovery rehearsal from a Docker-capable control host
+at least quarterly and after schema or storage changes:
+
+```bash
+python scripts/pilot_readiness.py --docker-smoke \
+  --output .aegis/pilot-rehearsal.json
 ```
 
 ## Key rotation

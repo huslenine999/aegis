@@ -25,7 +25,7 @@ service restart, then removes only its temporary containers and volumes.
 1. Update versions in `pyproject.toml`, `package.json`, and `CHANGELOG.md`.
 2. Run `python -m py_compile app/main.py app/cli.py app/worker.py app/scanners.py app/demo_lab.py`.
 3. Run `pytest -q --timeout=60 --timeout-method=thread`.
-4. Run `python app/cli.py scan . --config aegis.yml --sarif --json`.
+4. Run `python -m app.cli scan . --config aegis.yml --sarif --json`.
 5. Build the Python wheel with `python -m pip wheel . --no-deps -w dist`.
 6. Smoke-test editable install with `pip install -e ".[dev]"` and `aegis doctor --json`.
 7. Run `npm run test:e2e` and confirm the real-browser authentication and axe

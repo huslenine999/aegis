@@ -16,12 +16,17 @@ def test_demo_lab_disabled_by_default():
     """Vulnerable training routes should not be reachable unless explicitly enabled."""
     app_main.DEMO_LAB_ENABLED = False
     client = TestClient(app_main.app)
-    response = client.get("/user?name=guest")
+    response = client.get("/demo-lab/user?name=guest")
     assert response.status_code == 404
+
+
+def test_demo_lab_is_namespaced_away_from_application_routes(client):
+    assert client.get("/user?name=guest").status_code == 404
+    assert client.get("/demo-lab/user?name=guest").status_code == 200
 
 def test_waf_disabled_by_default(client):
     """Ensure the WAF is disabled by default and allow SQLi."""
-    response = client.get('/user?name=admin\' OR \'1\'=\'1')
+    response = client.get('/demo-lab/user?name=admin\' OR \'1\'=\'1')
     assert response.status_code == 200
 
 def test_waf_blocking(client):
@@ -30,16 +35,16 @@ def test_waf_blocking(client):
     client.post('/toggle-waf')
     
     # Test SQLi blocking
-    response = client.get('/user?name=admin\' OR \'1\'=\'1')
+    response = client.get('/demo-lab/user?name=admin\' OR \'1\'=\'1')
     assert response.status_code == 403
     assert b"Blocked by Aegis WAF" in response.content
 
     # Test Command Injection blocking
-    response = client.get('/ping?host=127.0.0.1; cat /etc/passwd')
+    response = client.get('/demo-lab/ping?host=127.0.0.1; cat /etc/passwd')
     assert response.status_code == 403
 
     # Test Path Traversal blocking
-    response = client.get('/download?file=../../etc/passwd')
+    response = client.get('/demo-lab/download?file=../../etc/passwd')
     assert response.status_code == 403
 
     # Test legitimate traffic still works
@@ -105,7 +110,7 @@ def test_waf_custom_rules(client):
         assert toggle_response.json()['waf_enabled'] is True
 
         # 4. Test blocking of custom pattern
-        blocked_response = client.get('/user?name=custom_hack_pattern')
+        blocked_response = client.get('/demo-lab/user?name=custom_hack_pattern')
         assert blocked_response.status_code == 403
         assert b"Custom hacker signature" in blocked_response.content
 
@@ -114,7 +119,7 @@ def test_waf_custom_rules(client):
             {"pattern": "custom_hack_pattern", "description": "Custom hacker signature", "enabled": False}
         ]
         client.post('/save-waf-rules', json={"rules": disabled_rules})
-        allowed_response = client.get('/user?name=custom_hack_pattern')
+        allowed_response = client.get('/demo-lab/user?name=custom_hack_pattern')
         assert allowed_response.status_code == 200
 
         # Disable WAF
@@ -135,23 +140,23 @@ def test_waf_json_payload_blocking(client):
 
     # 2. Send clean JSON body (valid base64 encoded pickle) -> should be allowed (200 status code)
     clean_val = base64.b64encode(pickle.dumps({"name": "guest"})).decode("utf-8")
-    response = client.post('/load-profile', json={"profile": clean_val})
+    response = client.post('/demo-lab/load-profile', json={"profile": clean_val})
     assert response.status_code == 200
 
     # 3. Send JSON body with SQL injection signature in key or value -> should be blocked
-    response = client.post('/load-profile', json={"profile": "' OR '"})
+    response = client.post('/demo-lab/load-profile', json={"profile": "' OR '"})
     assert response.status_code == 403
     assert b"Blocked by Aegis WAF" in response.content
 
     # 4. Send nested JSON body with malicious signature -> should be blocked
-    response = client.post('/load-profile', json={"profile": {"details": {"nested_key": "cat /etc/passwd"}}})
+    response = client.post('/demo-lab/load-profile', json={"profile": {"details": {"nested_key": "cat /etc/passwd"}}})
     assert response.status_code == 403
     assert b"Blocked by Aegis WAF" in response.content
 
     # 5. Disable WAF and verify it bypasses WAF (but might fail to decode OR/etc. with 500 error or raise an exception)
     client.post('/toggle-waf')
     try:
-        response = client.post('/load-profile', json={"profile": "' OR '"})
+        response = client.post('/demo-lab/load-profile', json={"profile": "' OR '"})
         assert response.status_code != 403
     except Exception:
         # If it raised an exception, it successfully bypassed the WAF and reached the backend decoder
@@ -204,19 +209,19 @@ def test_xss_waf_blocking(client):
     client.post('/toggle-waf')
     
     # Test script injection blocking
-    response = client.get('/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
+    response = client.get('/demo-lab/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
     assert response.status_code == 403
     assert b"Blocked by Aegis WAF" in response.content
 
     # Test event handler hijacking blocking
-    response = client.get('/xss?msg=test%20onload=alert(1)')
+    response = client.get('/demo-lab/xss?msg=test%20onload=alert(1)')
     assert response.status_code == 403
 
     # 2. Disable WAF
     client.post('/toggle-waf')
     
     # Test that payload is permitted
-    response = client.get('/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
+    response = client.get('/demo-lab/xss?msg=%3Cscript%3Ealert(1)%3C/script%3E')
     assert response.status_code == 200
     assert b"<script>alert(1)</script>" in response.content
 
@@ -227,17 +232,17 @@ def test_ssrf_waf_blocking(client):
     client.post('/toggle-waf')
 
     # Test cloud metadata target blocking
-    response = client.get('/ssrf?url=http://169.254.169.254/latest/meta-data/')
+    response = client.get('/demo-lab/ssrf?url=http://169.254.169.254/latest/meta-data/')
     assert response.status_code == 403
     assert b"Blocked by Aegis WAF" in response.content
 
     # Test localhost target blocking
-    response = client.get('/ssrf?url=http://localhost:5001/health')
+    response = client.get('/demo-lab/ssrf?url=http://localhost:5001/health')
     assert response.status_code == 403
 
     # 2. Disable WAF
     client.post('/toggle-waf')
 
     # Test that loopback is permitted (will return success or connection error, but not 403 WAF block)
-    response = client.get('/ssrf?url=http://127.0.0.1:5001/health')
+    response = client.get('/demo-lab/ssrf?url=http://127.0.0.1:5001/health')
     assert response.status_code != 403

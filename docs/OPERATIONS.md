@@ -21,9 +21,11 @@ configuration as one recovery set.
 
 ## Backup and restore
 
-- PostgreSQL: use encrypted, automated snapshots plus `pg_dump --format=custom`.
-  Restore into an empty database with `pg_restore`, start one dashboard replica so
-  migrations run, and verify `/ready` before workers are enabled.
+- PostgreSQL: use encrypted, automated snapshots plus the plain SQL dump created
+  by `aegis backup` (`pg_dump --format=plain --clean --if-exists`). Restore it
+  with `psql` after quiescing dashboard, worker, and notifier services, start one
+  dashboard replica so migrations run, and verify `/ready` before workers are
+  enabled.
 - S3-compatible artifacts: enable bucket versioning, private access, KMS encryption,
   and object lock with a retention period that matches policy. Replicate to a separate
   account or failure domain.
@@ -64,7 +66,11 @@ enabled, queue age, scanner operational errors, notification dead letters, migra
 failure, database saturation, artifact integrity failure, and audit-chain failure.
 
 Track dashboard readiness, worker completion/failure counts, queue age, HTTP 5xx and
-p95 latency, notification failures, and PostgreSQL/Redis capacity. Use
+p95 latency, notification failures, artifact integrity failures, audit-chain
+failures, and PostgreSQL/Redis capacity. The `/metrics` endpoint exposes
+`aegis_scan_queue_age_seconds`, `aegis_worker_failures_total`,
+`aegis_notification_failures_total`, `aegis_artifact_integrity_failures_total`,
+and `aegis_audit_integrity_failures_total`. Use
 `deploy/prometheus.yml.example` and import `deploy/grafana-dashboard.json` for the
 included baseline panels.
 

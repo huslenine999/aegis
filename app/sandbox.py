@@ -7,10 +7,7 @@ import stat
 from pathlib import Path
 from typing import List, Dict, Any
 
-try:
-    from .dependencies import discover_dependency_manifests, first_requirements_manifest
-except ImportError:
-    from dependencies import discover_dependency_manifests, first_requirements_manifest  # type: ignore[no-redef]
+from .dependencies import discover_dependency_manifests, first_requirements_manifest
 
 
 SANDBOX_UID = 10001
