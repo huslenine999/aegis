@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -8,18 +9,12 @@ from pathlib import Path
 
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import (
-    analyze_clamav,
-    analyze_iac,
-    analyze_osv,
-    analyze_ruff,
-    analyze_safety,
-    analyze_secrets,
-    analyze_semgrep,
-    analyze_trivy,
-    analyze_yara,
-    analyze_zap,
+    analyze_report_set,
     calculate_exploitability_score as calculate_policy_exploitability_score,
 )
+
+
+logger = logging.getLogger("aegis.reporting")
 
 
 def extract_json_values(data):
@@ -34,38 +29,34 @@ def extract_json_values(data):
     return str(data)
 
 
-def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
-    def read_json_safe(path):
-        if path.exists():
-            try:
-                return json.loads(path.read_text())
-            except Exception:
-                pass
+def load_json_report(path: Path):
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Unable to read scanner report %s: %s", path, exc)
         return None
 
-    ruff = read_json_safe(scans_dir / "ruff-report.json")
-    semgrep = read_json_safe(scans_dir / "semgrep-report.json")
-    safety = read_json_safe(scans_dir / "safety-report.json")
-    trivy = read_json_safe(scans_dir / "trivy-report.json")
-    secrets = read_json_safe(scans_dir / "secrets-report.json")
-    yara = read_json_safe(scans_dir / "yara-report.json")
-    clamav = read_json_safe(scans_dir / "clamav-report.json")
-    zap = read_json_safe(scans_dir / "zap-report.json")
-    osv = read_json_safe(scans_dir / "osv-report.json")
-    iac = read_json_safe(scans_dir / "iac-report.json")
 
-    results = [
-        analyze_ruff(ruff),
-        analyze_semgrep(semgrep),
-        analyze_safety(safety),
-        analyze_osv(osv),
-        analyze_trivy(trivy),
-        analyze_secrets(secrets),
-        analyze_yara(yara),
-        analyze_clamav(clamav),
-        analyze_zap(zap),
-        analyze_iac(iac),
-    ]
+def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
+
+    reports = {
+        name: load_json_report(scans_dir / f"{filename}-report.json")
+        for name, filename in {
+            "ruff": "ruff",
+            "semgrep": "semgrep",
+            "safety": "safety",
+            "trivy": "trivy",
+            "secrets": "secrets",
+            "yara": "yara",
+            "clamav": "clamav",
+            "zap": "zap",
+            "osv": "osv",
+            "iac": "iac",
+        }.items()
+    }
+    results = analyze_report_set(reports)
     return calculate_policy_exploitability_score(results, waf_enabled)
 
 
@@ -90,8 +81,12 @@ def generate_fallback_tree(project_root: Path) -> list[dict]:
                         "required_version": f"=={package_version}",
                         "dependencies": [],
                     })
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.warning(
+                "Unable to build dependency fallback from %s: %s",
+                requirements_manifest.path,
+                exc,
+            )
     return tree
 
 
@@ -107,8 +102,8 @@ def load_dependency_tree(project_root: Path) -> list[dict]:
         result = subprocess.run(pipdeptree_cmd, capture_output=True, text=True, check=False)
         if result.returncode == 0:
             return json.loads(result.stdout)
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        logger.warning("Unable to load dependency tree with pipdeptree: %s", exc)
     return generate_fallback_tree(project_root)
 
 

@@ -1,4 +1,5 @@
 import re
+import logging
 import shutil
 import subprocess
 import time
@@ -10,6 +11,7 @@ from typing import List, Dict, Any
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 
 
+logger = logging.getLogger("aegis.sandbox")
 SANDBOX_UID = 10001
 SANDBOX_GID = 10001
 SANDBOX_FALLBACK_REQUIREMENTS = "Flask==3.1.3\nrequests==2.34.2\n"
@@ -91,7 +93,8 @@ def is_docker_available() -> bool:
     try:
         res = subprocess.run(["docker", "ps"], capture_output=True, check=False, timeout=2)
         return res.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Docker availability check failed: %s", exc)
         return False
 
 def is_trivy_available() -> bool:
@@ -109,8 +112,8 @@ def detect_port_from_file(filepath: Path) -> int:
         match = re.search(r'port\s*=\s*(\d+)', content)
         if match:
             return int(match.group(1))
-    except Exception:
-        pass
+    except (OSError, UnicodeError, ValueError) as exc:
+        logger.debug("Unable to detect application port from %s: %s", filepath, exc)
     return 5001
 
 
@@ -211,7 +214,8 @@ def build_sandbox_image(temp_dir: Path, image_tag: str) -> bool:
             timeout=SANDBOX_COMMAND_TIMEOUT,
         )
         return res.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Sandbox image build failed for %s: %s", image_tag, exc)
         return False
 
 def create_sandbox_network(network_name: str) -> bool:
@@ -224,7 +228,8 @@ def create_sandbox_network(network_name: str) -> bool:
             timeout=30,
         )
         return result.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Sandbox network creation failed for %s: %s", network_name, exc)
         return False
 
 
@@ -269,7 +274,8 @@ def run_sandbox_container(
             timeout=SANDBOX_COMMAND_TIMEOUT,
         )
         return res.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Sandbox container launch failed for %s: %s", container_name, exc)
         return False
 
 def wait_for_container(target_url: str, timeout: float = 6.0) -> bool:
@@ -283,8 +289,8 @@ def wait_for_container(target_url: str, timeout: float = 6.0) -> bool:
             res = requests.get(target_url, timeout=0.5)
             if res.status_code in {200, 403, 404}:
                 return True
-        except Exception:
-            pass
+        except requests.RequestException:
+            logger.debug("Sandbox readiness probe has not succeeded yet: %s", target_url)
         time.sleep(0.2)
     return False
 
@@ -326,8 +332,8 @@ def stop_and_cleanup_sandbox(
             check=False,
             timeout=SANDBOX_COMMAND_TIMEOUT,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Unable to remove sandbox container %s: %s", container_name, exc)
     try:
         subprocess.run(
             ["docker", "rmi", image_tag],
@@ -335,8 +341,8 @@ def stop_and_cleanup_sandbox(
             check=False,
             timeout=SANDBOX_COMMAND_TIMEOUT,
         )
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Unable to remove sandbox image %s: %s", image_tag, exc)
     if network_name:
         try:
             subprocess.run(
@@ -345,8 +351,8 @@ def stop_and_cleanup_sandbox(
                 check=False,
                 timeout=SANDBOX_COMMAND_TIMEOUT,
             )
-        except Exception:
-            pass
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("Unable to remove sandbox network %s: %s", network_name, exc)
 
 def get_active_sandbox_container() -> str | None:
     """
@@ -362,8 +368,8 @@ def get_active_sandbox_container() -> str | None:
         ], capture_output=True, text=True, check=False, timeout=2)
         if res.returncode == 0 and res.stdout.strip():
             return res.stdout.strip().splitlines()[0]
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Unable to discover active sandbox container: %s", exc)
     return None
 
 def get_sandbox_stats(container_name: str) -> Dict[str, Any]:
@@ -385,8 +391,8 @@ def get_sandbox_stats(container_name: str) -> Dict[str, Any]:
                 mem_str = parts[1].replace("%", "").strip()
                 stats["cpu"] = float(cpu_str) if cpu_str else 0.0
                 stats["memory"] = float(mem_str) if mem_str else 0.0
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        logger.debug("Unable to read sandbox stats for %s: %s", container_name, exc)
     return stats
 
 def get_sandbox_logs(container_name: str, tail: int = 10) -> List[str]:
@@ -401,6 +407,6 @@ def get_sandbox_logs(container_name: str, tail: int = 10) -> List[str]:
         ], capture_output=True, text=True, check=False, timeout=2)
         if res.returncode == 0:
             return res.stdout.splitlines()
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("Unable to read sandbox logs for %s: %s", container_name, exc)
     return []

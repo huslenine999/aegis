@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from app.version import get_package_version
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ACTION_PATH = PROJECT_ROOT / "action.yml"
@@ -40,6 +42,36 @@ def test_release_package_versions_match():
     lock_version = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text())["package"][0]["version"]
 
     assert python_version == npm_version == lock_version
+    assert get_package_version() == python_version
+
+
+def test_makefile_uses_the_uv_managed_environment():
+    makefile = (PROJECT_ROOT / "Makefile").read_text()
+
+    assert "PYTHON := $(UV) run python" in makefile
+    assert "venv/bin/python" not in makefile
+    assert "requirements-dev.txt" not in makefile
+
+
+def test_optional_scanners_are_not_installed_in_the_core_runtime():
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())["project"]
+
+    assert not any(item.startswith("safety==") for item in project["dependencies"])
+    assert any(
+        item.startswith("safety==")
+        for item in project["optional-dependencies"]["scanner"]
+    )
+
+
+def test_python_package_metadata_uses_current_license_and_explicit_data_packages():
+    config = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+
+    assert config["project"]["license"] == "MIT"
+    assert set(config["tool"]["setuptools"]["packages"]) >= {
+        "app.downloads",
+        "app.static",
+        "app.templates",
+    }
 
 
 def test_npm_manifest_excludes_runtime_state():
@@ -52,6 +84,14 @@ def test_npm_manifest_excludes_runtime_state():
         "app/static/",
         "app/templates/",
     }
+
+
+def test_packaging_has_one_supported_npm_launcher():
+    package = json.loads((PROJECT_ROOT / "package.json").read_text())
+
+    assert package["bin"] == {"aegis": "./bin/cli.js"}
+    assert not (PROJECT_ROOT / "bin" / "aegis").exists()
+    assert not (PROJECT_ROOT / "scripts" / "setup_alias.sh").exists()
 
 
 def test_all_external_actions_use_immutable_commit_shas():
@@ -142,13 +182,22 @@ def test_redis_runtime_starts_as_its_unprivileged_user():
 
 def test_security_gate_uses_trusted_scanner_and_policy_revision():
     workflow = (WORKFLOWS_PATH / "security-pipeline.yml").read_text()
+    parsed = yaml.safe_load(workflow)
+    scan_step = next(
+        step
+        for step in parsed["jobs"]["security-gate"]["steps"]
+        if step.get("name") == "Run trusted Aegis approval scan"
+    )
+    scan_script = scan_step["run"]
 
     assert "uses: ./" not in workflow
-    assert "ref: 1d60daa9efa001eb36716e5656db514f809b8b6d" in workflow
-    assert "python -m pip install ./trusted-aegis" in workflow
+    assert "ref: b2f00d3fd669799473ce601c7f4ca17dcf381c99" in workflow
+    assert 'python -m pip install "./trusted-aegis[scanner]"' in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
-    assert "aegis scan target" in workflow
+    assert "aegis scan target \\" in scan_script
+    assert "--no-docker" in scan_script
+    assert "--fast" not in scan_script
     assert "--disable-version-check" in workflow
     assert "--validate" in workflow
 
@@ -191,7 +240,7 @@ def test_container_smoke_starts_all_readiness_services():
 def test_published_action_e2e_asserts_outputs_and_reports():
     workflow = (WORKFLOWS_PATH / "action-e2e.yml").read_text()
 
-    assert "huslenine999/aegis@e292c60770bee621fb70ba07b71cc9f2a525ea1a" in workflow
+    assert "huslenine999/aegis@b2f00d3fd669799473ce601c7f4ca17dcf381c99" in workflow
     assert "steps.aegis.outputs.decision" in workflow
     assert "steps.aegis.outputs.exit-code" in workflow
     assert "steps.aegis.outputs.summary-json" in workflow

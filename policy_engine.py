@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from jinja2 import Environment, select_autoescape
 
 from app.dependencies import DependencyManifest, DependencyPackage, discover_dependency_manifests, extract_packages_from_manifest
+from app.version import get_package_version
 
 # Use an explicit scanner directory when provided. Otherwise keep reports in
 # the persistent Aegis data directory used by the dashboard and worker.
@@ -301,7 +302,10 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
     }
 
 
-def analyze_semgrep(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_semgrep(
+    report: Dict[str, Any] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if not report:
         return {
             "tool": "Semgrep",
@@ -405,7 +409,10 @@ def analyze_safety(report: Any, fail_on: set[str] | None = None) -> Dict[str, An
     }
 
 
-def analyze_osv(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_osv(
+    report: List[Dict[str, Any]] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "OSV Dependency Audit",
@@ -443,7 +450,10 @@ def analyze_osv(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -
     }
 
 
-def analyze_trivy(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_trivy(
+    report: Dict[str, Any] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     vulnerabilities = []
 
     if not report:
@@ -483,7 +493,10 @@ def analyze_trivy(report: Dict[str, Any], fail_on: set[str] | None = None) -> Di
     }
 
 
-def analyze_secrets(report: Dict[str, Any], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_secrets(
+    report: Dict[str, Any] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if not report:
         return {
             "tool": "Secrets Scanner",
@@ -517,7 +530,10 @@ def analyze_secrets(report: Dict[str, Any], fail_on: set[str] | None = None) -> 
     }
 
 
-def analyze_yara(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_yara(
+    report: List[Dict[str, Any]] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "YARA Scanner",
@@ -549,7 +565,10 @@ def analyze_yara(report: List[Dict[str, Any]], fail_on: set[str] | None = None) 
     }
 
 
-def analyze_clamav(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_clamav(
+    report: List[Dict[str, Any]] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "ClamAV",
@@ -580,7 +599,10 @@ def analyze_clamav(report: List[Dict[str, Any]], fail_on: set[str] | None = None
     }
 
 
-def analyze_zap(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -> Dict[str, Any]:
+def analyze_zap(
+    report: List[Dict[str, Any]] | None,
+    fail_on: set[str] | None = None,
+) -> Dict[str, Any]:
     if report is None:
         return {
             "tool": "Aegis DAST Probe",
@@ -707,6 +729,26 @@ def analyze_iac(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
     }
 
 
+def analyze_report_set(
+    reports: Dict[str, Any],
+    fail_on: set[str] | None = None,
+) -> List[Dict[str, Any]]:
+    """Normalize scanner reports through the canonical analyzer set."""
+
+    return [
+        analyze_ruff(reports.get("ruff"), fail_on),
+        analyze_semgrep(reports.get("semgrep"), fail_on),
+        analyze_safety(reports.get("safety"), fail_on),
+        analyze_osv(reports.get("osv"), fail_on),
+        analyze_trivy(reports.get("trivy"), fail_on),
+        analyze_secrets(reports.get("secrets"), fail_on),
+        analyze_yara(reports.get("yara"), fail_on),
+        analyze_clamav(reports.get("clamav"), fail_on),
+        analyze_zap(reports.get("zap"), fail_on),
+        analyze_iac(reports.get("iac"), fail_on),
+    ]
+
+
 def _normalize_manifests(manifests_or_path: Any) -> list[DependencyManifest]:
     if manifests_or_path is None:
         return []
@@ -754,6 +796,7 @@ def generate_cyclonedx_sbom(manifests_or_path: Any, output_path: Path):
                 component["version"] = package.version
             components.append(component)
                 
+    aegis_version = get_package_version()
     sbom = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -766,14 +809,14 @@ def generate_cyclonedx_sbom(manifests_or_path: Any, output_path: Path):
                     {
                         "type": "application",
                         "name": "Aegis SBOM Generator",
-                        "version": "1.0.0"
+                        "version": aegis_version,
                     }
                 ]
             },
             "component": {
                 "type": "application",
                 "name": "Aegis",
-                "version": "1.0.0"
+                "version": aegis_version,
             }
         },
         "components": components
@@ -1092,6 +1135,59 @@ def print_result(result: Dict[str, Any]) -> None:
             print(json.dumps(example, indent=2, ensure_ascii=False))
 
 
+def evaluate_policy_results(
+    results: List[Dict[str, Any]],
+    operational_failures: List[str] | None = None,
+    *,
+    fail_on_errors: bool = True,
+) -> Dict[str, Any]:
+    """Return the single fail-closed decision used by every report surface."""
+
+    failed_tools = [result["tool"] for result in results if result["status"] == "FAIL"]
+    missing_tools = [
+        result["tool"] for result in results if result["status"] == "MISSING"
+    ]
+    scanner_errors = [
+        result["tool"] for result in results if result["status"] == "ERROR"
+    ]
+    error_tools = list(dict.fromkeys([*(operational_failures or []), *scanner_errors]))
+
+    if error_tools and fail_on_errors:
+        return {
+            "status": "ERROR",
+            "reason": f"Operational scanner failure(s): {', '.join(error_tools)}",
+            "failed_tools": failed_tools,
+            "missing_tools": missing_tools,
+            "error_tools": error_tools,
+        }
+
+    if failed_tools or missing_tools:
+        reasons = []
+        if failed_tools:
+            reasons.append(
+                f"Blocking security issues found by: {', '.join(failed_tools)}"
+            )
+        if missing_tools:
+            reasons.append(
+                f"Required scan reports missing for: {', '.join(missing_tools)}"
+            )
+        return {
+            "status": "BLOCKED",
+            "reason": " | ".join(reasons),
+            "failed_tools": failed_tools,
+            "missing_tools": missing_tools,
+            "error_tools": [],
+        }
+
+    return {
+        "status": "ALLOWED",
+        "reason": "No blocking security issues found.",
+        "failed_tools": [],
+        "missing_tools": [],
+        "error_tools": [],
+    }
+
+
 def run_policy_engine(
     scan_dir: Path,
     html_path: Path | None = None,
@@ -1103,6 +1199,7 @@ def run_policy_engine(
     tool_states: Dict[str, str] | None = None,
     waf_enabled: bool | None = None,
     fail_on_severities: set[str] | None = None,
+    fail_on_scanner_errors: bool = True,
 ) -> int:
     if dependency_manifests is None:
         if req_path:
@@ -1144,18 +1241,21 @@ def run_policy_engine(
             print(f"[WARN] OSV scan execution failed: {e}")
             osv_findings = []
 
-    results = [
-        analyze_ruff(ruff_report, fail_on_severities),
-        analyze_semgrep(semgrep_report, fail_on_severities),
-        analyze_safety(safety_report, fail_on_severities),
-        analyze_osv(osv_findings, fail_on_severities),
-        analyze_trivy(trivy_report, fail_on_severities),
-        analyze_secrets(secrets_report, fail_on_severities),
-        analyze_yara(yara_report, fail_on_severities),
-        analyze_clamav(clamav_report, fail_on_severities),
-        analyze_zap(zap_report, fail_on_severities),
-        analyze_iac(iac_report, fail_on_severities),
-    ]
+    results = analyze_report_set(
+        {
+            "ruff": ruff_report,
+            "semgrep": semgrep_report,
+            "safety": safety_report,
+            "osv": osv_findings,
+            "trivy": trivy_report,
+            "secrets": secrets_report,
+            "yara": yara_report,
+            "clamav": clamav_report,
+            "zap": zap_report,
+            "iac": iac_report,
+        },
+        fail_on_severities,
+    )
 
     state_aliases = {
         "Ruff (SAST)": "Ruff",
@@ -1176,23 +1276,13 @@ def run_policy_engine(
         elif scanner_state == "failed":
             result["status"] = "ERROR"
 
-    failed_tools = [result["tool"] for result in results if result["status"] == "FAIL"]
-    missing_tools = [result["tool"] for result in results if result["status"] == "MISSING"]
-
-    final_status = "ALLOWED"
-    reason = "No blocking security issues found."
-
-    if operational_failures:
-        final_status = "ERROR"
-        reason = f"Operational scanner failure(s): {', '.join(operational_failures)}"
-    elif failed_tools or missing_tools:
-        final_status = "BLOCKED"
-        reasons = []
-        if failed_tools:
-            reasons.append(f"Blocking security issues found by: {', '.join(failed_tools)}")
-        if missing_tools:
-            reasons.append(f"Required scan reports missing for: {', '.join(missing_tools)}")
-        reason = " | ".join(reasons)
+    decision = evaluate_policy_results(
+        results,
+        operational_failures,
+        fail_on_errors=fail_on_scanner_errors,
+    )
+    final_status = decision["status"]
+    reason = decision["reason"]
 
     # Determine WAF status from environment (injected by main.py)
     if waf_enabled is None:

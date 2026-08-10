@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: huslenine999/aegis
-          ref: 1d60daa9efa001eb36716e5656db514f809b8b6d
+          ref: b2f00d3fd669799473ce601c7f4ca17dcf381c99
           path: trusted-aegis
           persist-credentials: false
 
@@ -46,7 +46,7 @@ jobs:
       - name: Install trusted Aegis revision
         run: |
           python -m pip install --upgrade pip
-          python -m pip install ./trusted-aegis
+          python -m pip install "./trusted-aegis[scanner]"
 
       - name: Run trusted Aegis approval scan
         shell: bash
@@ -55,8 +55,8 @@ jobs:
           mkdir -p aegis-reports
           cp trusted-aegis/aegis.yml target/.aegis-trusted.yml
           set +e
-          aegis scan target/app \
-            --fast \
+          aegis scan target \
+            --no-docker \
             --strict \
             --timeout 120 \
             --output aegis-reports \

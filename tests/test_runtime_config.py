@@ -385,6 +385,22 @@ def test_production_database_does_not_seed_legacy_api_keys(tmp_path, monkeypatch
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
 
 
+def test_development_demo_users_receive_generated_api_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "development.db")
+    monkeypatch.setattr(database, "USING_POSTGRES", False)
+    monkeypatch.setenv("AEGIS_ENV", "development")
+
+    database.initialize_database(reset=True)
+
+    with database.get_connection() as connection:
+        keys = [row[0] for row in connection.execute("SELECT api_key FROM users")]
+
+    assert len(keys) == 3
+    assert len(set(keys)) == 3
+    assert all(len(key) >= 32 for key in keys)
+    assert not {"ADMIN-API-KEY-12345", "DEV-API-KEY-67890", "GUEST-API-KEY-00000"} & set(keys)
+
+
 def test_completed_job_metadata_is_bounded_and_expires(monkeypatch):
     class RecordingRedis:
         def __init__(self):

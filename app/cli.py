@@ -29,6 +29,7 @@ from .iac_scanner import empty_iac_report, run_iac_scan
 from .scan_status import ToolStatusTracker
 from .scan_engine import CliEventSink, ScanEvent, ScanRunner
 from .cli_output import print_ascii_report, print_timing_summary
+from .version import get_package_version
 from . import cli_stack
 from .evidence import canonical_json, sign_manifest, verify_manifest
 from .sandbox import (
@@ -489,20 +490,6 @@ def timed_step(timings: list[dict], name: str, status: str = "completed"):
         yield
     finally:
         record_timing(timings, name, start, status)
-
-
-def get_package_version() -> str:
-    package_path = PROJECT_ROOT / "package.json"
-    if package_path.exists():
-        try:
-            return json.loads(package_path.read_text()).get("version", "unknown")
-        except json.JSONDecodeError:
-            return "unknown"
-    try:
-        return importlib.metadata.version("aegis-security-console")
-    except importlib.metadata.PackageNotFoundError:
-        pass
-    return "unknown"
 
 
 def set_fail_on_env(severities: str):
@@ -1102,6 +1089,7 @@ def execute_scan(
             reporter_callback=capture_policy_summary,
             operational_failures=pre_policy_failures if strict else None,
             tool_states=tool_statuses.states(),
+            fail_on_scanner_errors=strict,
         )
     record_timing(timings, "Total", total_start)
     mark_tool("Policy Engine", "completed", return_code=policy_exit_code)

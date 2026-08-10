@@ -20,6 +20,22 @@ def test_demo_lab_disabled_by_default():
     assert response.status_code == 404
 
 
+def test_legacy_demo_operational_routes_are_disabled_with_the_lab(monkeypatch):
+    monkeypatch.setattr("app.rate_limit.time.time", lambda: 1.0)
+    app_main.DEMO_LAB_ENABLED = False
+    try:
+        client = TestClient(app_main.app)
+
+        assert client.post("/run-scan", json={"target": "secure"}).status_code == 404
+        assert client.get("/get-scan-results").status_code == 404
+        assert client.get("/stream-telemetry").status_code == 404
+        assert client.get("/report").status_code == 404
+        assert client.get("/download-sbom").status_code == 404
+        assert client.get("/download-report-bundle").status_code == 404
+    finally:
+        app_main.DEMO_LAB_ENABLED = True
+
+
 def test_demo_lab_is_namespaced_away_from_application_routes(client):
     assert client.get("/user?name=guest").status_code == 404
     assert client.get("/demo-lab/user?name=guest").status_code == 200
@@ -33,7 +49,7 @@ def test_waf_blocking(client):
     """Enable WAF and ensure it blocks malicious patterns."""
     # Enable WAF
     client.post('/toggle-waf')
-    
+
     # Test SQLi blocking
     response = client.get('/demo-lab/user?name=admin\' OR \'1\'=\'1')
     assert response.status_code == 403
@@ -53,6 +69,17 @@ def test_waf_blocking(client):
 
     # Disable WAF for other tests
     client.post('/toggle-waf')
+
+
+def test_demo_waf_does_not_filter_product_routes(client):
+    client.post("/toggle-waf")
+    try:
+        response = client.get("/projects?filter=' OR '")
+        assert response.status_code != 403
+        assert b"Blocked by Aegis WAF" not in response.content
+    finally:
+        if app_main.WAF_ENABLED:
+            client.post("/toggle-waf")
 
 def test_waf_toggle(client):
     """Test the WAF toggle endpoint."""
@@ -85,6 +112,21 @@ def test_invalid_waf_rule_regex_is_rejected(client):
     response = client.post("/save-waf-rules", json={"rules": [{"pattern": "(", "description": "broken"}]})
     assert response.status_code == 400
     assert "Invalid WAF rule regex" in response.json()["detail"]
+
+
+def test_waf_persistence_failure_does_not_leak_internal_details(client, monkeypatch):
+    def fail_to_save(_rules):
+        raise RuntimeError("database-password-should-stay-private")
+
+    monkeypatch.setattr(app_main, "save_waf_rules_to_db", fail_to_save)
+
+    response = client.post(
+        "/save-waf-rules",
+        json={"rules": [{"pattern": "safe-pattern", "description": "test"}]},
+    )
+
+    assert response.status_code == 500
+    assert "database-password-should-stay-private" not in response.text
 
 def test_waf_custom_rules(client):
     """Test custom WAF rules retrieval, saving, and blocking."""

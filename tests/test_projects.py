@@ -373,6 +373,12 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
         "DAST",
         "Trivy",
     }
+    assert failed["result"]["is_blocked"] is True
+    assert set(failed["result"]["blocked_by"]) >= {
+        "Docker Sandbox",
+        "DAST",
+        "Trivy",
+    }
 
 
 def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):

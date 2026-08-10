@@ -5,6 +5,7 @@ from policy_engine import (
     analyze_ruff,
     analyze_safety,
     analyze_trivy,
+    evaluate_policy_results,
     generate_reports,
     run_policy_engine,
 )
@@ -142,6 +143,46 @@ def test_policy_engine_reports_operational_error(tmp_path):
     assert exit_code == 2
     assert "DEPLOYMENT ERROR" in markdown_report.read_text()
     assert "Operational scanner failure(s): Semgrep" in markdown_report.read_text()
+
+
+def test_policy_decision_treats_scanner_error_as_operational_failure():
+    decision = evaluate_policy_results([
+        {
+            "tool": "IaC",
+            "status": "ERROR",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "examples": [],
+        }
+    ])
+
+    assert decision["status"] == "ERROR"
+    assert decision["error_tools"] == ["IaC"]
+    assert "IaC" in decision["reason"]
+
+
+def test_failed_iac_report_forces_policy_engine_error(tmp_path):
+    reports = {
+        "ruff-report.json": [],
+        "safety-report.json": [],
+        "trivy-report.json": {"Results": []},
+        "secrets-report.json": {"results": {}},
+        "yara-report.json": [],
+        "semgrep-report.json": {"results": []},
+        "clamav-report.json": [],
+        "zap-report.json": [],
+        "osv-report.json": [],
+        "iac-report.json": {"status": "failed", "findings": []},
+    }
+    for filename, payload in reports.items():
+        (tmp_path / filename).write_text(json.dumps(payload))
+
+    markdown_report = tmp_path / "report.md"
+    exit_code = run_policy_engine(tmp_path, md_path=markdown_report)
+
+    assert exit_code == 2
+    assert "DEPLOYMENT ERROR" in markdown_report.read_text()
+    assert "IaC" in markdown_report.read_text()
 
 
 def test_html_report_escapes_untrusted_finding_content(tmp_path):

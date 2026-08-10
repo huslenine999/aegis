@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import json
+import logging
 import shutil
 import socket
 import subprocess
@@ -42,6 +43,7 @@ from .artifact_storage import publish_artifacts, run_directory
 from .github_integration import complete_check_run, github_installation_token, github_token
 from .notifications import queue_project_notification
 from .observability import record_scan_queue_age, record_worker_failure
+from .reporting import load_json_report
 from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     create_sandbox_network, run_sandbox_container, wait_for_container,
@@ -72,6 +74,7 @@ RECORDED_ARTIFACT_NAMES = {
     "sandbox-status.json",
     "scan-manifest.json",
 }
+logger = logging.getLogger("aegis.worker")
 
 
 def _sha256_file(path: Path) -> str:
@@ -194,7 +197,8 @@ def load_waf_rules_from_db():
                 "enabled": bool(row[2])
             })
         return rules
-    except Exception:
+    except Exception as exc:
+        logger.warning("Unable to load WAF rules for worker scan: %s", exc)
         return []
     finally:
         conn.close()
@@ -662,14 +666,6 @@ def async_scan_task(
     def write_json(path: Path, value) -> None:
         path.write_text(json.dumps(value, indent=2))
 
-    def load_json_safe(path: Path):
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-
     try:
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
@@ -782,7 +778,7 @@ def async_scan_task(
                         timeout=120,
                         env=safety_environment,
                     )
-                    safety_report = load_json_safe(report_dir / "safety-report.json")
+                    safety_report = load_json_report(report_dir / "safety-report.json")
                     if isinstance(safety_report, (dict, list)):
                         mark_tool("Safety", "completed", return_code=completed.returncode)
                         publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
@@ -950,11 +946,10 @@ def async_scan_task(
             mark_tool("Docker Sandbox", "skipped", detail="scan preset")
 
         sandbox_status_file = report_dir / "sandbox-status.json"
-        try:
-            with open(sandbox_status_file, "w") as sf:
-                json.dump({"status": "active" if sandbox_active else "simulated_fallback"}, sf)
-        except Exception:
-            pass
+        write_json(
+            sandbox_status_file,
+            {"status": "active" if sandbox_active else "simulated_fallback"},
+        )
 
         # 2. State: RUNNING -> ANALYZING
         runner.transition("analyzing", 30)
@@ -968,7 +963,7 @@ def async_scan_task(
             ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
             return_code = execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
-            ruff_report = load_json_safe(ruff_report_path)
+            ruff_report = load_json_report(ruff_report_path)
             if return_code in {0, 1} and isinstance(ruff_report, list):
                 mark_tool("Ruff", "completed", return_code=return_code)
             else:
@@ -1005,7 +1000,7 @@ def async_scan_task(
                     "SAST:Semgrep",
                     env=semgrep_environment,
                 )
-                semgrep_report = load_json_safe(semgrep_report_path)
+                semgrep_report = load_json_report(semgrep_report_path)
                 if return_code == 0 and isinstance(semgrep_report, dict):
                     mark_tool("Semgrep", "completed", return_code=return_code)
                 else:
@@ -1044,7 +1039,7 @@ def async_scan_task(
                         timeout=120,
                         env=scanner_subprocess_environment(),
                     )
-                secrets_report = load_json_safe(secrets_report_path)
+                secrets_report = load_json_report(secrets_report_path)
                 if completed.returncode == 0 and isinstance(secrets_report, dict):
                     mark_tool("Secrets", "completed", return_code=completed.returncode)
                     publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
@@ -1118,7 +1113,7 @@ def async_scan_task(
             publish_job_event(job_id, "log", {"text": "[Trivy] Auditing built image layers for CVEs...", "color": "var(--text-muted)"})
             try:
                 run_trivy_scan(sandbox_image, report_dir / "trivy-report.json")
-                trivy_report = load_json_safe(report_dir / "trivy-report.json")
+                trivy_report = load_json_report(report_dir / "trivy-report.json")
                 if not isinstance(trivy_report, dict):
                     raise RuntimeError("Trivy did not produce a valid JSON report")
                 mark_tool("Trivy", "completed")
@@ -1202,36 +1197,27 @@ def async_scan_task(
             finally:
                 sandbox_started = False
                 sandbox_cleanup_required = False
-        if sandbox_temp_dir and sandbox_temp_dir.exists():
-            try:
-                shutil.rmtree(sandbox_temp_dir)
-            except Exception:
-                pass
-
-        if is_custom_scan and target_path and Path(target_path).parent.exists():
-            try:
-                shutil.rmtree(Path(target_path).parent)
-            except Exception:
-                pass
-
         raw_results = {
-            "ruff": load_json_safe(report_dir / "ruff-report.json"),
-            "semgrep": load_json_safe(report_dir / "semgrep-report.json"),
-            "safety": load_json_safe(report_dir / "safety-report.json"),
-            "osv": load_json_safe(report_dir / "osv-report.json"),
-            "trivy": load_json_safe(report_dir / "trivy-report.json"),
-            "secrets": load_json_safe(report_dir / "secrets-report.json"),
-            "yara": load_json_safe(report_dir / "yara-report.json"),
-            "clamav": load_json_safe(report_dir / "clamav-report.json"),
-            "zap": load_json_safe(report_dir / "zap-report.json"),
-            "iac": load_json_safe(report_dir / "iac-report.json"),
+            "ruff": load_json_report(report_dir / "ruff-report.json"),
+            "semgrep": load_json_report(report_dir / "semgrep-report.json"),
+            "safety": load_json_report(report_dir / "safety-report.json"),
+            "osv": load_json_report(report_dir / "osv-report.json"),
+            "trivy": load_json_report(report_dir / "trivy-report.json"),
+            "secrets": load_json_report(report_dir / "secrets-report.json"),
+            "yara": load_json_report(report_dir / "yara-report.json"),
+            "clamav": load_json_report(report_dir / "clamav-report.json"),
+            "zap": load_json_report(report_dir / "zap-report.json"),
+            "iac": load_json_report(report_dir / "iac-report.json"),
         }
         final_status = policy_summary.get("status", "ERROR")
-        blocking_tools = [
-            result["tool"]
-            for result in policy_summary.get("results", [])
-            if result.get("status") == "FAIL"
-        ]
+        blocking_tools = list(dict.fromkeys([
+            *operational_failures,
+            *[
+                result["tool"]
+                for result in policy_summary.get("results", [])
+                if result.get("status") in {"FAIL", "MISSING", "ERROR"}
+            ],
+        ]))
         result_payload = {
             **raw_results,
             "policy": policy_summary,
@@ -1240,7 +1226,7 @@ def async_scan_task(
             "exploitability_score": policy_summary.get("exploitability_score", 0.0),
             "waf_enabled": waf_enabled,
             "has_run": True,
-            "is_blocked": final_status == "BLOCKED",
+            "is_blocked": final_status != "ALLOWED",
             "blocked_by": blocking_tools,
             "sandbox_status": "active" if sandbox_active else "unavailable",
             "artifact_base": f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts" if project_id and scan_run_id else None,
@@ -1393,3 +1379,8 @@ def async_scan_task(
             shutil.rmtree(cleanup_temp_dir, ignore_errors=True)
         if external_project_dir:
             shutil.rmtree(external_project_dir, ignore_errors=True)
+        if custom_file_path:
+            upload_root = (SCANS_DIR / "uploads").resolve()
+            upload_path = Path(custom_file_path).resolve()
+            if upload_path.parent.parent == upload_root:
+                shutil.rmtree(upload_path.parent, ignore_errors=True)

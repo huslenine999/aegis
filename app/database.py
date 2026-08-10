@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 import threading
 import json
@@ -115,6 +116,49 @@ class PostgresCursor:
         return self._cursor.rowcount
 
 
+class SQLiteConnection:
+    """SQLite DB-API adapter with a context manager that always closes.
+
+    ``sqlite3.Connection`` commits or rolls back on context exit but leaves the
+    underlying file descriptor open.  Application callers consistently use
+    ``with get_connection()``, so this adapter gives SQLite the same lifecycle
+    guarantees as the PostgreSQL adapter.
+    """
+
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+
+    def execute(self, statement: str, parameters: tuple[Any, ...] = ()):
+        return self._connection.execute(statement, parameters)
+
+    def executemany(self, statement: str, parameters):
+        return self._connection.executemany(statement, parameters)
+
+    def cursor(self):
+        return self._connection.cursor()
+
+    def commit(self):
+        return self._connection.commit()
+
+    def rollback(self):
+        return self._connection.rollback()
+
+    def close(self):
+        return self._connection.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            if exc_type:
+                self.rollback()
+            else:
+                self.commit()
+        finally:
+            self.close()
+
+
 def get_connection():
     if USING_POSTGRES:
         try:
@@ -122,16 +166,23 @@ def get_connection():
         except ImportError as exc:
             raise RuntimeError("PostgreSQL requires psycopg. Install production dependencies.") from exc
         return PostgresConnection(psycopg.connect(DATABASE_URL))
-    connection = sqlite3.connect(DB_PATH)
+    connection = SQLiteConnection(sqlite3.connect(DB_PATH))
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
 
-DEFAULT_USERS = [
-    ("admin", "administrator", "ADMIN-API-KEY-12345"),
-    ("devuser", "developer", "DEV-API-KEY-67890"),
-    ("guest", "guest", "GUEST-API-KEY-00000"),
-]
+DEMO_USER_ROLES = (
+    ("admin", "administrator"),
+    ("devuser", "developer"),
+    ("guest", "guest"),
+)
+
+
+def _generated_demo_users() -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (username, role, secrets.token_urlsafe(32))
+        for username, role in DEMO_USER_ROLES
+    )
 
 DEFAULT_WAF_RULES = [
     ("' OR '", "SQL Injection (OR operator bypass)", 1),
@@ -924,7 +975,7 @@ def _seed_default_rows(cursor, *, reset: bool = False) -> None:
     if seed_demo_users and cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         cursor.executemany(
             "INSERT INTO users (username, role, api_key) VALUES (?, ?, ?)",
-            DEFAULT_USERS,
+            _generated_demo_users(),
         )
 
     if reset:

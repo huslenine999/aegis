@@ -5,6 +5,7 @@ import sys
 import time
 import random
 import json
+import logging
 import asyncio
 import hmac
 import hashlib
@@ -123,7 +124,7 @@ from .policies import (
 from .oidc import begin_oidc, complete_oidc, oidc_enabled
 from .notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
 from .audit import list_audit_events, record_audit, verify_audit_chain
-from policy_engine import get_ruff_severity
+from policy_engine import analyze_report_set, evaluate_policy_results, get_ruff_severity
 from .sandbox import (
     get_active_sandbox_container,
     get_sandbox_logs,
@@ -135,13 +136,16 @@ from .reporting import (
     build_report_bundle_from_artifacts,
     calculate_exploitability_score,
     generate_fallback_tree as generate_project_fallback_tree,
+    load_json_report,
     load_dependency_tree,
 )
 from .artifact_storage import S3ArtifactStore, project_directory, run_directory
 from .health_routes import router as health_router
 from .scan_engine import ScanJobPayload
+from .version import get_package_version
 
 router = APIRouter()
+logger = logging.getLogger("aegis.main")
 DEMO_LAB_ENABLED = os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower() in {"1", "true", "yes", "on"}
 ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
@@ -199,9 +203,9 @@ def require_access(minimum_role: str):
     return dependency
 
 
-def _request_is_loopback(request: Request) -> bool:
+def _connection_is_loopback(connection: Request | WebSocket) -> bool:
     """Return whether the direct client for a local-only surface is loopback."""
-    client = request.client
+    client = connection.client
     host = client.host.strip().lower() if client and client.host else ""
     # Starlette's TestClient uses a synthetic peer name. Treat it as local only
     # outside production; real production requests must carry an IP address.
@@ -219,13 +223,19 @@ def require_demo_lab_access(
     request: Request,
     principal=Depends(require_access("admin")),
 ):
+    require_demo_boundary(request)
+    return principal
+
+
+def require_demo_boundary(request: Request) -> None:
+    """Keep every legacy threat-lab surface local and explicitly enabled."""
+
     require_demo_lab_enabled()
-    if not _request_is_loopback(request):
+    if not _connection_is_loopback(request):
         raise HTTPException(
             status_code=403,
             detail="The Aegis demo lab is available only from a loopback client.",
         )
-    return principal
 
 
 def require_recent_access(minimum_role: str):
@@ -279,7 +289,8 @@ def load_waf_rules_from_db():
                 "enabled": bool(row[2])
             })
         return rules
-    except Exception:
+    except Exception as exc:
+        logger.warning("Unable to load WAF rules from the database: %s", exc)
         return [
             {"pattern": "' OR '", "description": "SQL Injection (OR operator bypass)", "enabled": True},
             {"pattern": "1=1", "description": "SQL Injection (tautology bypass)", "enabled": True},
@@ -996,7 +1007,13 @@ def project_scan_artifacts(
             continue
         try:
             integrity = _artifact_integrity(metadata, path)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Artifact integrity verification failed for run %s artifact %s: %s",
+                run_id,
+                name,
+                exc,
+            )
             integrity = False
         if not integrity:
             record_artifact_integrity_failure()
@@ -1539,7 +1556,8 @@ def github_callback(request: Request, code: str = "", state: str = ""):
         return RedirectResponse("/projects?github=denied", status_code=303)
     try:
         complete_oauth(code, state, _github_callback_url(request))
-    except Exception:
+    except Exception as exc:
+        logger.warning("GitHub OAuth callback failed: %s", exc)
         return RedirectResponse("/projects?github=error", status_code=303)
     return RedirectResponse("/projects?github=connected", status_code=303)
 
@@ -1831,12 +1849,14 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
     try:
         with get_connection() as connection:
             connection.execute("SELECT 1").fetchone()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Database diagnostics failed: %s", exc)
         database_status = "unavailable"
     redis_status = "connected"
     try:
         redis_client.ping()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Redis diagnostics failed: %s", exc)
         redis_status = "unavailable"
     worker_count = 0
     if REDIS_AVAILABLE:
@@ -1844,7 +1864,8 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
             from rq import Worker
 
             worker_count = Worker.count(connection=redis_client)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Worker diagnostics failed: %s", exc)
             worker_count = 0
     return {
         "database": database_status,
@@ -1878,14 +1899,21 @@ def admin_request_log(limit: int = 100, principal=Depends(require_access("admin"
     return {"requests": recent_requests(limit)}
 
 
-@router.get("/report", response_class=HTMLResponse, dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/report",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def get_report():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
         return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
     return HTMLResponse(report_path.read_text())
 
-@router.get("/download-sbom", dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/download-sbom",
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def download_sbom():
     sbom_path = SCANS_DIR / "sbom.json"
     if not sbom_path.exists():
@@ -1893,8 +1921,11 @@ def download_sbom():
         from .dependencies import discover_dependency_manifests
         try:
             generate_cyclonedx_sbom(discover_dependency_manifests(PROJECT_ROOT), sbom_path)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"SBOM generation failed: {e}")
+        except Exception:
+            logger.exception("SBOM generation failed")
+            raise HTTPException(
+                status_code=500, detail="SBOM generation failed. Check server logs."
+            )
             
     return FileResponse(
         str(sbom_path),
@@ -1903,7 +1934,10 @@ def download_sbom():
     )
 
 
-@router.get("/download-report-bundle", dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/download-report-bundle",
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def download_report_bundle():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
@@ -1918,20 +1952,29 @@ def download_report_bundle():
         },
     )
 
-@router.post("/toggle-waf", dependencies=[Depends(require_recent_access("admin"))])
+@router.post(
+    "/toggle-waf",
+    dependencies=[Depends(require_demo_boundary), Depends(require_recent_access("admin"))],
+)
 def toggle_waf():
     global WAF_ENABLED
     WAF_ENABLED = not WAF_ENABLED
     set_application_state("waf_enabled", WAF_ENABLED)
     return {"status": "success", "waf_enabled": WAF_ENABLED}
 
-@router.get("/get-waf-rules", dependencies=[Depends(require_role("viewer"))])
+@router.get(
+    "/get-waf-rules",
+    dependencies=[Depends(require_demo_boundary), Depends(require_role("viewer"))],
+)
 def get_waf_rules():
     global WAF_ENABLED
     rules = load_waf_rules_from_db()
     return {"status": "success", "rules": rules, "waf_enabled": WAF_ENABLED}
 
-@router.post("/save-waf-rules", dependencies=[Depends(require_recent_access("admin"))])
+@router.post(
+    "/save-waf-rules",
+    dependencies=[Depends(require_demo_boundary), Depends(require_recent_access("admin"))],
+)
 async def save_waf_rules(request: Request):
     try:
         data = await request.json()
@@ -1964,76 +2007,51 @@ async def save_waf_rules(request: Request):
         return {"status": "success", "message": "WAF rules updated successfully."}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("Unable to persist WAF rules")
+        raise HTTPException(
+            status_code=500, detail="Unable to persist WAF rules. Check server logs."
+        )
 
-@router.get("/get-scan-results", dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/get-scan-results",
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def get_scan_results():
     global WAF_ENABLED
-    def load_json_safe(path):
-        if path.exists():
-            try:
-                return json.loads(path.read_text())
-            except Exception:
-                pass
-        return None
-    
-    clamav = load_json_safe(SCANS_DIR / "clamav-report.json")
-    zap = load_json_safe(SCANS_DIR / "zap-report.json")
-    osv = load_json_safe(SCANS_DIR / "osv-report.json")
-    ruff = load_json_safe(SCANS_DIR / "ruff-report.json")
-    semgrep = load_json_safe(SCANS_DIR / "semgrep-report.json")
-    safety = load_json_safe(SCANS_DIR / "safety-report.json")
-    trivy = load_json_safe(SCANS_DIR / "trivy-report.json")
-    secrets = load_json_safe(SCANS_DIR / "secrets-report.json")
-    yara = load_json_safe(SCANS_DIR / "yara-report.json")
-    iac = load_json_safe(SCANS_DIR / "iac-report.json")
+    clamav = load_json_report(SCANS_DIR / "clamav-report.json")
+    zap = load_json_report(SCANS_DIR / "zap-report.json")
+    osv = load_json_report(SCANS_DIR / "osv-report.json")
+    ruff = load_json_report(SCANS_DIR / "ruff-report.json")
+    semgrep = load_json_report(SCANS_DIR / "semgrep-report.json")
+    safety = load_json_report(SCANS_DIR / "safety-report.json")
+    trivy = load_json_report(SCANS_DIR / "trivy-report.json")
+    secrets = load_json_report(SCANS_DIR / "secrets-report.json")
+    yara = load_json_report(SCANS_DIR / "yara-report.json")
+    iac = load_json_report(SCANS_DIR / "iac-report.json")
     
     score = calculate_exploitability_score(SCANS_DIR, WAF_ENABLED)
     
-    is_blocked = False
-    reasons = []
-    
-    if clamav and len(clamav) > 0:
-        is_blocked = True
-        reasons.append("ClamAV")
-    if zap and len([z for z in zap if z.get("status") == "EXPOSED"]) > 0:
-        is_blocked = True
-        reasons.append("Aegis DAST Probe")
-        
-    if ruff and isinstance(ruff, list):
-        blocking_ruff = len([r for r in ruff if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
-        if blocking_ruff > 0:
-            is_blocked = True
-            reasons.append("Ruff (SAST)")
-            
-    if semgrep and isinstance(semgrep, dict):
-        blocking_semgrep = len([r for r in semgrep.get("results", []) if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}])
-        if blocking_semgrep > 0:
-            is_blocked = True
-            reasons.append("Semgrep")
-            
-    if osv and isinstance(osv, list):
-        blocking_osv = len([f for f in osv if (f.get("cvss") or 0.0) >= 4.0])
-        if blocking_osv > 0:
-            is_blocked = True
-            reasons.append("OSV Dependency Audit")
-
-    if iac and isinstance(iac, dict):
-        if iac.get("status") == "failed":
-            is_blocked = True
-            reasons.append("IaC scanner operational failure")
-        iac_findings = iac.get("findings", []) or []
-        iac_suppressions = iac.get("unmanaged_suppressions", []) or []
-        if any(
-            isinstance(item, dict)
-            and str(item.get("severity") or "MEDIUM").upper() in {"MEDIUM", "HIGH", "CRITICAL"}
-            for item in [*iac_findings, *iac_suppressions]
-        ):
-            is_blocked = True
-            reasons.append("IaC")
-            
     has_run = any(report is not None for report in [ruff, semgrep, osv, safety, trivy, secrets, yara, clamav, zap, iac])
+    results = analyze_report_set({
+        "ruff": ruff,
+        "semgrep": semgrep,
+        "safety": safety,
+        "osv": osv,
+        "trivy": trivy,
+        "secrets": secrets,
+        "yara": yara,
+        "clamav": clamav,
+        "zap": zap,
+        "iac": iac,
+    })
+    decision = evaluate_policy_results(results)
+    is_blocked = has_run and decision["status"] != "ALLOWED"
+    reasons = [
+        *decision["error_tools"],
+        *decision["failed_tools"],
+        *decision["missing_tools"],
+    ]
 
     latest_report = SCANS_DIR / "report.html"
     latest_scan_time = None
@@ -2042,11 +2060,9 @@ def get_scan_results():
 
     sandbox_status_file = SCANS_DIR / "sandbox-status.json"
     sandbox_status = "simulated_fallback"
-    if sandbox_status_file.exists():
-        try:
-            sandbox_status = json.loads(sandbox_status_file.read_text()).get("status", "simulated_fallback")
-        except Exception:
-            pass
+    sandbox_report = load_json_report(sandbox_status_file)
+    if isinstance(sandbox_report, dict):
+        sandbox_status = sandbox_report.get("status", "simulated_fallback")
 
     return {
         "clamav": clamav,
@@ -2064,6 +2080,9 @@ def get_scan_results():
         "has_run": has_run,
         "is_blocked": is_blocked,
         "blocked_by": reasons,
+        "decision": decision["status"],
+        "decision_reason": decision["reason"],
+        "error_tools": decision["error_tools"],
         "sandbox_status": sandbox_status,
         "latest_scan_time": latest_scan_time,
         "report_url": "/report" if latest_report.exists() else None,
@@ -2072,48 +2091,39 @@ def get_scan_results():
         "bundle_url": "/download-report-bundle" if latest_report.exists() else None
     }
 
-@router.get("/get-dependency-graph", dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/get-dependency-graph",
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def get_dependency_graph():
     vulnerable_packages = set()
-    safety_path = SCANS_DIR / "safety-report.json"
-    if safety_path.exists():
-        try:
-            report = json.loads(safety_path.read_text())
-            if isinstance(report, dict) and "vulnerabilities" in report:
-                for v in report["vulnerabilities"]:
-                    pkg = v.get("package_name") or v.get("package")
-                    if pkg:
-                        vulnerable_packages.add(pkg.lower())
-            elif isinstance(report, list):
-                for v in report:
-                    pkg = v.get("package_name") or v.get("package")
-                    if pkg:
-                        vulnerable_packages.add(pkg.lower())
-            elif isinstance(report, dict) and "affected_packages" in report:
-                for pkg in report["affected_packages"].keys():
-                    vulnerable_packages.add(pkg.lower())
-        except Exception:
-            pass
+    report = load_json_report(SCANS_DIR / "safety-report.json")
+    if isinstance(report, dict) and "vulnerabilities" in report:
+        for vulnerability in report["vulnerabilities"]:
+            package = vulnerability.get("package_name") or vulnerability.get("package")
+            if package:
+                vulnerable_packages.add(package.lower())
+    elif isinstance(report, list):
+        for vulnerability in report:
+            package = vulnerability.get("package_name") or vulnerability.get("package")
+            if package:
+                vulnerable_packages.add(package.lower())
+    elif isinstance(report, dict) and "affected_packages" in report:
+        vulnerable_packages.update(
+            package.lower() for package in report["affected_packages"]
+        )
 
     osv_vulnerabilities: dict[str, list[dict]] = {}
-    osv_path = SCANS_DIR / "osv-report.json"
-    if osv_path.exists():
-        try:
-            osv_findings = json.loads(osv_path.read_text())
-            if isinstance(osv_findings, list):
-                for f in osv_findings:
-                    pkg = f.get("package")
-                    if pkg:
-                        pkg_lower = pkg.lower()
-                        if pkg_lower not in osv_vulnerabilities:
-                            osv_vulnerabilities[pkg_lower] = []
-                        osv_vulnerabilities[pkg_lower].append({
-                            "id": f.get("id"),
-                            "cvss": f.get("cvss"),
-                            "summary": f.get("summary")
-                        })
-        except Exception:
-            pass
+    osv_findings = load_json_report(SCANS_DIR / "osv-report.json")
+    if isinstance(osv_findings, list):
+        for finding in osv_findings:
+            package = finding.get("package")
+            if package:
+                osv_vulnerabilities.setdefault(package.lower(), []).append({
+                    "id": finding.get("id"),
+                    "cvss": finding.get("cvss"),
+                    "summary": finding.get("summary"),
+                })
 
     raw_tree = load_dependency_tree(PROJECT_ROOT)
 
@@ -2123,7 +2133,7 @@ def get_dependency_graph():
     nodes["aegis"] = {
         "id": "aegis",
         "name": "Aegis (Root)",
-        "installed_version": "1.0.0",
+        "installed_version": get_package_version(),
         "required_version": "N/A",
         "vulnerable": False,
         "isRoot": True,
@@ -2174,7 +2184,7 @@ def get_dependency_graph():
         "links": links
     }
 
-@router.post("/run-scan")
+@router.post("/run-scan", dependencies=[Depends(require_demo_boundary)])
 async def run_scan(request: Request, principal=Depends(require_access("operator"))):
     if os.environ.get("VERCEL"):
         raise HTTPException(status_code=400, detail="Security scans are not supported in the Vercel serverless environment.")
@@ -2281,6 +2291,12 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
 
 @router.websocket("/ws/scan/{job_id}")
 async def websocket_scan(websocket: WebSocket, job_id: str):
+    if not DEMO_LAB_ENABLED:
+        await websocket.close(code=4404, reason="Aegis demo lab is disabled")
+        return
+    if not _connection_is_loopback(websocket):
+        await websocket.close(code=4403, reason="Aegis demo lab is local-only")
+        return
     principal = websocket_principal(websocket, "viewer")
     if not principal:
         await websocket.close(code=4401, reason="Authentication required")
@@ -2321,8 +2337,8 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         try:
             log_data = json.loads(log_bytes.decode('utf-8'))
             await websocket.send_json({"type": "log", **log_data})
-        except Exception:
-            pass
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring malformed stored job log for %s: %s", job_id, exc)
             
     # 2. Get latest state
     job_key = f"job:{job_id}"
@@ -2451,11 +2467,12 @@ async def stream_telemetry_metrics_ws(websocket: WebSocket, job_id: str):
             await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             break
-        except Exception:
+        except Exception as exc:
+            logger.debug("Legacy telemetry sample failed: %s", exc)
             await asyncio.sleep(1.0)
 
 # Legacy /stream-telemetry SSE endpoint
-@router.get("/stream-telemetry")
+@router.get("/stream-telemetry", dependencies=[Depends(require_demo_boundary)])
 async def stream_telemetry(principal=Depends(require_access("admin"))):
     async def generate_stream():
         sent_logs = set()
@@ -2534,181 +2551,71 @@ async def stream_telemetry(principal=Depends(require_access("admin"))):
             
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
-@router.get("/export-dossier", dependencies=[Depends(require_access("admin"))])
+@router.get(
+    "/export-dossier",
+    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
+)
 def export_dossier():
-    def load_json(path):
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return None
+    reports = {
+        name: load_json_report(SCANS_DIR / filename)
+        for name, filename in {
+            "ruff": "ruff-report.json",
+            "semgrep": "semgrep-report.json",
+            "safety": "safety-report.json",
+            "osv": "osv-report.json",
+            "trivy": "trivy-report.json",
+            "secrets": "secrets-report.json",
+            "yara": "yara-report.json",
+            "clamav": "clamav-report.json",
+            "zap": "zap-report.json",
+            "iac": "iac-report.json",
+        }.items()
+    }
+    results = analyze_report_set(reports)
+    result_by_tool = {result["tool"]: result for result in results}
 
-    ruff_report = load_json(SCANS_DIR / "ruff-report.json")
-    safety_report = load_json(SCANS_DIR / "safety-report.json")
-    trivy_report = load_json(SCANS_DIR / "trivy-report.json")
-    secrets_report = load_json(SCANS_DIR / "secrets-report.json")
-    yara_report = load_json(SCANS_DIR / "yara-report.json")
-    semgrep_report = load_json(SCANS_DIR / "semgrep-report.json")
-    clamav_report = load_json(SCANS_DIR / "clamav-report.json")
-    zap_report = load_json(SCANS_DIR / "zap-report.json")
-    iac_report = load_json(SCANS_DIR / "iac-report.json")
+    def metrics(tool: str) -> tuple[str, int, int]:
+        result = result_by_tool[tool]
+        return result["status"], result["total_issues"], result["blocking_issues"]
 
-    # Ruff (SAST)
-    if not (SCANS_DIR / "ruff-report.json").exists():
-        ruff_status = "MISSING"
-        ruff_total = 0
-        ruff_blocking = 0
-    else:
-        ruff_results = ruff_report if isinstance(ruff_report, list) else []
-        ruff_total = len(ruff_results)
-        ruff_blocking = len([r for r in ruff_results if get_ruff_severity(r.get("code", "UNKNOWN")) in {"MEDIUM", "HIGH"}])
-        ruff_status = "FAIL" if ruff_blocking > 0 else "PASS"
+    ruff_report = reports["ruff"]
+    semgrep_report = reports["semgrep"]
+    safety_report = reports["safety"]
+    trivy_report = reports["trivy"]
+    secrets_report = reports["secrets"]
+    yara_report = reports["yara"]
+    clamav_report = reports["clamav"]
+    zap_report = reports["zap"]
+    iac_report = reports["iac"]
 
-    # Semgrep
-    if not (SCANS_DIR / "semgrep-report.json").exists():
-        semgrep_status = "MISSING"
-        semgrep_total = 0
-        semgrep_blocking = 0
-    else:
-        semgrep_results = semgrep_report.get("results", []) if semgrep_report else []
-        semgrep_total = len(semgrep_results)
-        semgrep_blocking = len([r for r in semgrep_results if r.get("extra", {}).get("severity", "").upper() in {"ERROR", "WARNING"}])
-        semgrep_status = "FAIL" if semgrep_blocking > 0 else "PASS"
+    ruff_status, ruff_total, ruff_blocking = metrics("Ruff (SAST)")
+    semgrep_status, semgrep_total, semgrep_blocking = metrics("Semgrep")
+    safety_status, safety_total, safety_blocking = metrics("Safety")
+    trivy_status, trivy_total, trivy_blocking = metrics("Trivy")
+    secrets_status, secrets_total, secrets_blocking = metrics("Secrets Scanner")
+    yara_status, yara_total, yara_blocking = metrics("YARA Scanner")
+    clamav_status, clamav_total, clamav_blocking = metrics("ClamAV")
+    zap_status, zap_total, zap_blocking = metrics("Aegis DAST Probe")
+    iac_status, iac_total, iac_blocking = metrics("IaC")
 
-    # Safety
-    if not (SCANS_DIR / "safety-report.json").exists():
-        safety_status = "MISSING"
-        safety_total = 0
-        safety_blocking = 0
-    else:
-        safety_vulns = []
-        if isinstance(safety_report, dict):
-            safety_vulns = safety_report.get("vulnerabilities", []) or safety_report.get("results", [])
-        elif isinstance(safety_report, list):
-            safety_vulns = safety_report
-        safety_total = len(safety_vulns)
-        safety_blocking = safety_total
-        safety_status = "FAIL" if safety_blocking > 0 else "PASS"
+    iac_findings_list = (
+        [item for item in iac_report.get("findings", []) if isinstance(item, dict)]
+        if isinstance(iac_report, dict)
+        else []
+    )
+    iac_suppressions_list = (
+        [
+            item
+            for item in iac_report.get("unmanaged_suppressions", [])
+            if isinstance(item, dict)
+        ]
+        if isinstance(iac_report, dict)
+        else []
+    )
 
-    # Trivy
-    if not (SCANS_DIR / "trivy-report.json").exists():
-        trivy_status = "MISSING"
-        trivy_total = 0
-        trivy_blocking = 0
-    else:
-        trivy_vulns = []
-        for result in (trivy_report.get("Results", []) or []):
-            for vulnerability in result.get("Vulnerabilities", []) or []:
-                trivy_vulns.append(vulnerability)
-        trivy_total = len(trivy_vulns)
-        trivy_blocking = len([v for v in trivy_vulns if v.get("Severity", "").upper() in {"MEDIUM", "HIGH", "CRITICAL"}])
-        trivy_status = "FAIL" if trivy_blocking > 0 else "PASS"
-
-    # Secrets
-    if not (SCANS_DIR / "secrets-report.json").exists():
-        secrets_status = "MISSING"  # pragma: allowlist secret
-        secrets_total = 0
-        secrets_blocking = 0
-    else:
-        secrets_results = secrets_report.get("results", {}) or {} if secrets_report else {}
-        secrets_findings_list = []
-        for filename, file_secrets in secrets_results.items():
-            for secret in file_secrets:
-                secrets_findings_list.append(secret)
-        secrets_total = len(secrets_findings_list)
-        secrets_blocking = secrets_total
-        secrets_status = "FAIL" if secrets_blocking > 0 else "PASS"  # pragma: allowlist secret
-
-    # YARA
-    if not (SCANS_DIR / "yara-report.json").exists():
-        yara_status = "MISSING"
-        yara_total = 0
-        yara_blocking = 0
-    else:
-        yara_findings = yara_report if isinstance(yara_report, list) else []
-        yara_total = len(yara_findings)
-        yara_blocking = yara_total
-        yara_status = "FAIL" if yara_blocking > 0 else "PASS"
-
-    # ClamAV
-    if not (SCANS_DIR / "clamav-report.json").exists():
-        clamav_status = "MISSING"
-        clamav_total = 0
-        clamav_blocking = 0
-    else:
-        clamav_findings_list = clamav_report if isinstance(clamav_report, list) else []
-        clamav_total = len(clamav_findings_list)
-        clamav_blocking = clamav_total
-        clamav_status = "FAIL" if clamav_blocking > 0 else "PASS"
-
-    # Aegis DAST Probe
-    if not (SCANS_DIR / "zap-report.json").exists():
-        zap_status = "MISSING"
-        zap_total = 0
-        zap_blocking = 0
-    else:
-        zap_findings_list = zap_report if isinstance(zap_report, list) else []
-        zap_total = len(zap_findings_list)
-        zap_blocking = len([f for f in zap_findings_list if f.get("status") == "EXPOSED"])
-        zap_status = "FAIL" if zap_blocking > 0 else "PASS"
-
-    # Infrastructure-as-code (Checkov boundary report)
-    if not (SCANS_DIR / "iac-report.json").exists():
-        iac_status = "MISSING"
-        iac_total = 0
-        iac_blocking = 0
-        iac_findings_list: list[dict] = []
-        iac_suppressions_list: list[dict] = []
-    else:
-        iac_findings_list = iac_report.get("findings", []) if isinstance(iac_report, dict) else []
-        iac_suppressions_list = iac_report.get("unmanaged_suppressions", []) if isinstance(iac_report, dict) else []
-        iac_findings_list = [item for item in iac_findings_list if isinstance(item, dict)]
-        iac_suppressions_list = [item for item in iac_suppressions_list if isinstance(item, dict)]
-        iac_total = len(iac_findings_list) + len(iac_suppressions_list)
-        iac_blocking = sum(
-            1
-            for item in [*iac_findings_list, *iac_suppressions_list]
-            if str(item.get("severity") or "MEDIUM").upper() in {"MEDIUM", "HIGH", "CRITICAL"}
-        )
-        report_status = str(iac_report.get("status") or "completed").lower() if isinstance(iac_report, dict) else "failed"
-        if report_status == "failed":
-            iac_status = "ERROR"
-        elif report_status == "skipped":
-            iac_status = "SKIPPED"
-        else:
-            iac_status = "FAIL" if iac_blocking else "PASS"
-
-    # Decision
-    failed_tools = []
-    missing_tools = []
-    for tool, status in [
-        ("Ruff (SAST)", ruff_status),
-        ("Semgrep", semgrep_status),
-        ("Safety", safety_status),
-        ("Trivy", trivy_status),
-        ("Secrets Scanner", secrets_status),
-        ("YARA Scanner", yara_status),
-        ("ClamAV Antivirus", clamav_status),
-        ("Aegis DAST Probe", zap_status),
-        ("IaC", iac_status),
-    ]:
-        if status == "FAIL":
-            failed_tools.append(tool)
-        elif status == "MISSING":
-            missing_tools.append(tool)
-
-    if failed_tools or missing_tools:
-        gate_decision = "BLOCKED"
-        reasons = []
-        if failed_tools:
-            reasons.append(f"Blocking security issues found by: {', '.join(failed_tools)}")
-        if missing_tools:
-            reasons.append(f"Required scan reports missing for: {', '.join(missing_tools)}")
-        reason = " | ".join(reasons)
-    else:
-        gate_decision = "ALLOWED"
-        reason = "No blocking security issues found."
+    decision = evaluate_policy_results(results)
+    gate_decision = decision["status"]
+    reason = decision["reason"]
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 

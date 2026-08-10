@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 import app.main as app_main
@@ -153,3 +155,33 @@ def test_get_scan_results_endpoint(client):
     assert response.status_code == 200
     assert 'clamav' in response.json()
     assert 'zap' in response.json()
+
+
+def test_legacy_report_surfaces_fail_closed_on_iac_error(tmp_path, monkeypatch, client):
+    monkeypatch.setattr(app_main, "SCANS_DIR", tmp_path)
+    reports = {
+        "ruff-report.json": [],
+        "semgrep-report.json": {"results": []},
+        "safety-report.json": [],
+        "osv-report.json": [],
+        "trivy-report.json": {"Results": []},
+        "secrets-report.json": {"results": {}},
+        "yara-report.json": [],
+        "clamav-report.json": [],
+        "zap-report.json": [],
+        "iac-report.json": {"status": "failed", "findings": []},
+    }
+    for filename, payload in reports.items():
+        (tmp_path / filename).write_text(json.dumps(payload))
+    (tmp_path / "report.html").write_text("report")
+
+    result = client.get("/get-scan-results")
+    dossier = client.get("/export-dossier")
+
+    assert result.status_code == 200
+    assert result.json()["decision"] == "ERROR"
+    assert result.json()["is_blocked"] is True
+    assert result.json()["error_tools"] == ["IaC"]
+    assert dossier.status_code == 200
+    assert "GATE DECISION: ERROR" in dossier.text
+    assert "Operational scanner failure(s): IaC" in dossier.text

@@ -1,6 +1,6 @@
-PYTHON := $(if $(wildcard venv/bin/python),venv/bin/python,python3)
 UV ?= uv
-COVERAGE_MODULES := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.iac_scanner
+PYTHON := $(UV) run python
+SECURITY_BOUNDARY_COVERAGE := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.iac_scanner
 
 .PHONY: verify verify-fast lock lock-check lint types test e2e
 
@@ -13,7 +13,6 @@ verify-fast: lint test
 lock:
 	$(UV) lock
 	$(UV) export --locked --no-dev --extra scanner --format requirements-txt --no-emit-project --output-file requirements.txt
-	$(UV) export --locked --all-extras --format requirements-txt --no-emit-project --output-file requirements-dev.txt
 
 lock-check:
 	$(UV) lock --check
@@ -25,7 +24,7 @@ types:
 	$(PYTHON) -m mypy
 
 test:
-	$(PYTHON) -m pytest -q --timeout=60 --timeout-method=thread $(COVERAGE_MODULES) --cov-report=term-missing
+	$(PYTHON) -m pytest -q --timeout=60 --timeout-method=thread $(SECURITY_BOUNDARY_COVERAGE) --cov-report=term-missing
 
 e2e:
 	npm run test:e2e

@@ -482,7 +482,7 @@ def run_clamav_scan(
                     "description": "Detected base64-encoded Python execution pattern, indicating potential backdoor/webshell",
                 })
                 _emit(log, f"[ClamAV Fallback] MATCH: Python.Backdoor.Base64Decoder in {file_path}", "match")
-        except Exception:
-            pass
+        except (OSError, UnicodeError) as exc:
+            _emit(log, f"[ClamAV Fallback] Unable to inspect {file_path}: {exc}", "muted")
 
     return findings

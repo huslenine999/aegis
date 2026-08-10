@@ -8,7 +8,7 @@ version = "2.4.0"
 description = "Private, explainable release-security scanner and self-hosted workbench"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "Khuslen Gan-Ochir" }
 ]
@@ -29,7 +29,6 @@ dependencies = [
   "Jinja2==3.1.6",
   "MarkupSafe==2.1.5",
   "ruff==0.15.17",
-  "safety==3.8.1",
   "detect-secrets==1.5.0",
   "yara-python==4.5.0",
   "pipdeptree==2.35.3",
@@ -49,6 +48,7 @@ dependencies = [
 scanner = [
   "checkov==3.1.0",
   "semgrep==1.172.0",
+  "safety==3.8.1",
   # Checkov 3.1.0's CycloneDX adapter requires the 5.x model API.
   "cyclonedx-python-lib==5.2.0",
 ]
@@ -69,7 +69,7 @@ Repository = "https://github.com/huslenine999/aegis"
 Issues = "https://github.com/huslenine999/aegis/issues"
 
 [tool.setuptools]
-packages = ["app", "rules"]
+packages = ["app", "app.downloads", "app.static", "app.templates", "rules"]
 py-modules = ["policy_engine"]
 include-package-data = true
 

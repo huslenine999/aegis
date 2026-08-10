@@ -132,11 +132,13 @@ class WafASGIMiddleware:
         enabled: Callable[[], bool],
         load_rules: Callable[[], list[dict[str, Any]]],
         bypass_paths: set[str] | None = None,
+        protected_prefixes: tuple[str, ...] = ("/demo-lab",),
     ):
         self.app = app
         self.enabled = enabled
         self.load_rules = load_rules
         self.bypass_paths = bypass_paths or self.DEFAULT_BYPASS_PATHS
+        self.protected_prefixes = protected_prefixes
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -144,7 +146,11 @@ class WafASGIMiddleware:
             return
 
         path = scope.get("path", "")
-        if path in self.bypass_paths or not self.enabled():
+        if (
+            path in self.bypass_paths
+            or not path.startswith(self.protected_prefixes)
+            or not self.enabled()
+        ):
             await self.app(scope, receive, send)
             return
 
