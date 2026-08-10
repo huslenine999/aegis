@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: huslenine999/aegis
-          ref: b2f00d3fd669799473ce601c7f4ca17dcf381c99
+          ref: 972aac6f1c782cd3bb096bdad34382760dfd1245
           path: trusted-aegis
           persist-credentials: false
 

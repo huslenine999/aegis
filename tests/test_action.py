@@ -191,7 +191,7 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     scan_script = scan_step["run"]
 
     assert "uses: ./" not in workflow
-    assert "ref: b2f00d3fd669799473ce601c7f4ca17dcf381c99" in workflow
+    assert "ref: 972aac6f1c782cd3bb096bdad34382760dfd1245" in workflow
     assert 'python -m pip install "./trusted-aegis[scanner]"' in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
