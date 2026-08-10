@@ -477,15 +477,32 @@ def test_github_annotations_are_repository_relative_and_line_addressable(tmp_pat
             "start": {"line": 8},
             "extra": {"message": "Unsafe command", "severity": "ERROR"},
         }]},
+        "iac": {"findings": [{
+            "path": "app/main.py",
+            "start_line": 9,
+            "end_line": 11,
+            "rule_id": "CKV_TF_1",
+            "title": "IaC configuration issue",
+            "severity": "HIGH",
+        }], "unmanaged_suppressions": [{
+            "path": "app/main.py",
+            "start_line": 12,
+            "end_line": 12,
+            "rule_id": "CKV_TF_2",
+            "title": "Inline Checkov suppression",
+            "source": "repository-inline-checkov",
+        }]},
         "secrets": {"results": {"../outside.txt": [{
             "type": "Secret Keyword",
             "line_number": 1,
         }]}},
     }, repository)
 
-    assert [item["path"] for item in annotations] == ["app/main.py", "app/main.py"]
-    assert [item["start_line"] for item in annotations] == [7, 8]
+    assert [item["path"] for item in annotations] == ["app/main.py"] * 4
+    assert [item["start_line"] for item in annotations] == [7, 8, 9, 12]
+    assert annotations[2]["end_line"] == 11
     assert annotations[1]["annotation_level"] == "failure"
+    assert annotations[3]["annotation_level"] == "warning"
 
 
 def test_scan_run_persists_github_pull_request_context(tmp_path, monkeypatch):

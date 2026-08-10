@@ -9,6 +9,7 @@ from pathlib import Path
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import (
     analyze_clamav,
+    analyze_iac,
     analyze_osv,
     analyze_ruff,
     analyze_safety,
@@ -51,6 +52,7 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
     clamav = read_json_safe(scans_dir / "clamav-report.json")
     zap = read_json_safe(scans_dir / "zap-report.json")
     osv = read_json_safe(scans_dir / "osv-report.json")
+    iac = read_json_safe(scans_dir / "iac-report.json")
 
     results = [
         analyze_ruff(ruff),
@@ -62,6 +64,7 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
         analyze_yara(yara),
         analyze_clamav(clamav),
         analyze_zap(zap),
+        analyze_iac(iac),
     ]
     return calculate_policy_exploitability_score(results, waf_enabled)
 

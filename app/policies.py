@@ -10,7 +10,7 @@ from .findings import extract_findings
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 KNOWN_TOOLS = {
     "Ruff", "Semgrep", "Safety", "OSV", "Trivy", "Secrets", "YARA",
-    "ClamAV", "DAST",
+    "ClamAV", "DAST", "IaC",
 }
 DEFAULT_DEFINITION = {
     "schema_version": 1,

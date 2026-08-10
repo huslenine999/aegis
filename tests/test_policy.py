@@ -1,12 +1,46 @@
 import json
 import policy_engine
 from policy_engine import (
+    analyze_iac,
     analyze_ruff,
     analyze_safety,
     analyze_trivy,
     generate_reports,
     run_policy_engine,
 )
+
+
+def test_analyze_iac_enforces_findings_and_unmanaged_suppressions():
+    result = analyze_iac({
+        "frameworks": ["terraform", "dockerfile"],
+        "summary": {"candidate": 2, "passed": 0, "failed": 1, "skipped": 1},
+        "findings": [{
+            "rule_id": "CKV_DOCKER_2",
+            "title": "Add a healthcheck",
+            "framework": "dockerfile",
+            "severity": "unknown",
+            "resource": "Dockerfile",
+            "path": "Dockerfile",
+            "start_line": 2,
+            "end_line": 3,
+            "remediation": "Add a healthcheck.",
+        }],
+        "unmanaged_suppressions": [{
+            "rule_id": "CKV_TF_1",
+            "title": "Inline skip",
+            "framework": "terraform",
+            "path": "main.tf",
+            "start_line": 1,
+            "end_line": 1,
+            "source": "repository-inline-checkov",
+        }],
+        "status": "completed",
+    })
+
+    assert result["status"] == "FAIL"
+    assert result["total_issues"] == 2
+    assert result["blocking_issues"] == 2
+    assert {item["severity"] for item in result["findings"]} == {"MEDIUM"}
 
 def test_analyze_ruff_pass():
     report = []

@@ -1,0 +1,5 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "An intentionally empty template used for a clean parser fixture.",
+  "Resources": {}
+}

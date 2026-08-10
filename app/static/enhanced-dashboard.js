@@ -185,6 +185,15 @@
             };
         }
 
+        if (scanner === "IaC") {
+            return {
+                ...base,
+                why: "Infrastructure configuration defines the security boundary before application code runs.",
+                fix: fallbackFix || "Apply the least-privilege Checkov remediation and rerun the IaC audit.",
+                fixSuggestion: fallbackFix || "Review the Checkov remediation, update the manifest, then rerun aegis scan .",
+            };
+        }
+
         return base;
     }
 
@@ -312,6 +321,33 @@
                 ...guidanceFor("OSV", item.id || item.package, title, item.fix || "Upgrade the affected dependency to a patched version."),
                 suppress: item.suppression_guidance || "Suppress only when the vulnerable package is unreachable or protected by a compensating control.",
                 status: item.finding_status || "Pre-existing in this local scan evidence.",
+            });
+        });
+
+        const iacReport = data.iac || {};
+        const iacItems = [
+            ...(iacReport.findings || []).map((item) => ({ ...item, _unmanaged: false })),
+            ...(iacReport.unmanaged_suppressions || []).map((item) => ({ ...item, _unmanaged: true })),
+        ];
+        iacItems.forEach((item) => {
+            const rule = item.rule_id || "IaC";
+            const title = item.title || `${item.framework || "IaC"} configuration finding`;
+            const location = `${item.path || "unknown"}:${item.start_line || "?"}${item.end_line && item.end_line !== item.start_line ? `-${item.end_line}` : ""}`;
+            const unmanaged = item._unmanaged || item.source === "repository-inline-checkov";
+            findings.push({
+                severity: unmanaged ? "medium" : normalizeSeverity(item.severity || "medium"),
+                scanner: "IaC",
+                code: rule,
+                title,
+                location,
+                ...guidanceFor("IaC", rule, title, item.remediation || item.comment || "Apply the Checkov remediation and rerun the audit."),
+                ...(unmanaged ? {
+                    why: "A repository-controlled Checkov suppression is not an Aegis-approved, expiring disposition.",
+                } : {}),
+                suppress: unmanaged
+                    ? "Replace this inline suppression with an Aegis-approved ticketed suppression with an expiry."
+                    : "Suppress only with a named owner, ticket, and expiry after reviewing the configuration risk.",
+                status: unmanaged ? "Unmanaged repository suppression" : (item.finding_status || "Pre-existing in this local scan evidence."),
             });
         });
 
@@ -499,7 +535,7 @@
         const findings = buildFindings(data);
         const sources = [
             ["ruff", "Ruff"], ["semgrep", "Semgrep"], ["osv", "OSV"],
-            ["secrets", "Secrets"], ["yara", "YARA"], ["clamav", "ClamAV"], ["zap", "DAST"],
+            ["iac", "IaC"], ["secrets", "Secrets"], ["yara", "YARA"], ["clamav", "ClamAV"], ["zap", "DAST"],
         ];
         let alerts = 0;
         container.innerHTML = sources.map(([key, label]) => {
@@ -594,7 +630,7 @@
         const blockedBy = data.blocked_by || [];
         const findings = buildFindings(data);
         const criticalCount = findings.filter((finding) => normalizeSeverity(finding.severity) === "critical").length;
-        const scannerKeys = ["ruff", "semgrep", "osv", "secrets", "yara", "clamav", "zap"];
+        const scannerKeys = ["ruff", "semgrep", "osv", "iac", "secrets", "yara", "clamav", "zap"];
         const scannerCount = scannerKeys.filter((key) => data[key] !== null && data[key] !== undefined).length;
         const decision = $("uxOverviewDecision");
         if (decision) {

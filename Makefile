@@ -1,6 +1,6 @@
 PYTHON := $(if $(wildcard venv/bin/python),venv/bin/python,python3)
 UV ?= uv
-COVERAGE_MODULES := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware
+COVERAGE_MODULES := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.iac_scanner
 
 .PHONY: verify verify-fast lock lock-check lint types test e2e
 

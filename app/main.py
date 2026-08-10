@@ -165,6 +165,7 @@ RUN_ARTIFACTS = {
     "yara-report.json": "application/json",
     "clamav-report.json": "application/json",
     "zap-report.json": "application/json",
+    "iac-report.json": "application/json",
     "sandbox-status.json": "application/json",
     "scan-manifest.json": "application/json",
 }
@@ -1986,6 +1987,7 @@ def get_scan_results():
     trivy = load_json_safe(SCANS_DIR / "trivy-report.json")
     secrets = load_json_safe(SCANS_DIR / "secrets-report.json")
     yara = load_json_safe(SCANS_DIR / "yara-report.json")
+    iac = load_json_safe(SCANS_DIR / "iac-report.json")
     
     score = calculate_exploitability_score(SCANS_DIR, WAF_ENABLED)
     
@@ -2016,8 +2018,22 @@ def get_scan_results():
         if blocking_osv > 0:
             is_blocked = True
             reasons.append("OSV Dependency Audit")
+
+    if iac and isinstance(iac, dict):
+        if iac.get("status") == "failed":
+            is_blocked = True
+            reasons.append("IaC scanner operational failure")
+        iac_findings = iac.get("findings", []) or []
+        iac_suppressions = iac.get("unmanaged_suppressions", []) or []
+        if any(
+            isinstance(item, dict)
+            and str(item.get("severity") or "MEDIUM").upper() in {"MEDIUM", "HIGH", "CRITICAL"}
+            for item in [*iac_findings, *iac_suppressions]
+        ):
+            is_blocked = True
+            reasons.append("IaC")
             
-    has_run = any(report is not None for report in [ruff, semgrep, osv, safety, trivy, secrets, yara, clamav, zap])
+    has_run = any(report is not None for report in [ruff, semgrep, osv, safety, trivy, secrets, yara, clamav, zap, iac])
 
     latest_report = SCANS_DIR / "report.html"
     latest_scan_time = None
@@ -2042,6 +2058,7 @@ def get_scan_results():
         "trivy": trivy,
         "secrets": secrets,
         "yara": yara,
+        "iac": iac,
         "exploitability_score": score,
         "waf_enabled": WAF_ENABLED,
         "has_run": has_run,
@@ -2535,6 +2552,7 @@ def export_dossier():
     semgrep_report = load_json(SCANS_DIR / "semgrep-report.json")
     clamav_report = load_json(SCANS_DIR / "clamav-report.json")
     zap_report = load_json(SCANS_DIR / "zap-report.json")
+    iac_report = load_json(SCANS_DIR / "iac-report.json")
 
     # Ruff (SAST)
     if not (SCANS_DIR / "ruff-report.json").exists():
@@ -2635,6 +2653,32 @@ def export_dossier():
         zap_blocking = len([f for f in zap_findings_list if f.get("status") == "EXPOSED"])
         zap_status = "FAIL" if zap_blocking > 0 else "PASS"
 
+    # Infrastructure-as-code (Checkov boundary report)
+    if not (SCANS_DIR / "iac-report.json").exists():
+        iac_status = "MISSING"
+        iac_total = 0
+        iac_blocking = 0
+        iac_findings_list: list[dict] = []
+        iac_suppressions_list: list[dict] = []
+    else:
+        iac_findings_list = iac_report.get("findings", []) if isinstance(iac_report, dict) else []
+        iac_suppressions_list = iac_report.get("unmanaged_suppressions", []) if isinstance(iac_report, dict) else []
+        iac_findings_list = [item for item in iac_findings_list if isinstance(item, dict)]
+        iac_suppressions_list = [item for item in iac_suppressions_list if isinstance(item, dict)]
+        iac_total = len(iac_findings_list) + len(iac_suppressions_list)
+        iac_blocking = sum(
+            1
+            for item in [*iac_findings_list, *iac_suppressions_list]
+            if str(item.get("severity") or "MEDIUM").upper() in {"MEDIUM", "HIGH", "CRITICAL"}
+        )
+        report_status = str(iac_report.get("status") or "completed").lower() if isinstance(iac_report, dict) else "failed"
+        if report_status == "failed":
+            iac_status = "ERROR"
+        elif report_status == "skipped":
+            iac_status = "SKIPPED"
+        else:
+            iac_status = "FAIL" if iac_blocking else "PASS"
+
     # Decision
     failed_tools = []
     missing_tools = []
@@ -2646,7 +2690,8 @@ def export_dossier():
         ("Secrets Scanner", secrets_status),
         ("YARA Scanner", yara_status),
         ("ClamAV Antivirus", clamav_status),
-        ("Aegis DAST Probe", zap_status)
+        ("Aegis DAST Probe", zap_status),
+        ("IaC", iac_status),
     ]:
         if status == "FAIL":
             failed_tools.append(tool)
@@ -2801,6 +2846,20 @@ def export_dossier():
     else:
         clamav_findings_text = "  No report file found.\n"
 
+    # Format IaC (Checkov)
+    iac_findings_text = ""
+    if iac_findings_list or iac_suppressions_list:
+        for finding in [*iac_findings_list, *iac_suppressions_list][:10]:
+            iac_findings_text += f"  - ID: {finding.get('rule_id')} | Severity: {finding.get('severity', 'MEDIUM')}\n"
+            iac_findings_text += f"    Framework: {finding.get('framework')} | Resource: {finding.get('resource') or 'n/a'}\n"
+            iac_findings_text += f"    Location: {finding.get('path') or 'n/a'}:{finding.get('start_line') or 1}-{finding.get('end_line') or finding.get('start_line') or 1}\n"
+            iac_findings_text += f"    Remediation: {finding.get('remediation') or finding.get('comment') or finding.get('title') or 'Review the Checkov finding.'}\n"
+            iac_findings_text += "  ------------------------------------------------------------------\n"
+    elif iac_status == "MISSING":
+        iac_findings_text = "  No report file found.\n"
+    else:
+        iac_findings_text = "  No IaC findings detected.\n"
+
     # Format ZAP
     zap_findings_text = ""
     if zap_report:
@@ -2892,6 +2951,15 @@ Blocking Issues: {clamav_blocking}
 
 FINDINGS (Top 5):
 {clamav_findings_text}
+
+[6.5] INFRASTRUCTURE-AS-CODE CONFIGURATION - CHECKOV
+--------------------------------------------------------------------------------
+Status: {iac_status}
+Total Issues Detected: {iac_total}
+Blocking Issues: {iac_blocking}
+
+FINDINGS:
+{iac_findings_text}
 
 [7] DYNAMIC APPLICATION SECURITY TESTING (DAST) - AEGIS PROBE
 --------------------------------------------------------------------------------

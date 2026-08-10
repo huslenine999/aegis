@@ -185,6 +185,29 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
     assert "configured\\-reports" in secrets_command[secrets_command.index("--exclude-files") + 1]
 
 
+def test_sarif_contains_all_iac_findings_with_framework_metadata(tmp_path):
+    output = tmp_path / "aegis.sarif"
+    cli.write_sarif_report(output, [{
+        "tool": "IaC",
+        "findings": [{
+            "test_id": f"CKV_TF_{index}",
+            "issue_text": "Configuration finding",
+            "severity": "HIGH",
+            "filename": "main.tf",
+            "line_number": index,
+            "end_line": index + 1,
+            "framework": "terraform",
+            "resource": "aws_s3_bucket.logs",
+        } for index in range(1, 8)],
+    }], base_path=tmp_path)
+
+    sarif = json.loads(output.read_text())
+    results = sarif["runs"][0]["results"]
+    assert len(results) == 7
+    assert results[0]["properties"]["framework"] == "terraform"
+    assert results[0]["locations"][0]["physicalLocation"]["region"]["endLine"] == 2
+
+
 def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
     target_file = tmp_path / "unsafe.py"
     output_dir = tmp_path / "reports"

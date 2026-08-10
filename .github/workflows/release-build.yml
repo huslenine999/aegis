@@ -75,6 +75,7 @@ jobs:
             --cov=app.rate_limit \
             --cov=app.scan_engine \
             --cov=app.security_middleware \
+            --cov=app.iac_scanner \
             --cov-report=term-missing
 
       - name: Run scanner behavior benchmark

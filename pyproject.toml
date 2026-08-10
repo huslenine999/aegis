@@ -40,14 +40,17 @@ dependencies = [
   "python-multipart==0.0.31",
   "websockets==16.0",
   "psycopg[binary]==3.2.10",
-  "cryptography==49.0.0",
+  "cryptography==50.0.0",
   "boto3==1.43.52",
   "PyJWT[crypto]==2.13.0",
 ]
 
 [project.optional-dependencies]
 scanner = [
-  "semgrep==1.170.0",
+  "checkov==3.1.0",
+  "semgrep==1.172.0",
+  # Checkov 3.1.0's CycloneDX adapter requires the 5.x model API.
+  "cyclonedx-python-lib==5.2.0",
 ]
 dev = [
   "httpx==0.28.1",
@@ -94,6 +97,7 @@ files = [
   "app/security_middleware.py",
   "app/sandbox.py",
   "app/scanners.py",
+  "app/iac_scanner.py",
   "app/main.py",
   "app/config.py",
   "app/observability.py",

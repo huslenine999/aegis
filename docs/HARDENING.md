@@ -42,12 +42,12 @@ not considered complete merely because an environment variable exists.
 - Suppressions require a reason, approver, ticket, and future expiry. Invalid or
   expired exceptions never remove findings and remain visible in versioned
   suppression evidence.
-- The repository currently carries four short-lived upstream exceptions for
-  Semgrep 1.170.0's exact MCP 1.23.3 and Click 8.1.8 pins. The affected MCP
-  server features and `click.edit` path are not invoked by Aegis. These
-  exceptions expire on 2026-10-20 and must be removed as soon as Semgrep permits
-  patched transitive versions; they are not blanket acceptance of those
-  advisories in customer applications.
+- The repository currently carries one short-lived upstream exception for
+  Semgrep 1.172.0's exact MCP 1.23.3 pin. The affected MCP server transports
+  are not invoked by Aegis's Semgrep CLI path. This exception expires on
+  2026-10-20 and must be removed as soon as Semgrep permits a patched MCP
+  version; it is not blanket acceptance of those advisories in customer
+  applications.
 
 ### Integrations and runtime boundaries
 

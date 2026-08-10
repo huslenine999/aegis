@@ -27,6 +27,7 @@ from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
 from .scanners import write_semgrep_rules
+from .iac_scanner import empty_iac_report, run_iac_scan
 from .projects import (
     get_project,
     get_scan_run,
@@ -67,6 +68,7 @@ RECORDED_ARTIFACT_NAMES = {
     "yara-report.json",
     "clamav-report.json",
     "zap-report.json",
+    "iac-report.json",
     "sandbox-status.json",
     "scan-manifest.json",
 }
@@ -459,6 +461,7 @@ def _github_check_annotations(
         message: object,
         title: object,
         level: str = "warning",
+        end_line: object = None,
     ) -> None:
         if len(annotations) >= min(max(limit, 0), 50):
             return
@@ -469,10 +472,14 @@ def _github_check_annotations(
             start_line = max(1, int(str(line or 1)))
         except (TypeError, ValueError):
             start_line = 1
+        try:
+            annotation_end_line = max(start_line, int(str(end_line or start_line)))
+        except (TypeError, ValueError):
+            annotation_end_line = start_line
         annotations.append({
             "path": path,
             "start_line": start_line,
-            "end_line": start_line,
+            "end_line": annotation_end_line,
             "annotation_level": level if level in {"notice", "warning", "failure"} else "warning",
             "message": str(message or "Aegis security finding")[:65000],
             "title": str(title or "Aegis finding")[:255],
@@ -496,6 +503,28 @@ def _github_check_annotations(
             f"Semgrep {item.get('check_id') or 'security finding'}",
             "failure" if severity == "ERROR" else "warning" if severity == "WARNING" else "notice",
         )
+    iac_result = result.get("iac") or {}
+    if isinstance(iac_result, dict):
+        for collection in ("findings", "unmanaged_suppressions"):
+            unmanaged = collection == "unmanaged_suppressions"
+            for item in iac_result.get(collection, []) or []:
+                if not isinstance(item, dict):
+                    continue
+                severity = "MEDIUM" if unmanaged else str(item.get("severity") or "MEDIUM").upper()
+                rule_id = item.get("rule_id") or "configuration finding"
+                title = item.get("title") or (
+                    f"Unmanaged inline Checkov suppression for {rule_id}"
+                    if unmanaged
+                    else item.get("remediation")
+                )
+                add(
+                    item.get("path"),
+                    item.get("start_line"),
+                    title,
+                    f"IaC {rule_id}",
+                    "failure" if severity in {"HIGH", "CRITICAL"} else "warning" if severity == "MEDIUM" else "notice",
+                    item.get("end_line"),
+                )
     for filename, items in (result.get("secrets") or {}).get("results", {}).items():
         for item in items or []:
             add(
@@ -808,6 +837,41 @@ def async_scan_task(
                 "color": "var(--text-muted)",
             },
         )
+
+        # IaC is a static configuration audit. It intentionally runs before
+        # Docker/DAST and does not depend on the sandbox being available.
+        iac_report_path = report_dir / "iac-report.json"
+        if skip_external_scanners or is_custom_scan:
+            detail = "scan preset" if skip_external_scanners else "standalone upload scope"
+            write_json(iac_report_path, empty_iac_report(status="skipped", detail=detail))
+            mark_tool("IaC", "skipped", detail=detail)
+            publish_job_event(
+                job_id,
+                "log",
+                {"text": f"[IaC] Skipped ({detail}).", "color": "var(--text-muted)"},
+            )
+        else:
+            _check_cancelled(job_id)
+            publish_job_event(
+                job_id,
+                "log",
+                {"text": "[IaC] Scanning supported infrastructure configuration with Checkov...", "color": "var(--text-muted)"},
+            )
+            iac_execution = run_iac_scan(
+                target_path,
+                report_path=iac_report_path,
+                timeout=SCANNER_TIMEOUT_SECONDS,
+                log=job_log_callback(job_id),
+            )
+            if iac_execution.status == "completed":
+                mark_tool("IaC", "completed", return_code=iac_execution.return_code)
+            else:
+                mark_tool(
+                    "IaC",
+                    "failed",
+                    detail=iac_execution.detail or "scanner did not produce a valid report",
+                    return_code=iac_execution.return_code,
+                )
 
         # Check Python targets and Docker daemon sandbox
         target_ext = Path(target_path).suffix.lower()
@@ -1160,6 +1224,7 @@ def async_scan_task(
             "yara": load_json_safe(report_dir / "yara-report.json"),
             "clamav": load_json_safe(report_dir / "clamav-report.json"),
             "zap": load_json_safe(report_dir / "zap-report.json"),
+            "iac": load_json_safe(report_dir / "iac-report.json"),
         }
         final_status = policy_summary.get("status", "ERROR")
         blocking_tools = [

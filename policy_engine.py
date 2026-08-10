@@ -31,6 +31,7 @@ YARA_REPORT = SCAN_DIR / "yara-report.json"
 SEMGREP_REPORT = SCAN_DIR / "semgrep-report.json"
 CLAMAV_REPORT = SCAN_DIR / "clamav-report.json"
 ZAP_REPORT = SCAN_DIR / "zap-report.json"
+IAC_REPORT = SCAN_DIR / "iac-report.json"
 
 HTML_REPORT = SCAN_DIR / "report.html"
 MD_REPORT = SCAN_DIR / "report.md"
@@ -48,6 +49,8 @@ FAIL_ON_RUFF_SEVERITIES = get_env_set("FAIL_ON_RUFF", get_env_set("FAIL_ON_BANDI
 FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
 FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", FAIL_ON_SEVERITIES)
 FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", FAIL_ON_SEVERITIES)
+FAIL_ON_IAC_SEVERITIES = get_env_set("FAIL_ON_IAC", FAIL_ON_SEVERITIES)
+SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
 def load_json(path: Path) -> Any:
@@ -241,6 +244,14 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
             "fix": "Validate input at the route boundary, enforce authorization, and add regression tests for the payload.",
             "suggestion": "# Add route validation and rerun a deep scan\naegis scan . --no-docker",
         })
+    elif tool == "IaC":
+        guidance.update({
+            "why": "An infrastructure or container configuration can weaken the security boundary before application code runs.",
+            "fix": issue.get("remediation") or "Apply the Checkov remediation, verify least privilege, and rerun the IaC scan.",
+            "suggestion": "# Review the IaC finding, apply the least-privilege fix, then rerun\naegis scan .",
+        })
+        if issue.get("remediation_url"):
+            guidance["suggestion"] = f"Review the remediation guide: {issue['remediation_url']}"
 
     enriched.setdefault("finding_status", "Unclassified in this standalone report")
     enriched["why_it_matters"] = guidance["why"]
@@ -602,6 +613,97 @@ def analyze_zap(report: List[Dict[str, Any]], fail_on: set[str] | None = None) -
         "status": "FAIL" if blocking_count > 0 else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:6],
+    }
+
+
+def analyze_iac(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
+    """Analyze the Aegis-owned Checkov boundary report.
+
+    Inline Checkov skips are deliberately represented as medium-severity
+    unmanaged findings.  They therefore require an Aegis suppression with an
+    owner, ticket, and expiry before they can stop affecting the gate.
+    """
+
+    if not isinstance(report, dict):
+        return {
+            "tool": "IaC",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "SKIPPED",
+            "examples": [],
+            "findings": [],
+        }
+    if report.get("status") == "failed":
+        return {
+            "tool": "IaC",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "ERROR",
+            "examples": [],
+            "findings": [],
+        }
+
+    findings: list[dict[str, Any]] = []
+    raw_findings = report.get("findings")
+    if not isinstance(raw_findings, list):
+        return {
+            "tool": "IaC",
+            "total_issues": 0,
+            "blocking_issues": 0,
+            "status": "ERROR",
+            "examples": [],
+            "findings": [],
+        }
+    for item in raw_findings:
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity") or "MEDIUM").upper()
+        if severity not in SEVERITIES:
+            severity = "MEDIUM"
+        findings.append(enrich_finding("IaC", {
+            "severity": severity,
+            "test_id": item.get("rule_id"),
+            "filename": item.get("path"),
+            "line_number": item.get("start_line"),
+            "end_line": item.get("end_line"),
+            "issue_text": item.get("title"),
+            "framework": item.get("framework"),
+            "resource": item.get("resource"),
+            "remediation": item.get("remediation"),
+            "remediation_url": item.get("remediation_url"),
+        }))
+
+    suppressions = report.get("unmanaged_suppressions")
+    if isinstance(suppressions, list):
+        for item in suppressions:
+            if not isinstance(item, dict):
+                continue
+            findings.append(enrich_finding("IaC", {
+                "severity": "MEDIUM",
+                "test_id": item.get("rule_id"),
+                "filename": item.get("path"),
+                "line_number": item.get("start_line"),
+                "end_line": item.get("end_line"),
+                "issue_text": f"Unmanaged inline Checkov suppression for {item.get('rule_id') or 'unknown rule'}",
+                "framework": item.get("framework"),
+                "resource": item.get("resource"),
+                "unmanaged_suppression": True,
+                "remediation": "Replace the repository inline suppression with an Aegis-approved, ticketed, expiring suppression.",
+            }))
+
+    threshold = fail_on if fail_on is not None else FAIL_ON_IAC_SEVERITIES
+    blocking = [item for item in findings if item["severity"] in threshold]
+    return {
+        "tool": "IaC",
+        "total_issues": len(findings),
+        "blocking_issues": len(blocking),
+        "status": "FAIL" if blocking else "PASS",
+        "severity_counts": _severity_counts(findings),
+        "examples": (blocking if blocking else findings)[:5],
+        "findings": findings,
+        "frameworks": report.get("frameworks", []),
+        "summary": report.get("summary", {}),
+        "unmanaged_suppression_count": len(report.get("unmanaged_suppressions", [])) if isinstance(report.get("unmanaged_suppressions"), list) else 0,
     }
 
 
@@ -1024,6 +1126,7 @@ def run_policy_engine(
     semgrep_report = load_json(scan_dir / "semgrep-report.json")
     clamav_report = load_json(scan_dir / "clamav-report.json")
     zap_report = load_json(scan_dir / "zap-report.json")
+    iac_report = load_json(scan_dir / "iac-report.json")
 
     osv_report_path = scan_dir / "osv-report.json"
     cached_osv_report = load_json(osv_report_path)
@@ -1051,6 +1154,7 @@ def run_policy_engine(
         analyze_yara(yara_report, fail_on_severities),
         analyze_clamav(clamav_report, fail_on_severities),
         analyze_zap(zap_report, fail_on_severities),
+        analyze_iac(iac_report, fail_on_severities),
     ]
 
     state_aliases = {
@@ -1063,6 +1167,7 @@ def run_policy_engine(
         "YARA Scanner": "YARA",
         "ClamAV": "ClamAV",
         "Aegis DAST Probe": "DAST",
+        "IaC": "IaC",
     }
     for result in results:
         scanner_state = (tool_states or {}).get(state_aliases[result["tool"]])

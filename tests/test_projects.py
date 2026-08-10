@@ -216,6 +216,39 @@ def test_fingerprints_ignore_ephemeral_github_workspace_ids():
     assert projects._fingerprints(first) == projects._fingerprints(second)
 
 
+def test_iac_fingerprints_ignore_line_moves_but_include_framework_and_resource():
+    first = {
+        "iac": {
+            "findings": [{
+                "rule_id": "CKV_AWS_18",
+                "framework": "terraform",
+                "resource": "aws_s3_bucket.logs",
+                "path": "infra/main.tf",
+                "start_line": 4,
+            }]
+        }
+    }
+    moved = {
+        "iac": {
+            "findings": [{
+                **first["iac"]["findings"][0],
+                "start_line": 99,
+            }]
+        }
+    }
+    changed_identity = {
+        "iac": {
+            "findings": [{
+                **first["iac"]["findings"][0],
+                "framework": "cloudformation",
+            }]
+        }
+    }
+
+    assert projects._fingerprints(first) == projects._fingerprints(moved)
+    assert projects._fingerprints(first) != projects._fingerprints(changed_identity)
+
+
 def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     scans_dir = tmp_path / "scans"
     run_dir = scans_dir / "runs" / "job-1"

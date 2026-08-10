@@ -25,6 +25,7 @@ from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import write_semgrep_rules
+from .iac_scanner import empty_iac_report, run_iac_scan
 from .scan_status import ToolStatusTracker
 from .scan_engine import CliEventSink, ScanEvent, ScanRunner
 from .cli_output import print_ascii_report, print_timing_summary
@@ -56,7 +57,7 @@ IGNORED_DIRS = {
     "venv",
 }
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(IGNORED_DIRS))})(/|$)"
-FAST_MODE_SKIPPED_SCANNERS = "Safety/OSV, Semgrep, ClamAV, Docker sandbox, Trivy, and DAST"
+FAST_MODE_SKIPPED_SCANNERS = "Safety/OSV, Semgrep, ClamAV, IaC, Docker sandbox, Trivy, and DAST"
 DEFAULT_SCAN_DIR = Path(".aegis") / "scans"
 EXIT_ALLOWED = 0
 EXIT_BLOCKED = 1
@@ -320,6 +321,36 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
             ]
             write_json(osv_path, osv)
 
+    iac_path = scan_dir / "iac-report.json"
+    if iac_path.exists():
+        iac = read_json(iac_path)
+        if isinstance(iac, dict):
+            findings = iac.get("findings", [])
+            if isinstance(findings, list):
+                iac["findings"] = [
+                    item for item in findings
+                    if not suppress_item(
+                        "IaC",
+                        item,
+                        rule_keys=("rule_id", "check_id"),
+                        path_keys=("path",),
+                    )
+                ]
+            unmanaged = iac.get("unmanaged_suppressions", [])
+            if isinstance(unmanaged, list):
+                governed = []
+                for item in unmanaged:
+                    if suppress_item(
+                        "IaC",
+                        item,
+                        rule_keys=("rule_id", "check_id"),
+                        path_keys=("path",),
+                    ):
+                        continue
+                    governed.append(item)
+                iac["unmanaged_suppressions"] = governed
+            write_json(iac_path, iac)
+
     write_json(
         scan_dir / "suppressions-report.json",
         {
@@ -343,7 +374,8 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
 
     for tool_result in results or []:
         tool_name = tool_result.get("tool", "Aegis")
-        for issue in tool_result.get("examples", []):
+        issues = tool_result.get("findings") if tool_result.get("tool") == "IaC" else tool_result.get("examples", [])
+        for issue in issues or []:
             rule_id = str(issue.get("test_id") or issue.get("vulnerability_id") or issue.get("rule") or tool_name)
             message = str(issue.get("issue_text") or issue.get("description") or issue.get("package_name") or "Aegis finding")
             severity = str(issue.get("severity") or "MEDIUM").upper()
@@ -354,7 +386,8 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
                     artifact_uri = str(Path(artifact_uri).resolve().relative_to(base_path.resolve()))
                 except ValueError:
                     artifact_uri = str(filename)
-            line = issue.get("line_number") or 1
+            line = issue.get("line_number") or issue.get("start_line") or 1
+            end_line = issue.get("end_line") or line
             rules.setdefault(rule_id, {
                 "id": rule_id,
                 "name": rule_id,
@@ -367,12 +400,20 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": {"uri": artifact_uri},
-                        "region": {"startLine": int(line) if str(line).isdigit() else 1},
+                        "region": {
+                            "startLine": int(line) if str(line).isdigit() else 1,
+                            "endLine": int(end_line) if str(end_line).isdigit() else int(line) if str(line).isdigit() else 1,
+                        },
                     }
                 }],
                 "properties": {
                     "tool": tool_name,
                     "severity": severity,
+                    **({
+                        "framework": issue.get("framework"),
+                        "resource": issue.get("resource"),
+                        "unmanaged_suppression": bool(issue.get("unmanaged_suppression")),
+                    } if tool_name == "IaC" else {}),
                 },
             })
 
@@ -481,6 +522,7 @@ def set_fail_on_env(severities: str):
         policy_engine.FAIL_ON_RUFF_SEVERITIES = severity_set
         policy_engine.FAIL_ON_SEMGREP_SEVERITIES = severity_set
         policy_engine.FAIL_ON_TRIVY_SEVERITIES = severity_set
+        policy_engine.FAIL_ON_IAC_SEVERITIES = severity_set
 
 
 def build_scan_summary(target_path: Path, scan_dir: Path, exit_code: int, policy_summary: dict, timings: list[dict] | None = None) -> dict:
@@ -517,6 +559,7 @@ def _cli_evidence_artifacts(scan_dir: Path) -> list[dict]:
         "secrets-report.json",
         "yara-report.json",
         "clamav-report.json",
+        "iac-report.json",
         "zap-report.json",
         "sandbox-status.json",
     }
@@ -688,6 +731,7 @@ def execute_scan(
         "clamav-report.json": [],
         "zap-report.json": [],
         "osv-report.json": [],
+        "iac-report.json": empty_iac_report(),
     }
     for filename, default_data in placeholder_reports.items():
         write_json(scan_dir / filename, default_data)
@@ -898,7 +942,34 @@ def execute_scan(
             write_json(scan_dir / "clamav-report.json", clamav_findings)
             mark_tool("ClamAV", "completed")
 
-    # 7. Sandbox Execution (Trivy & DAST) via Docker
+    # 7. Infrastructure-as-code configuration auditing (Checkov)
+    iac_report_path = scan_dir / "iac-report.json"
+    if fast:
+        print("ℹ️  [IaC] Fast mode enabled, skipping IaC configuration checks.")
+        write_json(iac_report_path, empty_iac_report(status="skipped", detail="fast mode"))
+        record_timing(timings, "IaC", time.perf_counter(), "skipped")
+        mark_tool("IaC", "skipped", detail="fast mode")
+    else:
+        with timed_step(timings, "IaC"):
+            print("🔍 [IaC] Scanning Terraform, CloudFormation, Kubernetes, and Dockerfiles with Checkov...")
+            iac_execution = run_iac_scan(
+                target_path,
+                report_path=iac_report_path,
+                ignored_paths=excluded_paths,
+                timeout=tool_timeout,
+                log=log_scanner_event,
+            )
+            if iac_execution.status == "completed":
+                mark_tool("IaC", "completed", return_code=iac_execution.return_code)
+            else:
+                mark_tool(
+                    "IaC",
+                    "failed",
+                    detail=iac_execution.detail or "scanner did not produce a valid report",
+                    return_code=iac_execution.return_code,
+                )
+
+    # 8. Sandbox Execution (Trivy & DAST) via Docker
     has_python = False
     if target_path.is_dir():
         for root, dirs, files in os.walk(target_path):
@@ -1108,6 +1179,8 @@ def run_doctor(json_output: bool = False) -> int:
 
     semgrep_bin = find_runtime_executable("semgrep")
     add_check("semgrep", semgrep_bin is not None, semgrep_bin or "not found")
+    checkov_bin = find_runtime_executable("checkov")
+    add_check("checkov", checkov_bin is not None, checkov_bin or "not found")
     trivy_bin = shutil.which("trivy")
     add_check("trivy", trivy_bin is not None, trivy_bin or "not found")
     add_check("docker", is_docker_available(), "available" if is_docker_available() else "unavailable")

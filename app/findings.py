@@ -90,6 +90,7 @@ def extract_findings(result: dict | None) -> list[dict]:
         path: Any = "",
         line_number: Any = None,
         identity: tuple[Any, ...] = (),
+        fingerprint_parts: tuple[Any, ...] | None = None,
         raw: dict | None = None,
     ) -> None:
         stable_path = _stable_path(path)
@@ -102,7 +103,9 @@ def extract_findings(result: dict | None) -> list[dict]:
             line = None
         normalized.append(
             {
-                "fingerprint": _fingerprint(tool, rule_id, stable_path, *identity),
+                "fingerprint": _fingerprint(
+                    *(fingerprint_parts if fingerprint_parts is not None else (tool, rule_id, stable_path, *identity))
+                ),
                 "tool": tool,
                 "rule_id": str(rule_id or ""),
                 "title": str(title or rule_id or "Security finding")[:1000],
@@ -228,6 +231,53 @@ def extract_findings(result: dict | None) -> list[dict]:
             identity=(item.get("route"),),
             raw=item,
         )
+
+    iac = result.get("iac") or {}
+    if isinstance(iac, dict):
+        for item in iac.get("findings", []) or []:
+            if not isinstance(item, dict):
+                continue
+            severity = str(item.get("severity") or "MEDIUM").upper()
+            if severity not in SEVERITIES:
+                severity = "MEDIUM"
+            add(
+                "IaC",
+                item.get("rule_id"),
+                item.get("title") or item.get("rule_id"),
+                severity,
+                path=item.get("path"),
+                line_number=item.get("start_line"),
+                identity=(item.get("framework"), item.get("resource")),
+                fingerprint_parts=(
+                    "IaC",
+                    item.get("rule_id"),
+                    item.get("framework"),
+                    item.get("resource"),
+                    _stable_path(item.get("path")),
+                ),
+                raw=item,
+            )
+        for item in iac.get("unmanaged_suppressions", []) or []:
+            if not isinstance(item, dict):
+                continue
+            add(
+                "IaC",
+                item.get("rule_id"),
+                item.get("title") or f"Unmanaged inline Checkov suppression for {item.get('rule_id') or 'unknown rule'}",
+                "MEDIUM",
+                path=item.get("path"),
+                line_number=item.get("start_line"),
+                identity=(item.get("framework"), item.get("resource"), "unmanaged-suppression"),
+                fingerprint_parts=(
+                    "IaC",
+                    item.get("rule_id"),
+                    item.get("framework"),
+                    item.get("resource"),
+                    _stable_path(item.get("path")),
+                    "unmanaged-suppression",
+                ),
+                raw=item,
+            )
 
     unique = {item["fingerprint"]: item for item in normalized}
     return list(unique.values())

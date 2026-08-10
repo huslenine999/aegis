@@ -372,6 +372,28 @@ def _fingerprints(result: dict | None) -> set[str]:
     for filename, items in (result.get("secrets") or {}).get("results", {}).items():
         for item in items:
             values.add(f"secrets:{item.get('type')}:{stable_path(filename)}")
+    iac = result.get("iac") or {}
+    if isinstance(iac, dict):
+        for item in iac.get("findings", []) or []:
+            values.add(
+                "iac:"
+                + ":".join(
+                    str(item.get(key))
+                    for key in ("rule_id", "framework", "resource")
+                )
+                + ":"
+                + stable_path(item.get("path"))
+            )
+        for item in iac.get("unmanaged_suppressions", []) or []:
+            values.add(
+                "iac-suppression:"
+                + ":".join(
+                    str(item.get(key))
+                    for key in ("rule_id", "framework", "resource")
+                )
+                + ":"
+                + stable_path(item.get("path"))
+            )
     return values
 
 
