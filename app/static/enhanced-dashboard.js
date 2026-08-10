@@ -1,7 +1,7 @@
 (function () {
     const HISTORY_KEY = "aegis.scanHistory.v1";
     const SETTINGS_KEY = "aegis.dashboardSettings.v1";
-    const ADMIN_TOKEN_KEY = "aegis.adminToken.v1";
+    const ADMIN_TOKEN_KEY = "aegis.adminToken.v1"; // pragma: allowlist secret
     const stateOrder = ["queued", "running", "analyzing", "correlating", "reporting", "completed"];
     let currentFilter = "all";
     let currentScanner = "all";

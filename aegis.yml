@@ -101,14 +101,32 @@ scan:
       ticket: AEGIS-UPSTREAM-SEMGRP-001
       expires_at: 2026-10-20
     - tool: OSV Dependency Audit
+      rule: PYSEC-2026-3481
+      reason: Alias of GHSA-hvrp-rf83-w775; Semgrep pins MCP 1.23.3, but Aegis invokes only the local Semgrep scan CLI and never enables MCP experimental task handlers.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-001
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
       rule: GHSA-jpw9-pfvf-9f58
       reason: Semgrep pins MCP 1.23.3, but Aegis does not expose MCP SSE or stateful HTTP server transports.
       approved_by: security-owner
       ticket: AEGIS-UPSTREAM-SEMGRP-002
       expires_at: 2026-10-20
     - tool: OSV Dependency Audit
+      rule: PYSEC-2026-3482
+      reason: Alias of GHSA-jpw9-pfvf-9f58; Semgrep pins MCP 1.23.3, but Aegis does not expose MCP SSE or stateful HTTP server transports.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-002
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
       rule: GHSA-vj7q-gjh5-988w
       reason: Semgrep pins MCP 1.23.3, but Aegis does not expose the deprecated MCP WebSocket server transport.
+      approved_by: security-owner
+      ticket: AEGIS-UPSTREAM-SEMGRP-003
+      expires_at: 2026-10-20
+    - tool: OSV Dependency Audit
+      rule: PYSEC-2026-3483
+      reason: Alias of GHSA-vj7q-gjh5-988w; Aegis does not expose the deprecated MCP WebSocket server transport.
       approved_by: security-owner
       ticket: AEGIS-UPSTREAM-SEMGRP-003
       expires_at: 2026-10-20

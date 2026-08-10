@@ -1793,8 +1793,8 @@ async def create_api_token(
         {"name": name, "scopes": scopes, "expires_at": expires_at},
     )
     return {
-        "token": token,
-        "token_type": "bearer",
+        "token": token,  # pragma: allowlist secret
+        "token_type": "bearer",  # pragma: allowlist secret
         "name": name,
         "scopes": scopes,
         "expires_at": expires_at,
@@ -2564,7 +2564,7 @@ def export_dossier():
             "safety": "safety-report.json",
             "osv": "osv-report.json",
             "trivy": "trivy-report.json",
-            "secrets": "secrets-report.json",
+            "secrets": "secrets-report.json",  # pragma: allowlist secret
             "yara": "yara-report.json",
             "clamav": "clamav-report.json",
             "zap": "zap-report.json",

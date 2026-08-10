@@ -207,11 +207,18 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["dashboard"]["environment"]["FORWARDED_ALLOW_IPS"] != "*"
     assert "AEGIS_SESSION_SECRET" not in services["worker"]["environment"]
     assert "AEGIS_ADMIN_TOKEN" not in services["worker"]["environment"]
-    assert services["notifier"]["command"][:3] == [
+    assert services["worker"]["entrypoint"] == [
+        "python",
+        "-m",
+        "app.worker_entrypoint",
+    ]
+    assert services["worker"]["command"][:2] == ["--url", "redis://redis:6379/0"]
+    assert services["notifier"]["entrypoint"] == [
         "python",
         "-m",
         "app.notifier_entrypoint",
     ]
+    assert services["notifier"]["command"][:2] == ["--url", "redis://redis:6379/0"]
     assert services["postgres"]["image"].endswith(
         "@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa"
     )
@@ -242,6 +249,11 @@ def test_dependency_workflow_uses_locked_python_and_node_installs():
     assert "uv sync --locked" in release_workflow
     assert "uv pip check" in release_workflow
     assert "python -m pip check" not in release_workflow
+    assert "python -m pip wheel" not in security_workflow
+    assert "python -m pip wheel" not in release_workflow
+    assert "uv build --wheel --out-dir dist" in security_workflow
+    assert "uv build --wheel --out-dir dist" in release_workflow
+    assert "::add-mask::$value" in security_workflow
     assert "uv.lock" in security_workflow
     assert {item["package-ecosystem"] for item in dependabot["updates"]} >= {
         "docker",

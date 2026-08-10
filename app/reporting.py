@@ -48,7 +48,7 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
             "semgrep": "semgrep",
             "safety": "safety",
             "trivy": "trivy",
-            "secrets": "secrets",
+            "secrets": "secrets",  # pragma: allowlist secret
             "yara": "yara",
             "clamav": "clamav",
             "zap": "zap",

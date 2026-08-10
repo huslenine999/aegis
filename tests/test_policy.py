@@ -1,5 +1,8 @@
 import json
+from pathlib import Path
+
 import policy_engine
+from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import (
     analyze_iac,
     analyze_ruff,
@@ -42,6 +45,42 @@ def test_analyze_iac_enforces_findings_and_unmanaged_suppressions():
     assert result["total_issues"] == 2
     assert result["blocking_issues"] == 2
     assert {item["severity"] for item in result["findings"]} == {"MEDIUM"}
+
+
+def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read():
+            return json.dumps({
+                "vulns": [{
+                    "id": "PYSEC-2099-1",
+                    "aliases": ["GHSA-example"],
+                    "summary": "Example advisory",
+                    "details": "Example details",
+                }],
+            }).encode()
+
+    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
+    monkeypatch.setattr(policy_engine.time, "sleep", lambda _seconds: None)
+    manifest = DependencyManifest(
+        path=Path("requirements.txt"),
+        kind="requirements.txt",
+        ecosystem="PyPI",
+        packages=(DependencyPackage("scanner-helper", "1.0.0", "PyPI"),),
+    )
+
+    findings = policy_engine.query_osv_vulnerabilities([manifest])
+
+    assert findings[0]["id"] == "PYSEC-2099-1"
+    assert findings[0]["aliases"] == ["GHSA-example"]
+
 
 def test_analyze_ruff_pass():
     report = []

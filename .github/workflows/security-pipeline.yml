@@ -147,7 +147,7 @@ jobs:
       - name: Validate package metadata
         run: |
           node -e "const p=require('./package.json'); if (p.bin.aegis !== './bin/cli.js') process.exit(1)"
-          uv run --locked python -m pip wheel . --no-deps --wheel-dir dist
+          uv build --wheel --out-dir dist
           uv run --locked aegis version
 
       - name: Validate composite Action contract
@@ -217,15 +217,21 @@ jobs:
       - name: Configure production smoke environment
         shell: bash
         run: |
-          echo "AEGIS_ADMIN_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AEGIS_SESSION_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AEGIS_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
-          echo "AEGIS_ENCRYPTION_KEY=$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
-          echo "AEGIS_TOKEN_PEPPER=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AEGIS_AUDIT_HMAC_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AEGIS_EVIDENCE_SIGNING_KEY=$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" >> "$GITHUB_ENV"
-          echo "AEGIS_METRICS_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> "$GITHUB_ENV"
+          write_masked_env() {
+            local name="$1"
+            local value="$2"
+            echo "::add-mask::$value"
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+          }
+          write_masked_env AEGIS_ADMIN_TOKEN "$(openssl rand -hex 32)"
+          write_masked_env AEGIS_SESSION_SECRET "$(openssl rand -hex 32)"
+          write_masked_env AEGIS_BOOTSTRAP_ADMIN_PASSWORD "$(openssl rand -hex 24)"
+          write_masked_env AEGIS_ENCRYPTION_KEY "$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+          write_masked_env AEGIS_TOKEN_PEPPER "$(openssl rand -hex 32)"
+          write_masked_env AEGIS_AUDIT_HMAC_KEY "$(openssl rand -hex 32)"
+          write_masked_env AEGIS_EVIDENCE_SIGNING_KEY "$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+          write_masked_env AEGIS_METRICS_TOKEN "$(openssl rand -hex 32)"
+          write_masked_env POSTGRES_PASSWORD "$(openssl rand -hex 24)"
           echo "AEGIS_DOMAIN=localhost" >> "$GITHUB_ENV"
           echo "AEGIS_ALLOWED_HOSTS=localhost,127.0.0.1" >> "$GITHUB_ENV"
           echo "AEGIS_CORS_ORIGINS=https://localhost" >> "$GITHUB_ENV"

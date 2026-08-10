@@ -124,7 +124,8 @@ services:
   worker:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
-    command: ["python", "-m", "app.worker_entrypoint", "--url", "redis://redis:6379/0", "--path", "/app/app"]
+    entrypoint: ["python", "-m", "app.worker_entrypoint"]
+    command: ["--url", "redis://redis:6379/0", "--path", "/app/app"]
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -184,7 +185,8 @@ services:
   notifier:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
-    command: ["python", "-m", "app.notifier_entrypoint", "--url", "redis://redis:6379/0", "--path", "/app/app", "notifications"]
+    entrypoint: ["python", "-m", "app.notifier_entrypoint"]
+    command: ["--url", "redis://redis:6379/0", "--path", "/app/app", "notifications"]
     restart: unless-stopped
     read_only: true
     security_opt:

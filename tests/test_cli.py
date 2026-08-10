@@ -316,6 +316,34 @@ def test_governed_suppression_can_disposition_an_osv_advisory(tmp_path):
     report = json.loads((scan_dir / "suppressions-report.json").read_text())
     assert report["applied"][0]["rule"] == "GHSA-example"
 
+
+def test_governed_suppression_matches_an_osv_advisory_alias(tmp_path):
+    scan_dir = tmp_path / "reports"
+    scan_dir.mkdir()
+    (scan_dir / "osv-report.json").write_text(json.dumps([{
+        "id": "PYSEC-2099-1",
+        "aliases": ["GHSA-example"],
+        "package": "scanner-helper",
+        "version": "1.0.0",
+    }]))
+    suppressions = cli.normalize_suppressions({
+        "scan": {"suppressions": [{
+            "tool": "OSV Dependency Audit",
+            "rule": "GHSA-example",
+            "reason": "Feature is not loaded by the isolated scanner process.",
+            "approved_by": "application-security",
+            "ticket": "UPSTREAM-8",
+            "expires_at": "2099-12-31",
+        }]},
+    }, tmp_path)
+
+    cli.apply_suppressions(scan_dir, suppressions)
+
+    assert json.loads((scan_dir / "osv-report.json").read_text()) == []
+    report = json.loads((scan_dir / "suppressions-report.json").read_text())
+    assert report["applied"][0]["rule"] == "GHSA-example"
+
+
 def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
     output_dir = tmp_path / "reports"

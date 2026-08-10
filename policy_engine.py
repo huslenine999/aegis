@@ -974,6 +974,9 @@ def query_osv_vulnerabilities(
                     
                     vuln_list.append({
                         "id": vuln.get("id"),
+                        "aliases": [
+                            str(alias) for alias in vuln.get("aliases", []) if alias
+                        ],
                         "package": pkg_name,
                         "version": pkg_ver,
                         "ecosystem": ecosystem,

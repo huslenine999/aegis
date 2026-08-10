@@ -236,13 +236,34 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
             invalid.append({**evidence, "validation_errors": suppression["validation_errors"]})
 
     def suppress_item(tool: str, item: dict, *, rule_keys: tuple[str, ...], path_keys: tuple[str, ...]) -> bool:
-        rule = next((item.get(key) for key in rule_keys if item.get(key)), "")
+        rules: list[str] = []
+        for key in rule_keys:
+            value = item.get(key)
+            if isinstance(value, list):
+                rules.extend(str(candidate) for candidate in value if candidate)
+            elif value:
+                rules.append(str(value))
+        if not rules:
+            rules.append("")
         path = next((item.get(key) for key in path_keys if item.get(key)), "")
         for suppression in suppressions:
-            if suppression_matches(suppression, tool=tool, rule=str(rule), path=str(path)):
+            matched_rule = next(
+                (
+                    rule
+                    for rule in rules
+                    if suppression_matches(
+                        suppression,
+                        tool=tool,
+                        rule=rule,
+                        path=str(path),
+                    )
+                ),
+                None,
+            )
+            if matched_rule is not None:
                 applied.append({
                     "tool": tool,
-                    "rule": rule,
+                    "rule": matched_rule,
                     "path": path,
                     "reason": suppression["reason"],
                     "approved_by": suppression["approved_by"],
@@ -316,7 +337,7 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                 if not suppress_item(
                     "OSV Dependency Audit",
                     item,
-                    rule_keys=("id",),
+                    rule_keys=("id", "aliases"),
                     path_keys=(),
                 )
             ]
