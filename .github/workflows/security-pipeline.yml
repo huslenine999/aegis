@@ -254,7 +254,7 @@ jobs:
       - name: Start production stack
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker notifier
 
-      - name: Verify readiness and worker scan
+      - name: Verify service readiness
         shell: bash
         run: |
           set -euo pipefail
@@ -273,28 +273,6 @@ jobs:
           curl --fail --silent \
             -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
             http://localhost:5001/metrics
-
-          job_id="$(
-            curl --fail --silent \
-              -H "X-Aegis-Token: $AEGIS_ADMIN_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{"target":"secure"}' \
-              http://localhost:5001/run-scan |
-            python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
-          )"
-          for attempt in $(seq 1 60); do
-            state="$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T redis redis-cli HGET "job:$job_id" state)"
-            if [ "$state" = "completed" ]; then
-              break
-            fi
-            if [ "$state" = "failed" ] || [ "$attempt" -eq 60 ]; then
-              echo "Worker scan ended in state: ${state:-missing}"
-              exit 1
-            fi
-            sleep 2
-          done
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.html
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T dashboard test -f /data/scans/report.md
           docker compose -f docker-compose.yml -f docker-compose.ci.yml ps
 
       - name: Run real Compose scan lifecycle integration

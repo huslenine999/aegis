@@ -230,11 +230,28 @@ def test_container_smoke_starts_all_readiness_services():
     )
     steps = workflow["jobs"]["container-smoke"]["steps"]
     start_step = next(step for step in steps if step.get("name") == "Start production stack")
+    readiness_step = next(
+        step for step in steps if step.get("name") == "Verify service readiness"
+    )
+    lifecycle_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Run real Compose scan lifecycle integration"
+    )
     log_step = next(step for step in steps if step.get("name") == "Show container logs")
 
     required_services = {"postgres", "redis", "dashboard", "worker", "notifier"}
     assert required_services <= set(start_step["run"].split())
     assert required_services <= set(log_step["run"].split())
+    assert "/run-scan" not in readiness_step["run"]
+    assert "test_compose_scan_lifecycle.py" in lifecycle_step["run"]
+
+
+def test_playwright_uses_the_locked_uv_environment():
+    config = (PROJECT_ROOT / "playwright.config.js").read_text()
+
+    assert "uv run --locked python -m uvicorn" in config
+    assert "venv/bin/python" not in config
 
 
 def test_published_action_e2e_asserts_outputs_and_reports():

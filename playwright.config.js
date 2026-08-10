@@ -1,8 +1,6 @@
 const { defineConfig } = require("@playwright/test");
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const python = fs.existsSync("venv/bin/python") ? "venv/bin/python" : "python";
 const e2eDataDirectory = path.join(os.tmpdir(), `aegis-e2e-${process.pid}`);
 
 module.exports = defineConfig({
@@ -15,7 +13,7 @@ module.exports = defineConfig({
     screenshot: "only-on-failure"
   },
   webServer: {
-    command: `${python} -m uvicorn app.main:app --host 127.0.0.1 --port 5011`,
+    command: "uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 5011",
     url: "http://127.0.0.1:5011/health",
     reuseExistingServer: !process.env.CI,
     env: {
