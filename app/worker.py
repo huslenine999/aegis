@@ -740,7 +740,9 @@ def async_scan_task(
 
             if target_path is None:
                 raise RuntimeError("Unable to resolve the scan target path.")
-            workspace_limits = validate_untrusted_tree(Path(target_path))
+            workspace_limits = validate_untrusted_tree(
+                Path(target_path), ignored_names=DEFAULT_IGNORED_DIRS
+            )
             dependency_manifests = discover_dependency_manifests(target_path)
                 
             # Run Safety SCA

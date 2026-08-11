@@ -386,6 +386,10 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     (target / "safe.py").write_text("def add(left, right):\n    return left + right\n")
+    runtime_venv = tmp_path / "runtime-venv"
+    runtime_venv.mkdir()
+    (runtime_venv / "python").write_text("runtime placeholder\n")
+    (target / ".venv").symlink_to(runtime_venv, target_is_directory=True)
     monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "true")
     monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
     monkeypatch.setattr(worker, "PROJECT_ROOT", target)
@@ -413,7 +417,7 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
-    worker.async_scan_task("legacy-job", "secure")
+    worker.async_scan_task("legacy-job", "project")
 
     manifest = (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
     assert '"policy_status": "ALLOWED"' in manifest
