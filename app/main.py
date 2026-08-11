@@ -2291,12 +2291,7 @@ async def run_scan(request: Request, principal=Depends(require_access("operator"
 
 @router.websocket("/ws/scan/{job_id}")
 async def websocket_scan(websocket: WebSocket, job_id: str):
-    if not DEMO_LAB_ENABLED:
-        await websocket.close(code=4404, reason="Aegis demo lab is disabled")
-        return
-    if not _connection_is_loopback(websocket):
-        await websocket.close(code=4403, reason="Aegis demo lab is local-only")
-        return
+    """Stream an authorized product scan; demo-lab guards do not apply here."""
     principal = websocket_principal(websocket, "viewer")
     if not principal:
         await websocket.close(code=4401, reason="Authentication required")

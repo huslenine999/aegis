@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 import app.main as app_main
 
 @pytest.fixture
@@ -32,6 +33,21 @@ def test_legacy_demo_operational_routes_are_disabled_with_the_lab(monkeypatch):
         assert client.get("/report").status_code == 404
         assert client.get("/download-sbom").status_code == 404
         assert client.get("/download-report-bundle").status_code == 404
+    finally:
+        app_main.DEMO_LAB_ENABLED = True
+
+
+def test_project_scan_websocket_remains_available_when_demo_lab_is_disabled():
+    """The authenticated project event stream is a product API, not a demo route."""
+    app_main.DEMO_LAB_ENABLED = False
+    try:
+        client = TestClient(app_main.app)
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/scan/unknown-job"):
+                pass
+
+        assert exc_info.value.code == 4404
+        assert exc_info.value.reason == "Scan job not found"
     finally:
         app_main.DEMO_LAB_ENABLED = True
 
