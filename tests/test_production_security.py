@@ -66,6 +66,55 @@ def test_http_rate_limit_returns_retry_after(monkeypatch):
     assert limited.headers["retry-after"] == "60"
 
 
+def test_aggregate_rate_limit_applies_across_route_paths(monkeypatch):
+    monkeypatch.setenv("AEGIS_RATE_LIMIT_PER_MINUTE", "100")
+    monkeypatch.setenv("AEGIS_AGGREGATE_RATE_LIMIT_PER_MINUTE", "2")
+    application = FastAPI()
+
+    @application.get("/first")
+    def first():
+        return {"ok": True}
+
+    @application.get("/second")
+    def second():
+        return {"ok": True}
+
+    application.add_middleware(RateLimitMiddleware, redis_client=InMemoryRedis())
+    client = TestClient(application)
+
+    assert client.get("/first").status_code == 200
+    assert client.get("/second").status_code == 200
+    assert client.get("/first").status_code == 429
+
+
+def test_sensitive_oidc_routes_use_login_limit_and_fail_closed(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.setenv("AEGIS_LOGIN_RATE_LIMIT_PER_MINUTE", "1")
+    application = FastAPI()
+
+    @application.get("/api/auth/oidc/start")
+    def oidc_start():
+        return {"ok": True}
+
+    application.add_middleware(RateLimitMiddleware, redis_client=InMemoryRedis())
+    client = TestClient(application)
+    assert client.get("/api/auth/oidc/start").status_code == 200
+    assert client.get("/api/auth/oidc/start").status_code == 429
+
+    class BrokenRedis:
+        def incr(self, key):
+            raise ConnectionError("redis unavailable")
+
+    unavailable = FastAPI()
+
+    @unavailable.get("/api/auth/oidc/start")
+    def unavailable_oidc_start():
+        return {"ok": True}
+
+    unavailable.add_middleware(RateLimitMiddleware, redis_client=BrokenRedis())
+    assert TestClient(unavailable).get("/api/auth/oidc/start").status_code == 503
+
+
 def test_production_mutations_fail_closed_when_rate_limit_store_is_down(monkeypatch):
     class BrokenRedis:
         def incr(self, key):

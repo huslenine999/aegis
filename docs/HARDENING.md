@@ -13,7 +13,9 @@ not considered complete merely because an environment variable exists.
 - Tenant administrators cannot enumerate another tenant's projects or users.
 - Project membership rejects users from another tenant.
 - API tokens use keyed hashes, explicit `read`, `write`, or `admin` scopes,
-  expiration, revocation, and last-used tracking.
+  expiration, revocation, and last-used tracking for current-format tokens.
+  The legacy unsalted-hash authentication fallback remains a release-gate
+  finding until legacy rows are revoked or migrated.
 - Repeated login failures produce a timed account lockout.
 - Optional RFC 6238 TOTP MFA encrypts secrets at rest and provides ten
   single-use recovery codes.
@@ -30,6 +32,14 @@ not considered complete merely because an environment variable exists.
   assurance claim. Production still rejects multi-tenant mode with local
   storage, and the current topology uses one isolated deployment per tenant.
 - Artifact metadata includes SHA-256 size and integrity records.
+- Scanner subprocess pipe output, report/parser input, S3 downloads, ZIP entry
+  and uncompressed sizes, and HTTP response bodies are bounded by shared
+  resource budgets. S3 artifacts and report bundles are streamed in chunks
+  rather than assembled into an unbounded response buffer. File-writing
+  scanner outputs still need a concurrent write-time budget; this is a Phase 6
+  release-gate finding, not a completed control.
+- Rate-limit keys and HTTP metrics use finite route classes/templates; raw
+  request paths are not used as Redis keys or metric labels.
 - Scan manifests are signed with Ed25519 and contain source identity, revision,
   policy digest, scanner state, operational failures, and artifact hashes.
 - `aegis verify-evidence` validates a pinned public key and every referenced
@@ -53,10 +63,18 @@ not considered complete merely because an environment variable exists.
 
 - GitHub webhooks require an HMAC-SHA-256 signature and validated delivery/event
   headers; delivery IDs are persisted to reject replay. GitHub App pull-request
-  events create check runs, scan the exact head revision with a short-lived
-  installation token, and return line-level Ruff, Semgrep, and secret findings.
+  events resolve through immutable tenant-bound installation/repository mappings,
+  create check runs, scan the exact head revision with a short-lived installation
+  token, and return line-level Ruff, Semgrep, and secret findings. Legacy project
+  names are explicitly downgraded until an exact signed repository identity is
+  observed.
+- GitHub OAuth connections and App installations share a centralized revocation
+  path. Queued scans re-read their database row, tenant, project membership,
+  source context, and current credential capability immediately before source
+  access.
 - Database triggers enforce tenant consistency on project, member, and scan
-  inserts and updates, and reject changes to immutable tenant identities.
+  inserts and updates, reject changes to immutable tenant identities, and reject
+  unbound GitHub App installation IDs on scan rows.
 - Production deep scans are disabled unless both `AEGIS_ALLOW_DEEP_SCANS` and
   `AEGIS_ISOLATED_WORKER` are explicitly enabled.
 - Sandbox containers run as a non-root UID with all capabilities dropped,

@@ -10,7 +10,17 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from app import audit, auth, cli, config, database, github_integration, projects, worker
+from app import (
+    audit,
+    auth,
+    cli,
+    config,
+    database,
+    github_integration,
+    github_lifecycle,
+    projects,
+    worker,
+)
 from app.artifact_storage import run_directory
 from app.evidence import sign_manifest, verify_manifest
 from app.notifier_entrypoint import validate_notifier_configuration
@@ -518,6 +528,13 @@ def test_scan_run_persists_github_pull_request_context(tmp_path, monkeypatch):
         scan_preset="standard",
         user_id=user_id,
         tenant_id=tenant_id,
+    )
+    github_lifecycle.bind_github_repository(
+        project_id=project_id,
+        tenant_id=tenant_id,
+        installation_id=42,
+        repository_id=101,
+        repository_full_name="example/api",
     )
     run_id = projects.create_scan_run(
         job_id="github-pr-run",

@@ -52,28 +52,39 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p aegis-reports
+          WORKSPACE_ROOT="$(realpath "$GITHUB_WORKSPACE")"
+          OUTPUT_DIR="${GITHUB_WORKSPACE}/aegis-reports"
+          mkdir -p -- "$OUTPUT_DIR"
+          OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
+          if [ "$OUTPUT_DIR" = "$WORKSPACE_ROOT" ] || [[ "$OUTPUT_DIR" != "$WORKSPACE_ROOT"/* ]]; then
+            echo "::error title=Aegis output error::Report output must remain inside GITHUB_WORKSPACE."
+            exit 2
+          fi
+          if [ -e target/.aegis-trusted.yml ] || [ -L target/.aegis-trusted.yml ]; then
+            echo "::error title=Aegis config error::Target already contains a trusted config path."
+            exit 2
+          fi
           cp trusted-aegis/aegis.yml target/.aegis-trusted.yml
           set +e
           aegis scan target \
             --no-docker \
             --strict \
             --timeout 120 \
-            --output aegis-reports \
+            --output "$OUTPUT_DIR" \
             --config target/.aegis-trusted.yml \
             --fail-on medium,high,critical \
             --sarif \
-            --json > aegis-reports/summary.json
+            --json > "$OUTPUT_DIR/summary.json"
           status=$?
           set -e
 
-          cat aegis-reports/summary.json
-          if ! python -m json.tool aegis-reports/summary.json >/dev/null; then
+          cat "$OUTPUT_DIR/summary.json"
+          if ! python -m json.tool "$OUTPUT_DIR/summary.json" >/dev/null; then
             echo "::error title=Aegis operational error::Scanner did not produce a valid JSON summary."
             status=2
           fi
-          if [ -f aegis-reports/report.md ]; then
-            cat aegis-reports/report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$OUTPUT_DIR/report.md" ]; then
+            cat "$OUTPUT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
 
@@ -174,6 +185,7 @@ jobs:
             --cov=app.scan_engine \
             --cov=app.security_middleware \
             --cov=app.iac_scanner \
+            --cov=app.github_lifecycle \
             --cov-report=term-missing
 
       - name: Install browser test dependencies

@@ -933,6 +933,306 @@ def _migration_017_oidc_identity(cursor) -> None:
     )
 
 
+def _migration_018_oidc_transaction_boundary(cursor) -> None:
+    """Add one-time, browser-bound OIDC transaction fields.
+
+    Existing state rows deliberately receive empty values.  The callback path
+    rejects those legacy rows instead of silently treating them as trusted,
+    while the additive migration keeps the database upgrade reversible.
+    """
+    if USING_POSTGRES:
+        cursor.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'oidc_states'
+            """
+        )
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(oidc_states)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+    additions = (
+        ("browser_binding_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("provider_metadata_encrypted", "TEXT NOT NULL DEFAULT ''"),
+        ("issuer", "TEXT NOT NULL DEFAULT ''"),
+        ("client_id", "TEXT NOT NULL DEFAULT ''"),
+        ("redirect_uri", "TEXT NOT NULL DEFAULT ''"),
+        ("reserved_at", "TEXT"),
+    )
+    for column, definition in additions:
+        if column not in columns:
+            cursor.execute(
+                f"ALTER TABLE oidc_states ADD COLUMN {column} {definition}"
+            )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_oidc_states_expiry "
+        "ON oidc_states(expires_at, reserved_at)"
+    )
+
+
+def _migration_019_github_tenant_credential_lifecycle(cursor) -> None:
+    """Make GitHub installation, repository, and capability state explicit."""
+    identity = _identity_id_type()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS github_installations (
+            installation_id BIGINT PRIMARY KEY,
+            tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+            state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'revoked')),
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            revoked_at TEXT
+        )
+    """)
+    cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS github_repository_bindings (
+            id {identity},
+            project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            tenant_id BIGINT NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+            installation_id BIGINT REFERENCES github_installations(installation_id)
+                ON DELETE RESTRICT,
+            repository_id BIGINT,
+            repository_full_name TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'legacy'
+                CHECK (state IN ('legacy', 'active', 'revoked')),
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            revoked_at TEXT,
+            UNIQUE (project_id)
+        )
+    """)
+
+    if USING_POSTGRES:
+        cursor.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'github_connections'
+        """)
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(github_connections)")
+        columns = {row[1] for row in cursor.fetchall()}
+    if "revoked_at" not in columns:
+        cursor.execute("ALTER TABLE github_connections ADD COLUMN revoked_at TEXT")
+
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_github_installations_tenant "
+        "ON github_installations(tenant_id, state)",
+        "CREATE INDEX IF NOT EXISTS idx_github_bindings_project "
+        "ON github_repository_bindings(project_id, tenant_id, state)",
+        "CREATE INDEX IF NOT EXISTS idx_github_bindings_installation "
+        "ON github_repository_bindings(installation_id, state)",
+        "CREATE INDEX IF NOT EXISTS idx_github_bindings_name "
+        "ON github_repository_bindings(repository_full_name, state)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_active_repository_id "
+        "ON github_repository_bindings(repository_id) "
+        "WHERE state = 'active' AND repository_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_active_repository_name "
+        "ON github_repository_bindings(repository_full_name) WHERE state = 'active'",
+    ):
+        cursor.execute(statement)
+
+    # Existing project names are deliberately only placeholders.  They do not
+    # authorize an App installation until an exact signed event promotes one.
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        """INSERT INTO github_repository_bindings
+           (project_id, tenant_id, installation_id, repository_id,
+            repository_full_name, state, created_at, last_seen_at, revoked_at)
+           SELECT p.id, p.tenant_id, NULL, NULL, p.github_full_name,
+                  'legacy', ?, ?, NULL
+           FROM projects p
+           WHERE p.github_full_name IS NOT NULL AND TRIM(p.github_full_name) <> ''
+             AND NOT EXISTS (
+                 SELECT 1 FROM github_repository_bindings b WHERE b.project_id = p.id
+             )""",
+        (now, now),
+    )
+
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_github_installation()
+            RETURNS trigger AS $$
+            BEGIN
+                IF TG_OP = 'UPDATE' AND (
+                    OLD.installation_id IS DISTINCT FROM NEW.installation_id OR
+                    OLD.tenant_id IS DISTINCT FROM NEW.tenant_id
+                ) THEN
+                    RAISE EXCEPTION 'GitHub installation identity is immutable';
+                END IF;
+                IF TG_OP = 'UPDATE' AND OLD.state = 'revoked'
+                   AND NEW.state <> 'revoked' THEN
+                    RAISE EXCEPTION 'GitHub installation is revoked';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_github_binding()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM projects p
+                    WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+                ) OR (
+                    NEW.state = 'active' AND (
+                        NEW.installation_id IS NULL OR NEW.repository_id IS NULL
+                    )
+                ) OR (
+                    NEW.installation_id IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM github_installations i
+                        WHERE i.installation_id = NEW.installation_id
+                          AND i.tenant_id = NEW.tenant_id
+                    )
+                ) THEN
+                    RAISE EXCEPTION 'GitHub repository tenant mismatch';
+                END IF;
+                IF TG_OP = 'UPDATE' AND (
+                    OLD.project_id IS DISTINCT FROM NEW.project_id OR
+                    OLD.tenant_id IS DISTINCT FROM NEW.tenant_id OR
+                    OLD.repository_full_name IS DISTINCT FROM NEW.repository_full_name OR
+                    (
+                        OLD.state <> 'legacy' AND (
+                            OLD.installation_id IS DISTINCT FROM NEW.installation_id OR
+                            OLD.repository_id IS DISTINCT FROM NEW.repository_id
+                        )
+                    ) OR
+                    (OLD.state = 'revoked' AND NEW.state <> 'revoked')
+                ) THEN
+                    RAISE EXCEPTION 'GitHub repository mapping is immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_validate_scan_github_binding()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NEW.github_installation_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM github_repository_bindings b
+                    WHERE b.project_id = NEW.project_id
+                      AND b.tenant_id = NEW.tenant_id
+                      AND b.installation_id = NEW.github_installation_id
+                      AND b.state = 'active'
+                ) THEN
+                    RAISE EXCEPTION 'GitHub scan installation is not tenant-bound';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        for table, trigger in (
+            ("github_installations", "github_installations_immutable"),
+            ("github_repository_bindings", "github_repository_bindings_guard"),
+        ):
+            cursor.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
+        cursor.execute("""
+            CREATE TRIGGER github_installations_immutable
+            BEFORE UPDATE OF installation_id, tenant_id, state ON github_installations
+            FOR EACH ROW EXECUTE FUNCTION aegis_validate_github_installation()
+        """)
+        cursor.execute("""
+            CREATE TRIGGER github_repository_bindings_guard
+            BEFORE INSERT OR UPDATE ON github_repository_bindings
+            FOR EACH ROW EXECUTE FUNCTION aegis_validate_github_binding()
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS scan_runs_github_guard ON scan_runs")
+        cursor.execute("""
+            CREATE TRIGGER scan_runs_github_guard
+            BEFORE INSERT OR UPDATE OF project_id, tenant_id, github_installation_id
+            ON scan_runs FOR EACH ROW
+            EXECUTE FUNCTION aegis_validate_scan_github_binding()
+        """)
+    else:
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS github_installations_immutable
+            BEFORE UPDATE OF installation_id, tenant_id ON github_installations
+            WHEN OLD.installation_id IS NOT NEW.installation_id
+              OR OLD.tenant_id IS NOT NEW.tenant_id
+            BEGIN SELECT RAISE(ABORT, 'GitHub installation identity is immutable'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS github_installations_no_resurrection
+            BEFORE UPDATE OF state ON github_installations
+            WHEN OLD.state = 'revoked' AND NEW.state <> 'revoked'
+            BEGIN SELECT RAISE(ABORT, 'GitHub installation is revoked'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS github_repository_bindings_guard
+            BEFORE INSERT ON github_repository_bindings
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p
+                WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+            ) OR (
+                NEW.state = 'active' AND (
+                    NEW.installation_id IS NULL OR NEW.repository_id IS NULL
+                )
+            ) OR (
+                NEW.installation_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM github_installations i
+                    WHERE i.installation_id = NEW.installation_id
+                      AND i.tenant_id = NEW.tenant_id
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'GitHub repository tenant mismatch'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS github_repository_bindings_update_guard
+            BEFORE UPDATE OF project_id, tenant_id, installation_id,
+                repository_id, repository_full_name, state
+            ON github_repository_bindings
+            WHEN NOT EXISTS (
+                SELECT 1 FROM projects p
+                WHERE p.id = NEW.project_id AND p.tenant_id = NEW.tenant_id
+            ) OR (
+                NEW.state = 'active' AND (
+                    NEW.installation_id IS NULL OR NEW.repository_id IS NULL
+                )
+            ) OR (
+                NEW.installation_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM github_installations i
+                    WHERE i.installation_id = NEW.installation_id
+                      AND i.tenant_id = NEW.tenant_id
+                )
+            ) OR OLD.project_id IS NOT NEW.project_id
+              OR OLD.tenant_id IS NOT NEW.tenant_id
+              OR OLD.repository_full_name IS NOT NEW.repository_full_name
+              OR (
+                  OLD.state <> 'legacy' AND (
+                      OLD.installation_id IS NOT NEW.installation_id
+                      OR OLD.repository_id IS NOT NEW.repository_id
+                  )
+              ) OR (OLD.state = 'revoked' AND NEW.state <> 'revoked')
+            BEGIN SELECT RAISE(ABORT, 'GitHub repository mapping is immutable'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS scan_runs_github_guard
+            BEFORE INSERT ON scan_runs
+            WHEN NEW.github_installation_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM github_repository_bindings b
+                WHERE b.project_id = NEW.project_id
+                  AND b.tenant_id = NEW.tenant_id
+                  AND b.installation_id = NEW.github_installation_id
+                  AND b.state = 'active'
+            )
+            BEGIN SELECT RAISE(ABORT, 'GitHub scan installation is not tenant-bound'); END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS scan_runs_github_update_guard
+            BEFORE UPDATE OF project_id, tenant_id, github_installation_id ON scan_runs
+            WHEN NEW.github_installation_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM github_repository_bindings b
+                WHERE b.project_id = NEW.project_id
+                  AND b.tenant_id = NEW.tenant_id
+                  AND b.installation_id = NEW.github_installation_id
+                  AND b.state = 'active'
+            )
+            BEGIN SELECT RAISE(ABORT, 'GitHub scan installation is not tenant-bound'); END
+        """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -951,6 +1251,8 @@ MIGRATIONS = (
     Migration(15, "external_artifact_metadata", _migration_015_external_artifact_metadata),
     Migration(16, "findings_policy_tenant_guards", _migration_016_findings_policy_tenant_guards),
     Migration(17, "oidc_identity", _migration_017_oidc_identity),
+    Migration(18, "oidc_transaction_boundary", _migration_018_oidc_transaction_boundary),
+    Migration(19, "github_tenant_credential_lifecycle", _migration_019_github_tenant_credential_lifecycle),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

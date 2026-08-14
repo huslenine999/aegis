@@ -19,6 +19,15 @@ deletion, integration revocation, backup-expiry confirmation, and an audit event
 Cryptographic erasure requires customer-specific external storage keys, which
 are not implemented by the local artifact backend.
 
+Evidence handling uses a signed `scan-manifest.json` to bind the admitted source
+descriptor, policy/tool state, and artifact hashes. Artifact metadata and object
+keys must remain derived from the tenant, project, scan run, and validated
+artifact name; a storage key supplied by an untrusted caller must never be
+trusted as a namespace decision. Keep the signed manifest, artifact-integrity
+checks, and audit-chain record together through retention and deletion. The
+release gate currently has a follow-up item for direct database writes to S3
+artifact metadata; this is not evidence that the namespace check is complete.
+
 The production subprocessor register must name the hosting provider, GitHub,
 email or notification providers, monitoring/SIEM provider, support systems,
 locations, purpose, data categories, and contractual transfer mechanism. Do not

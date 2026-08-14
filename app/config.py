@@ -1,15 +1,19 @@
 import os
 import ipaddress
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import yaml  # type: ignore[import-untyped]
 from cryptography.fernet import Fernet
 
+from .resource_budgets import read_bounded_text
+from .resource_budgets import ResourceLimitError, resource_budgets
+
 
 CONFIG_FILENAMES = ("aegis.yml", "aegis.yaml", ".aegis.yml", ".aegis.yaml")
 TRUE_VALUES = {"1", "true", "yes", "on"}
+ConfigTrustLevel = Literal["trusted", "advisory"]
 
 
 def validate_server_bind(host: str, *, auth_required: bool) -> str:
@@ -42,19 +46,58 @@ def find_config(start_path: str | Path) -> Path | None:
     return None
 
 
-def load_config(start_path: str | Path, explicit_path: str | Path | None = None) -> dict[str, Any]:
-    config_path = Path(explicit_path).expanduser().resolve() if explicit_path else find_config(start_path)
+def _read_config(config_path: Path) -> dict[str, Any]:
+    if config_path.is_symlink():
+        raise ValueError(f"Aegis config may not be a symbolic link: {config_path}")
     if not config_path or not config_path.exists():
         return {}
 
     try:
-        data = yaml.safe_load(config_path.read_text()) or {}
+        data = yaml.safe_load(read_bounded_text(config_path)) or {}
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid Aegis YAML config {config_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Aegis config must be a mapping: {config_path}")
     data["_config_path"] = str(config_path)
     return data
+
+
+def load_config(
+    start_path: str | Path,
+    explicit_path: str | Path | None = None,
+    *,
+    trust_level: ConfigTrustLevel = "trusted",
+) -> dict[str, Any]:
+    """Load only operator-selected config as trusted configuration.
+
+    A target-local config is never trusted implicitly. Its explicit ``advisory``
+    section is available through :func:`load_advisory_config` instead.
+    """
+    if trust_level not in {"trusted", "advisory"}:
+        raise ValueError(f"Unsupported config trust level: {trust_level}")
+    if explicit_path is None:
+        if trust_level == "trusted":
+            return {}
+        config_path = find_config(start_path)
+    else:
+        config_path = Path(explicit_path).expanduser()
+    if config_path is None:
+        return {}
+    config_path = config_path.absolute()
+    data = _read_config(config_path)
+    if trust_level == "trusted":
+        return data
+    advisory = data.get("advisory", {})
+    if advisory is None:
+        advisory = {}
+    if not isinstance(advisory, dict):
+        raise ValueError(f"Aegis advisory config must be a mapping: {config_path}")
+    return {"_config_path": str(config_path), "advisory": advisory}
+
+
+def load_advisory_config(start_path: str | Path) -> dict[str, Any]:
+    """Load the non-authoritative advisory section from a target-local config."""
+    return load_config(start_path, trust_level="advisory")
 
 
 def config_bool(config: dict[str, Any], key: str, default: bool = False) -> bool:
@@ -125,6 +168,10 @@ def validate_runtime_configuration() -> None:
             "implemented. Use the standard single-tenant profile or supply those adapters "
             "before representing this service as bank-grade."
         )
+    try:
+        resource_budgets()
+    except ResourceLimitError as exc:
+        raise RuntimeError(str(exc)) from exc
     if environment != "production":
         return
 
@@ -143,6 +190,14 @@ def validate_runtime_configuration() -> None:
         environment_positive_int("AEGIS_RECENT_AUTH_SECONDS", 600)
         environment_positive_int("AEGIS_SANDBOX_MAX_FILES", 100000)
         environment_positive_int("AEGIS_SANDBOX_MAX_CONTEXT_BYTES", 2 * 1024 * 1024 * 1024)
+        environment_positive_int("AEGIS_AGGREGATE_RATE_LIMIT_PER_MINUTE", 240)
+        environment_positive_int("AEGIS_MAX_ARTIFACT_BYTES", 16 * 1024 * 1024)
+        environment_positive_int(
+            "AEGIS_MAX_TOTAL_ARTIFACT_BYTES", 64 * 1024 * 1024
+        )
+        environment_positive_int(
+            "AEGIS_MAX_REPORT_BUNDLE_BYTES", 64 * 1024 * 1024
+        )
     except RuntimeError as exc:
         errors.append(str(exc))
     admin_token = os.environ.get("AEGIS_ADMIN_TOKEN", "")

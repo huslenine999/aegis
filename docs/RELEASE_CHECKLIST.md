@@ -62,3 +62,33 @@ service restart, then removes only its temporary containers and volumes.
     independent reviewer, then verify the GHCR digest-bound attestation.
 22. Review every suppression: require an owner, ticket, future expiry, and
     CODEOWNER approval; reject releases with expired or invalid exceptions.
+
+## Phase 6 release-gate evidence
+
+The 2026-08-14 gate was executed against the current Phase 0–5 working tree.
+It is not an approval to tag or publish yet:
+
+- SQLite migrations 1–19 passed, including an idempotent rerun.
+- PostgreSQL migrations 1–19 passed in the pinned PostgreSQL 17.5 image,
+  including an idempotent rerun.
+- The targeted security regressions passed: 66 tests.
+- Full unit tests passed: 286 passed, 2 skipped; configured security-boundary
+  coverage was 82.32% against the 80% gate.
+- Ruff, mypy, compile, whitespace, lock resolution, npm audit, scanner
+  benchmark, and browser E2E passed. E2E completed 7 tests.
+- The isolated Compose scan lifecycle and PostgreSQL backup/restore functions
+  passed. The stock pilot rehearsal's full stack start hit a host Docker
+  network-CIDR collision, and the recovery pytest wrapper requires the
+  temporary Compose environment; record those as harness evidence, not clean
+  stock-rehearsal results.
+- The fresh standard Codex Security scan is indexed at scan
+  `af4a0e33-d9ad-4906-a803-b8381ce88af6` with three findings: two medium and
+  one low. The report is incomplete until those findings are remediated or
+  formally accepted.
+- Python dependency auditing reported three advisories for transitive
+  `mcp==1.23.3` through Semgrep; use a fixed `mcp` release before publishing.
+
+Do not tag a release while the scan findings, dependency advisories, or any
+deferred artifact-storage namespace review remain open. Re-run this gate after
+the fixes and record the new scan ID, lockfile digest, dependency audit, and
+Compose evidence here.

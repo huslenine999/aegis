@@ -238,8 +238,8 @@ def test_run_iac_scan_accepts_checkov_findings_on_exit_one_and_writes_owned_repo
 
     monkeypatch.setattr(iac_scanner, "find_runtime_executable", lambda *args: "/bin/checkov")
     monkeypatch.setattr(
-        iac_scanner.subprocess,
-        "run",
+        iac_scanner,
+        "_run_checkov_command",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0],
             1,
@@ -282,7 +282,7 @@ def test_run_iac_scan_ignores_repository_checkov_config(tmp_path, monkeypatch):
         observed.update(command=command, **kwargs)
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"results": {}}), stderr="")
 
-    monkeypatch.setattr(iac_scanner.subprocess, "run", fake_run)
+    monkeypatch.setattr(iac_scanner, "_run_checkov_command", fake_run)
     execution = iac_scanner.run_iac_scan(target, timeout=5)
 
     assert execution.status == "completed"
@@ -302,8 +302,8 @@ def test_run_iac_scan_missing_timeout_and_crash_are_failures(tmp_path, monkeypat
 
     monkeypatch.setattr(iac_scanner, "find_runtime_executable", lambda *args: "/bin/checkov")
     monkeypatch.setattr(
-        iac_scanner.subprocess,
-        "run",
+        iac_scanner,
+        "_run_checkov_command",
         lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(args[0], 1)),
     )
     timed_out = iac_scanner.run_iac_scan(target, timeout=1)
@@ -311,8 +311,8 @@ def test_run_iac_scan_missing_timeout_and_crash_are_failures(tmp_path, monkeypat
     assert "timed out" in str(timed_out.detail).lower()
 
     monkeypatch.setattr(
-        iac_scanner.subprocess,
-        "run",
+        iac_scanner,
+        "_run_checkov_command",
         lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 2, stdout="{}", stderr="crashed"),
     )
     crashed = iac_scanner.run_iac_scan(target)
@@ -324,8 +324,8 @@ def test_run_iac_scan_rejects_malformed_json_and_invalid_timeout(tmp_path, monke
     target = FIXTURES / "clean"
     monkeypatch.setattr(iac_scanner, "find_runtime_executable", lambda *args: "/bin/checkov")
     monkeypatch.setattr(
-        iac_scanner.subprocess,
-        "run",
+        iac_scanner,
+        "_run_checkov_command",
         lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="not-json", stderr=""),
     )
     malformed = iac_scanner.run_iac_scan(target)
@@ -333,8 +333,8 @@ def test_run_iac_scan_rejects_malformed_json_and_invalid_timeout(tmp_path, monke
     assert "malformed" in str(malformed.detail).lower()
 
     monkeypatch.setattr(
-        iac_scanner.subprocess,
-        "run",
+        iac_scanner,
+        "_run_checkov_command",
         lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="{}", stderr=""),
     )
     malformed_envelope = iac_scanner.run_iac_scan(target)

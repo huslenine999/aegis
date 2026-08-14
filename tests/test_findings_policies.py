@@ -6,7 +6,7 @@ import sys
 import pytest
 from cryptography.fernet import Fernet
 
-from app import artifact_storage, database, findings, oidc, policies, projects
+from app import artifact_storage, database, findings, oidc, policies, projects, reporting
 
 
 def configure_database(tmp_path, monkeypatch):
@@ -215,8 +215,21 @@ def test_oidc_pkce_state_and_verified_identity_provisioning(tmp_path, monkeypatc
         def json(self):
             return self.payload
 
-    monkeypatch.setattr(oidc.requests, "get", lambda *args, **kwargs: Response(metadata))
-    authorization_url = oidc.begin_oidc("https://aegis.example/callback", "/projects")
+    def fake_get(url, **kwargs):
+        del kwargs
+        return Response(
+            {"keys": [{"kid": "key-1", "kty": "RSA"}]}
+            if url.endswith("/keys")
+            else metadata
+        )
+
+    monkeypatch.setattr(oidc.requests, "get", fake_get)
+    browser_binding = oidc.new_browser_binding()
+    authorization_url = oidc.begin_oidc(
+        "https://aegis.example/callback",
+        "/projects",
+        browser_binding=browser_binding,
+    )
     query = parse_qs(urlparse(authorization_url).query)
     assert query["code_challenge_method"] == ["S256"]
     assert query["nonce"]
@@ -228,12 +241,19 @@ def test_oidc_pkce_state_and_verified_identity_provisioning(tmp_path, monkeypatc
     )
     decoded = {}
 
-    class PyJWKClient:
-        def __init__(self, uri):
-            assert uri == metadata["jwks_uri"]
+    class KeySet:
+        def __getitem__(self, key_id):
+            assert key_id == "key-1"
+            return SimpleNamespace(algorithm_name="RS256", key="public-key")
 
-        def get_signing_key_from_jwt(self, token):
-            return SimpleNamespace(key="public-key")
+        def __iter__(self):
+            return iter([self["key-1"]])
+
+    class PyJWKSet:
+        @staticmethod
+        def from_dict(payload):
+            assert payload["keys"]
+            return KeySet()
 
     def decode(token, key, **kwargs):
         decoded.update(kwargs)
@@ -246,10 +266,17 @@ def test_oidc_pkce_state_and_verified_identity_provisioning(tmp_path, monkeypatc
     monkeypatch.setitem(
         sys.modules,
         "jwt",
-        SimpleNamespace(PyJWKClient=PyJWKClient, decode=decode),
+        SimpleNamespace(
+            PyJWKSet=PyJWKSet,
+            get_unverified_header=lambda token: {"alg": "RS256", "kid": "key-1"},
+            decode=decode,
+        ),
     )
     principal, return_to = oidc.complete_oidc(
-        "code", query["state"][0], "https://aegis.example/callback"
+        "code",
+        query["state"][0],
+        "https://aegis.example/callback",
+        browser_binding=browser_binding,
     )
 
     assert principal.username == "employee@example.com"
@@ -258,3 +285,45 @@ def test_oidc_pkce_state_and_verified_identity_provisioning(tmp_path, monkeypatc
     assert decoded["issuer"] == "https://identity.example"
     assert decoded["audience"] == "aegis-client"
     assert decoded["algorithms"] == ["RS256"]
+
+
+def test_oidc_rejects_unknown_state_before_discovery_io(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setattr(oidc, "get_connection", database.get_connection)
+    monkeypatch.setattr(oidc, "USING_POSTGRES", False)
+    monkeypatch.setenv("AEGIS_OIDC_ISSUER", "https://identity.example")
+    monkeypatch.setenv("AEGIS_OIDC_CLIENT_ID", "aegis-client")
+
+    def unexpected_discovery(*args, **kwargs):
+        raise AssertionError("OIDC discovery must not run for an invalid state")
+
+    monkeypatch.setattr(oidc.requests, "get", unexpected_discovery)
+
+    with pytest.raises(ValueError, match="invalid or expired"):
+        oidc.complete_oidc("code", "unknown-state", "https://aegis.example/callback")
+
+
+def test_artifact_limits_reject_oversized_files_and_bundles(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_MAX_ARTIFACT_BYTES", "8")
+    monkeypatch.setenv("AEGIS_MAX_TOTAL_ARTIFACT_BYTES", "12")
+    monkeypatch.setenv("AEGIS_MAX_REPORT_BUNDLE_BYTES", "64")
+    oversized = tmp_path / "report.html"
+    oversized.write_text("123456789")
+
+    with pytest.raises(artifact_storage.ArtifactLimitError, match="per-artifact"):
+        artifact_storage.publish_artifacts(
+            tmp_path,
+            {"report.html"},
+            tenant_id=1,
+            project_id=2,
+            job_id="job-1",
+        )
+
+    with pytest.raises(artifact_storage.ArtifactLimitError, match="total"):
+        artifact_storage.validate_artifact_sizes(
+            [("one", 7), ("two", 6)]
+        )
+
+    monkeypatch.setenv("AEGIS_MAX_REPORT_BUNDLE_BYTES", "1")
+    with pytest.raises(artifact_storage.ArtifactLimitError, match="Report bundle"):
+        reporting.build_report_bundle_from_artifacts({"report.html": b"ok"})

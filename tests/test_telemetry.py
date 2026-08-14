@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
@@ -117,6 +118,20 @@ def test_job_sandbox_lookup_does_not_fall_back_to_global_container(monkeypatch):
         == "aegis-sandbox-container-authorized"
     )
     assert app_main._job_sandbox_container("other") is None
+
+
+def test_metrics_use_route_templates_and_one_unmatched_bucket():
+    route = type("Route", (), {"path": "/api/projects/{project_id}"})()
+    assert observability._metric_route({"path": "/api/projects/1", "route": route}) == "/api/projects/{project_id}"
+    assert observability._metric_route({"path": "/attacker/one"}) == "/unmatched"
+    assert observability._metric_route({"path": "/attacker/two"}) == "/unmatched"
+
+    observability._requests = defaultdict(int)
+    observability._latency_sum = defaultdict(float)
+    observability._latency_count = defaultdict(int)
+    observability._latency_buckets = defaultdict(int)
+
+    assert observability.render_metrics().count('path="/unmatched"') == 0
 
 
 def test_operational_metrics_are_shared_and_exposed(monkeypatch):

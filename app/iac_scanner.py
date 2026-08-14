@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -21,6 +22,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import yaml  # type: ignore[import-untyped]
 
 from .scanners import DEFAULT_IGNORED_DIRS, find_runtime_executable, scanner_subprocess_environment
+from .resource_budgets import ResourceLimitError, read_bounded_text, resource_budgets, run_bounded_subprocess
 
 
 TOOL_NAME = "IaC"
@@ -109,9 +111,13 @@ def _relative_path(path: Path, root: Path) -> str:
 def _yaml_documents(path: Path) -> tuple[Any, ...]:
     try:
         if path.suffix.lower() in {".json", ".template"} or path.name.lower().endswith(".json"):
-            value = json.loads(path.read_text(errors="replace"))
+            value = json.loads(read_bounded_text(path, errors="replace"))
             return (value,)
-        return tuple(document for document in yaml.safe_load_all(path.read_text(errors="replace")) if document is not None)
+        return tuple(
+            document
+            for document in yaml.safe_load_all(read_bounded_text(path, errors="replace"))
+            if document is not None
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError):
         return ()
 
@@ -240,6 +246,29 @@ def parse_checkov_output(output: str | bytes, *, max_bytes: int = MAX_CHECKOV_OU
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise IaCReportError("Checkov produced malformed JSON output.") from exc
+
+
+def _run_checkov_command(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[bytes]:
+    output = BytesIO()
+    completed = run_bounded_subprocess(
+        list(command),
+        cwd=cwd,
+        env=dict(env),
+        stdout_sink=output,
+        timeout=timeout,
+        max_output_bytes=min(
+            MAX_CHECKOV_OUTPUT_BYTES,
+            resource_budgets().max_subprocess_output_bytes,
+        ),
+    )
+    completed.stdout = output.getvalue()
+    return completed
 
 
 def _looks_like_checkov_payload(payload: Any) -> bool:
@@ -643,17 +672,18 @@ def run_iac_scan(
             )
             _emit(log, f"[IaC] Running Checkov across {', '.join(frameworks)}.", "muted")
             try:
-                completed = subprocess.run(
-                    list(command),
+                completed = _run_checkov_command(
+                    command,
                     cwd=temporary_root,
                     env=environment,
-                    capture_output=True,
-                    text=True,
-                    check=False,
                     timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
                 detail = f"Checkov timed out after {timeout}s."
+                _emit(log, f"[IaC Error] {detail}", "error")
+                return finish(IaCExecution("failed", _failure_report(detail), detail=detail))
+            except ResourceLimitError as exc:
+                detail = str(exc)
                 _emit(log, f"[IaC Error] {detail}", "error")
                 return finish(IaCExecution("failed", _failure_report(detail), detail=detail))
             except (OSError, subprocess.SubprocessError) as exc:
@@ -662,7 +692,7 @@ def run_iac_scan(
                 return finish(IaCExecution("failed", _failure_report(detail), detail=detail))
 
             try:
-                payload = parse_checkov_output(completed.stdout)
+                payload = parse_checkov_output(completed.stdout or b"")
                 if not _looks_like_checkov_payload(payload):
                     raise IaCReportError("Checkov produced a malformed report envelope.")
             except IaCReportError as exc:

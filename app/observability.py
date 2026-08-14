@@ -19,6 +19,9 @@ _latency_buckets: defaultdict[tuple[str, str, float], int] = defaultdict(int)
 _recent_requests: deque[dict[str, Any]] = deque(maxlen=500)
 _active_requests = 0
 LATENCY_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+_KNOWN_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"}
+)
 _SHARED_METRICS_KEY = "aegis:metrics"
 _OPERATIONAL_METRICS = {
     "aegis_scan_queue_age_seconds": (
@@ -45,6 +48,23 @@ _OPERATIONAL_METRICS = {
 _operational_metrics: dict[str, float] = {
     name: 0.0 for name in _OPERATIONAL_METRICS
 }
+
+
+def _metric_route(scope: dict) -> str:
+    """Return a bounded route label instead of recording attacker-controlled paths."""
+    route = scope.get("route")
+    route_path = getattr(route, "path", None)
+    if isinstance(route_path, str) and route_path:
+        return route_path
+    path = str(scope.get("path", ""))
+    if path == "/static" or path.startswith("/static/"):
+        return "/static"
+    return "/unmatched"
+
+
+def _metric_method(method: object) -> str:
+    normalized = str(method or "GET").upper()
+    return normalized if normalized in _KNOWN_METHODS else "OTHER"
 
 
 def _shared_redis():
@@ -174,8 +194,8 @@ class ObservabilityMiddleware:
             await self.app(scope, receive, observed_send)
         finally:
             elapsed = time.perf_counter() - started
-            path = scope.get("path", "unknown")
-            method = scope.get("method", "GET")
+            path = _metric_route(scope)
+            method = _metric_method(scope.get("method", "GET"))
             status_class = f"{status // 100}xx"
             with _lock:
                 _requests[(method, path, status_class)] += 1

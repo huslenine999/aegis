@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
+from .resource_budgets import load_bounded_json, read_bounded_text, run_bounded_subprocess
 
 
 logger = logging.getLogger("aegis.sandbox")
@@ -42,12 +43,15 @@ def validate_untrusted_tree(
     total_bytes = 0
     for root, directories, filenames in os.walk(target, followlinks=False):
         root_path = Path(root)
-        if ignored_names:
-            directories[:] = [name for name in directories if name not in ignored_names]
         for name in directories:
             child = root_path / name
-            if child.is_symlink():
+            metadata = child.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
                 raise RuntimeError("Scan targets may not contain symbolic links.")
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise RuntimeError("Scan targets may contain only regular directories.")
+        if ignored_names:
+            directories[:] = [name for name in directories if name not in ignored_names]
         for name in filenames:
             child = root_path / name
             metadata = child.lstat()
@@ -66,7 +70,7 @@ def validate_untrusted_tree(
 
 def copy_sandbox_requirements(source: Path, destination: Path) -> None:
     """Copy registry requirements while rejecting pip directives and remote/local URLs."""
-    content = source.read_text()
+    content = read_bounded_text(source)
     for line_number, line in enumerate(content.splitlines(), start=1):
         requirement = line.split("#", 1)[0].strip()
         if not requirement:
@@ -108,7 +112,7 @@ def detect_port_from_file(filepath: Path) -> int:
     Scans a python file to detect the port Flask runs on, defaulting to 5001.
     """
     try:
-        content = filepath.read_text(errors="ignore")
+        content = read_bounded_text(filepath, errors="ignore")
         match = re.search(r'port\s*=\s*(\d+)', content)
         if match:
             return int(match.group(1))
@@ -206,11 +210,9 @@ def build_sandbox_image(temp_dir: Path, image_tag: str) -> bool:
     Executes docker build on the context.
     """
     try:
-        res = subprocess.run(
+        res = run_bounded_subprocess(
             ["docker", "build", "-t", image_tag, "."],
             cwd=str(temp_dir),
-            capture_output=True,
-            check=False,
             timeout=SANDBOX_COMMAND_TIMEOUT,
         )
         return res.returncode == 0
@@ -302,17 +304,15 @@ def run_trivy_scan(image_tag: str, output_path: Path) -> List[Dict[str, Any]]:
     if not is_trivy_available():
         raise RuntimeError("Trivy executable is unavailable")
     try:
-        completed = subprocess.run([
+        completed = run_bounded_subprocess([
             "trivy", "image", "--format", "json",
             "--output", str(output_path), image_tag
-        ], capture_output=True, check=False, timeout=SANDBOX_COMMAND_TIMEOUT)
+        ], timeout=SANDBOX_COMMAND_TIMEOUT)
         if completed.returncode != 0:
-            raise RuntimeError(
-                f"Trivy exited with code {completed.returncode}: {completed.stderr.decode(errors='ignore')[-500:] if isinstance(completed.stderr, bytes) else str(completed.stderr)[-500:]}"
-            )
+            raise RuntimeError(f"Trivy exited with code {completed.returncode}.")
         if not output_path.exists():
             raise RuntimeError("Trivy did not produce a report")
-        report = json.loads(output_path.read_text())
+        report = load_bounded_json(output_path)
         if not isinstance(report, dict) or not isinstance(report.get("Results", []), list):
             raise RuntimeError("Trivy produced an invalid report")
         return report.get("Results", [])

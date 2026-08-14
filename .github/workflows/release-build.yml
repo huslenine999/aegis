@@ -76,6 +76,7 @@ jobs:
             --cov=app.scan_engine \
             --cov=app.security_middleware \
             --cov=app.iac_scanner \
+            --cov=app.github_lifecycle \
             --cov-report=term-missing
 
       - name: Run scanner behavior benchmark

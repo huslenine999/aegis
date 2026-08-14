@@ -199,8 +199,16 @@ for any release decision.
 
 ## Project configuration
 
-Aegis discovers `aegis.yml`, `aegis.yaml`, `.aegis.yml`, or `.aegis.yaml` from
-the scan target upward. Command-line options override file configuration.
+Aegis accepts `aegis.yml`, `aegis.yaml`, `.aegis.yml`, or `.aegis.yaml` as a
+trusted configuration only when an operator selects it explicitly with
+`--config` (the GitHub Action supplies its reviewed bundled configuration).
+Target-local configuration discovered automatically is advisory-only and
+cannot change scan execution, policy thresholds, suppressions, or output paths.
+Command-line options override an explicitly selected configuration.
+
+```sh
+aegis scan . --config ./aegis.yml
+```
 
 ```yaml
 scan:
@@ -224,6 +232,12 @@ A suppression is active only when it includes a meaningful reason, approver,
 tracking ticket, and future ISO-8601 expiry. Applied, invalid, and expired
 exceptions are written to `suppressions-report.json`; malformed exceptions never
 hide findings.
+
+Each completed scan also writes `source-descriptor.json` and a schema-3,
+source-bound `scan-manifest.json`. The descriptor records the admitted regular
+files and their content digests; scanners run against a stable copy so later
+checkout changes cannot alter the evidence. Older schema-2 manifests remain
+verifiable but are reported as `legacy-source-unbound` evidence.
 
 ## GitHub Action
 

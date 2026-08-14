@@ -78,6 +78,11 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   `AEGIS_EVIDENCE_SIGNING_KEY`. Keep the private seed on workers only and pin
   the public key used by `aegis verify-evidence` in the customer's trust
   documentation.
+- When enabling OIDC, keep discovery, token, authorization, and JWKS endpoints
+  on the issuer origin where possible. If the reviewed provider uses separate
+  origins, list only their exact HTTPS origins in
+  `AEGIS_OIDC_ALLOWED_ORIGINS` (comma-separated); Aegis rejects private,
+  cleartext, redirecting, and unapproved endpoint URLs.
 - Configure `AEGIS_GITHUB_WEBHOOK_SECRET` with at least 32 random characters.
   Set `AEGIS_PUBLIC_URL`, `AEGIS_GITHUB_APP_ID`, and the base64-encoded
   `AEGIS_GITHUB_APP_PRIVATE_KEY_B64` to enable exact-head pull-request checks.
@@ -89,6 +94,24 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - OSV is the default dependency advisory source. Safety CLI is optional because
   commercial use requires an appropriate Safety plan: enable it only with
   `AEGIS_ENABLE_SAFETY=true` and a licensed `SAFETY_API_KEY` on the worker.
+- Keep the resource budgets explicit and size them against the largest approved
+  scan: `AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES` bounds scanner pipes,
+  `AEGIS_MAX_PARSER_INPUT_BYTES` bounds JSON and manifest parsing,
+  `AEGIS_MAX_RESPONSE_BYTES` bounds streamed downloads,
+  `AEGIS_MAX_ZIP_ENTRIES` and `AEGIS_MAX_ZIP_UNCOMPRESSED_BYTES` bound report
+  bundles, and `AEGIS_STREAM_CHUNK_BYTES` controls bounded read chunks. Do not
+  remove these limits to accommodate a single unusually large repository; raise
+  them deliberately and review the resulting disk, memory, and bandwidth
+  exposure.
+- Before a release, enumerate `auth_tokens` and revoke/reissue any row from a
+  legacy unsalted-hash format. `AEGIS_TOKEN_PEPPER` rotation does not invalidate
+  a legacy verifier that still accepts raw SHA-256. Do not approve a release
+  until every scanner that writes `--output`, `-o`, or `--save-as` is bounded at
+  the file-write boundary, not only when its report is later parsed.
+- Notification webhook validation must reject every resolved address for which
+  `ipaddress.ip_address(address).is_global` is false. HTTPS, TLS hostname
+  validation, DNS pinning, and redirect denial are necessary but are not a
+  substitute for the global-address check.
 
 ## Scanner runtime
 
@@ -182,3 +205,13 @@ python scripts/pilot_readiness.py --docker-smoke \
   after the dashboard is restarted.
 - `AEGIS_ENCRYPTION_KEY`: create new GitHub/notification connections after
   rotation unless you have migrated existing encrypted values offline.
+
+For GitHub offboarding, disconnect each affected OAuth account, disable the
+affected user, and remove or suspend the GitHub App installation. These actions
+revoke stored OAuth capabilities, active installation mappings, and queued work
+that has not yet passed its worker authorization recheck.
+
+For complete offboarding, also revoke every API token for the user, verify that
+no legacy token-hash row remains active, delete or expire tenant artifacts under
+the approved retention policy, and preserve the signed evidence and audit-chain
+records required by the incident and deletion runbooks.

@@ -12,16 +12,19 @@ import hashlib
 import uuid
 import secrets
 import shutil
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile
 from werkzeug.utils import secure_filename
 
@@ -111,6 +114,11 @@ from .github_integration import (
     mark_webhook_delivery,
     verify_and_record_webhook,
 )
+from .github_lifecycle import (
+    GitHubLifecycleError,
+    resolve_github_webhook_binding,
+    revoke_github_capabilities,
+)
 from .findings import get_finding, list_findings, update_finding
 from .policies import (
     active_policy,
@@ -121,7 +129,14 @@ from .policies import (
     normalize_definition,
     simulate_policy,
 )
-from .oidc import begin_oidc, complete_oidc, oidc_enabled
+from .oidc import (
+    OIDC_BINDING_COOKIE,
+    OIDC_TRANSACTION_TTL_SECONDS,
+    begin_oidc,
+    complete_oidc,
+    new_browser_binding,
+    oidc_enabled,
+)
 from .notifications import CHANNEL_TYPES, create_channel, delete_channel, list_channels, queue_test_channel
 from .audit import list_audit_events, record_audit, verify_audit_chain
 from policy_engine import analyze_report_set, evaluate_policy_results, get_ruff_severity
@@ -132,14 +147,25 @@ from .sandbox import (
     is_docker_available,
 )
 from .reporting import (
-    build_report_bundle,
-    build_report_bundle_from_artifacts,
+    ReportSource,
     calculate_exploitability_score,
     generate_fallback_tree as generate_project_fallback_tree,
     load_json_report,
     load_dependency_tree,
 )
-from .artifact_storage import S3ArtifactStore, project_directory, run_directory
+from .artifact_storage import (
+    ArtifactLimitError,
+    S3ArtifactStore,
+    artifact_limits,
+    project_directory,
+    run_directory,
+    validate_artifact_sizes,
+)
+from .resource_budgets import (
+    ResourceLimitError,
+    iter_file_bytes,
+    resource_budgets,
+)
 from .health_routes import router as health_router
 from .scan_engine import ScanJobPayload
 from .version import get_package_version
@@ -171,6 +197,7 @@ RUN_ARTIFACTS = {
     "zap-report.json": "application/json",
     "iac-report.json": "application/json",
     "sandbox-status.json": "application/json",
+    "source-descriptor.json": "application/json",
     "scan-manifest.json": "application/json",
 }
 
@@ -441,11 +468,26 @@ def _oidc_callback_url(request: Request) -> str:
 
 @router.get("/api/auth/oidc/start")
 def oidc_start(request: Request, return_to: str = "/"):
+    browser_binding = new_browser_binding()
     try:
-        authorization_url = begin_oidc(_oidc_callback_url(request), return_to)
+        authorization_url = begin_oidc(
+            _oidc_callback_url(request),
+            return_to,
+            browser_binding=browser_binding,
+        )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return RedirectResponse(authorization_url, status_code=303)
+    response = RedirectResponse(authorization_url, status_code=303)
+    response.set_cookie(
+        OIDC_BINDING_COOKIE,
+        browser_binding,
+        httponly=True,
+        secure=os.environ.get("AEGIS_ENV", "development").lower() == "production",
+        samesite="lax",
+        max_age=OIDC_TRANSACTION_TTL_SECONDS,
+        path="/",
+    )
+    return response
 
 
 @router.get("/api/auth/oidc/callback", name="oidc_callback")
@@ -454,7 +496,11 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
         raise HTTPException(status_code=400, detail="OIDC callback is incomplete.")
     try:
         principal, return_to = await asyncio.to_thread(
-            complete_oidc, code, state, _oidc_callback_url(request)
+            complete_oidc,
+            code,
+            state,
+            _oidc_callback_url(request),
+            browser_binding=request.cookies.get(OIDC_BINDING_COOKIE, ""),
         )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -462,6 +508,7 @@ async def oidc_callback(request: Request, code: str = "", state: str = ""):
         raise HTTPException(status_code=502, detail="OIDC login failed.") from exc
     record_audit(principal.user_id, "auth.oidc_login_succeeded", "session")
     response = RedirectResponse(return_to, status_code=303)
+    response.delete_cookie(OIDC_BINDING_COOKIE, path="/")
     response.set_cookie(
         SESSION_COOKIE,
         await asyncio.to_thread(create_session, principal),
@@ -946,15 +993,19 @@ def _authorized_scan(project_id: int, run_id: int, principal):
     return run
 
 
-def _file_sha256(path: Path) -> str:
+def _file_sha256(path: Path, *, max_bytes: int) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as artifact:
-        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
-            digest.update(chunk)
+    for chunk in iter_file_bytes(path, max_bytes=max_bytes, chunk_size=1024 * 1024):
+        digest.update(chunk)
     return digest.hexdigest()
 
 
 def _artifact_integrity(metadata: dict, path: Path) -> bool:
+    try:
+        validate_artifact_sizes([(str(metadata.get("name", "artifact")), metadata["size"])])
+        expected_size = int(metadata["size"])
+    except (ArtifactLimitError, KeyError, TypeError, ValueError):
+        return False
     if metadata.get("backend") == "s3":
         key = metadata.get("storage_key")
         return bool(
@@ -964,21 +1015,103 @@ def _artifact_integrity(metadata: dict, path: Path) -> bool:
     return (
         path.is_file()
         and path.stat().st_size == metadata["size"]
-        and _file_sha256(path) == metadata["sha256"]
+        and _file_sha256(path, max_bytes=expected_size) == metadata["sha256"]
     )
 
 
 def _artifact_bytes(metadata: dict, path: Path) -> bytes:
+    try:
+        validate_artifact_sizes([(str(metadata.get("name", "artifact")), metadata["size"])])
+    except (ArtifactLimitError, KeyError, TypeError, ValueError) as exc:
+        record_artifact_integrity_failure()
+        raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
     if not _artifact_integrity(metadata, path):
         record_artifact_integrity_failure()
         raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
     if metadata.get("backend") == "s3":
-        content = S3ArtifactStore().read(metadata["storage_key"])
+        content = S3ArtifactStore().read(
+            metadata["storage_key"], max_bytes=int(metadata["size"])
+        )
         if len(content) != metadata["size"] or hashlib.sha256(content).hexdigest() != metadata["sha256"]:
             record_artifact_integrity_failure()
             raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+        try:
+            validate_artifact_sizes([(str(metadata.get("name", "artifact")), len(content))])
+        except ArtifactLimitError as exc:
+            record_artifact_integrity_failure()
+            raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
         return content
-    return path.read_bytes()
+    content = b"".join(
+        iter_file_bytes(path, max_bytes=int(metadata["size"]), chunk_size=1024 * 1024)
+    )
+    try:
+        validate_artifact_sizes([(str(metadata.get("name", "artifact")), len(content))])
+    except ArtifactLimitError as exc:
+        record_artifact_integrity_failure()
+        raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
+    return content
+
+
+def _stream_file_response(
+    path: Path,
+    *,
+    media_type: str,
+    filename: str,
+    cleanup: bool = False,
+):
+    response_limit = resource_budgets().max_response_bytes
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found.") from exc
+    if size > response_limit:
+        raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
+    background = BackgroundTask(path.unlink, missing_ok=True) if cleanup else None
+    return StreamingResponse(
+        iter_file_bytes(path, max_bytes=response_limit),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=background,
+    )
+
+
+def _stream_bundle_response(
+    artifacts: Mapping[str, ReportSource],
+    *,
+    filename: str,
+):
+    SCANS_DIR.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".aegis-bundle-", suffix=".zip", dir=SCANS_DIR
+    )
+    os.close(descriptor)
+    bundle_path = Path(temporary_name)
+    try:
+        from .reporting import build_report_bundle_to_path
+
+        build_report_bundle_to_path(artifacts, bundle_path)
+        response_limit = min(
+            resource_budgets().max_response_bytes,
+            artifact_limits()["bundle"],
+        )
+        if bundle_path.stat().st_size > response_limit:
+            raise ResourceLimitError(
+                f"Report bundle exceeds the response limit of {response_limit} bytes."
+            )
+    except (ArtifactLimitError, ResourceLimitError, OSError, ValueError) as exc:
+        bundle_path.unlink(missing_ok=True)
+        if isinstance(exc, (ArtifactLimitError, ResourceLimitError)):
+            raise HTTPException(
+                status_code=413,
+                detail="Report bundle exceeds configured resource limits.",
+            ) from exc
+        raise
+    return StreamingResponse(
+        iter_file_bytes(bundle_path, max_bytes=response_limit),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(bundle_path.unlink, missing_ok=True),
+    )
 
 
 @router.get("/api/projects/{project_id}/scans/{run_id}")
@@ -1054,16 +1187,48 @@ def project_scan_artifact(
         recorded = list_scan_artifacts(run_id)
         if not recorded or not any(item["name"] == "report.html" for item in recorded):
             raise HTTPException(status_code=404, detail="Report bundle is unavailable.")
-        stored_artifacts = {}
+        try:
+            validate_artifact_sizes(
+                (str(metadata.get("name", "artifact")), metadata["size"])
+                for metadata in recorded
+            )
+        except (ArtifactLimitError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=413,
+                detail="Report bundle exceeds configured artifact limits.",
+            ) from exc
+        artifact_sources: dict[str, ReportSource] = {}
         for metadata in recorded:
             path = report_dir / metadata["name"]
-            stored_artifacts[metadata["name"]] = _artifact_bytes(metadata, path)
-        return Response(
-            content=build_report_bundle_from_artifacts(stored_artifacts),
-            media_type="application/zip",
-            headers={
-                "Content-Disposition": f'attachment; filename="aegis-{project_id}-{run_id}.zip"'
-            },
+            if metadata.get("backend") == "s3":
+                key = metadata.get("storage_key")
+                store = S3ArtifactStore()
+                if not key or not store.verify(key, metadata["size"], metadata["sha256"]):
+                    record_artifact_integrity_failure()
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Artifact integrity verification failed.",
+                    )
+                storage_key = str(key)
+                def s3_source(
+                    store: S3ArtifactStore = store,
+                    key: str = storage_key,
+                    size: int = int(metadata["size"]),
+                ):
+                    return store.iter_bytes(key, max_bytes=size)
+
+                artifact_sources[metadata["name"]] = s3_source
+            else:
+                if not _artifact_integrity(metadata, path):
+                    record_artifact_integrity_failure()
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Artifact integrity verification failed.",
+                    )
+                artifact_sources[metadata["name"]] = path
+        return _stream_bundle_response(
+            artifact_sources,
+            filename=f"aegis-{project_id}-{run_id}.zip",
         )
     media_type = RUN_ARTIFACTS.get(artifact_name)
     artifact_path = report_dir / artifact_name
@@ -1071,19 +1236,33 @@ def project_scan_artifact(
     if not media_type or not artifact_metadata:
         raise HTTPException(status_code=404, detail="Artifact not found.")
     if artifact_metadata.get("backend") == "s3":
-        return Response(
-            content=_artifact_bytes(artifact_metadata, artifact_path),
+        try:
+            validate_artifact_sizes(
+                [(str(artifact_metadata.get("name", "artifact")), artifact_metadata["size"])]
+            )
+        except (ArtifactLimitError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
+        store = S3ArtifactStore()
+        key = artifact_metadata.get("storage_key")
+        if not key or not store.verify(key, artifact_metadata["size"], artifact_metadata["sha256"]):
+            record_artifact_integrity_failure()
+            raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+        if int(artifact_metadata["size"]) > resource_budgets().max_response_bytes:
+            raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
+        return StreamingResponse(
+            store.iter_bytes(key, max_bytes=int(artifact_metadata["size"])),
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{artifact_name}"'},
         )
     if not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
-    _artifact_bytes(artifact_metadata, artifact_path)
-    return FileResponse(
-        str(artifact_path),
+    if not _artifact_integrity(artifact_metadata, artifact_path):
+        record_artifact_integrity_failure()
+        raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
+    return _stream_file_response(
+        artifact_path,
         media_type=media_type,
         filename=artifact_name,
-        content_disposition_type="attachment",
     )
 
 
@@ -1428,20 +1607,39 @@ async def github_webhook(request: Request):
     tenant_id = 1
     project = None
     project_owner = None
-    if delivery["repository"]:
-        with get_connection() as connection:
-            row = connection.execute(
-                """SELECT p.id, p.tenant_id, p.created_by, u.username, u.role
-                   FROM projects p JOIN auth_users u ON u.id = p.created_by
-                   WHERE p.github_full_name = ? AND u.active = 1 ORDER BY p.id LIMIT 1""",
-                (delivery["repository"],),
-            ).fetchone()
-            if row:
-                tenant_id = int(row[1])
-                project = get_project(int(row[0]), tenant_id)
-                project_owner = Principal(
-                    int(row[2]), row[3], row[4], "", tenant_id
-                )
+    should_scan = (
+        delivery["event_type"] == "pull_request"
+        and delivery["action"] in {"opened", "reopened", "synchronize"}
+    )
+    if should_scan:
+        try:
+            route = resolve_github_webhook_binding(
+                repository_full_name=delivery["repository"],
+                repository_id=delivery["repository_id"],
+                installation_id=delivery["installation_id"],
+            )
+        except GitHubLifecycleError as exc:
+            mark_webhook_delivery(delivery["delivery_id"], "failed")
+            record_audit(
+                None,
+                "github.webhook_unbound",
+                "github_delivery",
+                delivery["delivery_id"],
+                {"error_type": type(exc).__name__},
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="GitHub repository is not bound to an active tenant.",
+            ) from exc
+        tenant_id = route["tenant_id"]
+        project = get_project(route["project_id"], tenant_id)
+        project_owner = Principal(
+            route["created_by"],
+            route["username"],
+            route["role"],
+            "",
+            tenant_id,
+        )
     record_audit(
         None,
         "github.webhook.accepted",
@@ -1456,11 +1654,24 @@ async def github_webhook(request: Request):
     )
     automation = None
     try:
-        should_scan = (
-            delivery["event_type"] == "pull_request"
-            and delivery["action"] in {"opened", "reopened", "synchronize"}
-        )
-        if not should_scan or not project or not project_owner:
+        if delivery["event_type"] == "installation" and delivery["action"] in {
+            "deleted",
+            "suspend",
+            "suspended",
+        }:
+            if delivery["installation_id"] < 1:
+                raise ValueError("GitHub installation context is invalid.")
+            revoke_github_capabilities(installation_id=delivery["installation_id"])
+            mark_webhook_delivery(delivery["delivery_id"], "processed")
+            record_audit(
+                None,
+                "github.installation.revoked",
+                "github_installation",
+                delivery["installation_id"],
+                {"delivery_id": delivery["delivery_id"]},
+                tenant_id=tenant_id,
+            )
+        elif not should_scan or not project or not project_owner:
             mark_webhook_delivery(delivery["delivery_id"], "ignored")
         else:
             if not github_app_enabled():
@@ -1486,6 +1697,7 @@ async def github_webhook(request: Request):
                 delivery["repository"],
                 head_sha,
                 details_url,
+                tenant_id=tenant_id,
             )
             automation = _enqueue_project_scan(
                 project,
@@ -1721,6 +1933,8 @@ async def update_user(
             )
         if active is False:
             connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+    if active is False:
+        revoke_github_capabilities(user_id=user_id)
     revoke_user_sessions(user_id)
     details = {key: body[key] for key in ("role", "active") if key in body}
     details["password_rotated"] = password is not None
@@ -1908,7 +2122,11 @@ def get_report():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
         return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
-    return HTMLResponse(report_path.read_text())
+    return _stream_file_response(
+        report_path,
+        media_type="text/html; charset=utf-8",
+        filename="report.html",
+    )
 
 @router.get(
     "/download-sbom",
@@ -1927,10 +2145,10 @@ def download_sbom():
                 status_code=500, detail="SBOM generation failed. Check server logs."
             )
             
-    return FileResponse(
-        str(sbom_path),
+    return _stream_file_response(
+        sbom_path,
         media_type="application/json",
-        filename="cyclonedx-sbom.json"
+        filename="cyclonedx-sbom.json",
     )
 
 
@@ -1942,14 +2160,15 @@ def download_report_bundle():
     report_path = SCANS_DIR / "report.html"
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report bundle is not available until a scan has completed.")
-    bundle = build_report_bundle(SCANS_DIR)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return Response(
-        content=bundle,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f"attachment; filename=aegis-report-bundle-{timestamp}.zip"
-        },
+    artifacts = {
+        path.name: path
+        for path in SCANS_DIR.iterdir()
+        if path.is_file()
+    }
+    return _stream_bundle_response(
+        artifacts,
+        filename=f"aegis-report-bundle-{timestamp}.zip",
     )
 
 @router.post(

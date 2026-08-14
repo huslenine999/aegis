@@ -32,6 +32,8 @@ python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 Restart dashboard and worker, open `/projects`, and select **Connect GitHub**.
 OAuth tokens are encrypted in PostgreSQL. Clone credentials are supplied through
 the Git process environment and are never included in command arguments or logs.
+Disconnecting GitHub marks the OAuth capability revoked; a queued repository scan
+must pass a fresh credential check before it can clone.
 
 ## GitHub App pull-request gate
 
@@ -60,12 +62,21 @@ AEGIS_GITHUB_APP_PRIVATE_KEY_B64=...
 AEGIS_GITHUB_WEBHOOK_SECRET=...
 ```
 
-The dashboard verifies the webhook HMAC and replay identifier, creates an
+The dashboard verifies the webhook HMAC and replay identifier, resolves the
+repository through an immutable tenant/installation binding, creates an
 in-progress check on the pull request head SHA, and queues that immutable
-revision. The worker obtains a short-lived installation token, fetches only the
-requested revision, and completes the check. Ruff, Semgrep, and secret findings
-with repository locations are emitted as inline annotations; the Aegis policy
-verdict controls the check conclusion.
+revision. The worker rechecks the scan row, project membership, tenant, and
+active binding before obtaining a short-lived installation token. Ruff, Semgrep,
+and secret findings with repository locations are emitted as inline annotations;
+the Aegis policy verdict controls the check conclusion.
+
+Migration 019 creates the binding tables and backfills existing
+`github_full_name` values as `legacy` placeholders. Legacy rows do not authorize
+App access. A unique placeholder is promoted only when a verified webhook
+provides the matching GitHub repository ID and installation ID; duplicate or
+malformed legacy names fail closed and must be reconciled by an operator. App
+installation deletion/suspension revokes the installation and all of its active
+repository capabilities.
 
 Validate with a non-production repository before enabling the required check:
 

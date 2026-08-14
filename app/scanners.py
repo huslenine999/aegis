@@ -1,11 +1,13 @@
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
+
+from .resource_budgets import read_bounded_text, run_bounded_subprocess
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -374,7 +376,7 @@ def run_yara_scan(
 
     for file_path in _iter_scan_files(target, (".py",), ignored_dirs, ignored_paths):
         try:
-            content = file_path.read_text(errors="ignore")
+            content = read_bounded_text(file_path, errors="ignore")
 
             if (
                 re.search(r"eval\(\s*request\.(args|form|values)", content)
@@ -432,19 +434,16 @@ def run_clamav_scan(
     if clamscan_bin and not ignored_paths:
         try:
             _emit(log, "[ClamAV] Starting ClamAV scanning CLI...", "muted")
-            result = subprocess.run(
+            output = BytesIO()
+            result = run_bounded_subprocess(
                 [clamscan_bin, "-r", "--infected", str(target)],
-                capture_output=True,
-                text=True,
-                check=False,
+                stdout_sink=output,
                 timeout=timeout,
                 env=scanner_subprocess_environment(),
             )
             if result.returncode not in {0, 1}:
-                raise RuntimeError(
-                    f"clamscan exited with code {result.returncode}: {result.stderr[-500:]}"
-                )
-            for line in result.stdout.splitlines():
+                raise RuntimeError(f"clamscan exited with code {result.returncode}.")
+            for line in output.getvalue().decode("utf-8", errors="replace").splitlines():
                 if "FOUND" not in line:
                     continue
                 parts = line.split(":")
@@ -466,7 +465,7 @@ def run_clamav_scan(
 
     for file_path in _iter_scan_files(target, (".py", ".txt"), ignored_dirs, ignored_paths):
         try:
-            content = file_path.read_text(errors="ignore")
+            content = read_bounded_text(file_path, errors="ignore")
             if eicar_sig in content:
                 findings.append({
                     "filename": str(file_path),

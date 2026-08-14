@@ -55,6 +55,19 @@ the audit-chain verification result.
 5. Start a canary scan and verify its policy version, signed manifest, durable
    findings, notification delivery, and artifact download.
 
+## Release-gate evidence and operator hold points
+
+Before approving a tag, retain the SQLite and PostgreSQL schema versions,
+migration rerun result, coverage output, lock check, dependency audit, E2E
+result, Compose recovery evidence, and fresh Codex Security scan ID together.
+The release gate is a hold point when any of these is missing or degraded.
+
+In particular, an operator must confirm that legacy unsalted API-token rows have
+been revoked or reissued, scanner file-writing outputs are subject to a
+write-time byte limit, notification destinations reject every non-global
+address, and the Semgrep dependency tree contains a fixed `mcp` release. A
+pepper rotation alone is not evidence that legacy unsalted token rows are safe.
+
 Rollback application code only after checking whether the previous version supports
 the current schema. Database migrations are forward-only; restore a coordinated
 pre-deployment snapshot when a schema rollback is unavoidable.

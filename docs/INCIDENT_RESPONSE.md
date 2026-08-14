@@ -37,3 +37,22 @@ determines notification obligations. Assign named people before production.
 Run a tabletop exercise every six months and after major architecture changes.
 Exercise scenarios must include a GitHub App key leak, hostile repository escape,
 database compromise, and signing-key misuse.
+
+## Phase-specific containment notes
+
+- If a database disclosure may include legacy API-token rows, immediately
+  disable/revoke those rows, rotate the token pepper, issue replacement tokens,
+  and review `last_used_at`, audit events, and access logs. Pepper rotation is
+  not sufficient while a raw-SHA-256 authentication fallback remains enabled.
+- If scanner output causes worker disk pressure, stop the affected workers,
+  preserve the run directory and scanner logs, prevent new hostile scans, and
+  inspect every report file before cleanup. Do not resume release evidence until
+  file-writing scanners enforce the configured byte budget during execution.
+- If a notification destination is suspected of reaching an internal or shared
+  address range, disable the channel, preserve its encrypted configuration and
+  delivery records, review outbound logs, and require a fresh global-address
+  validation before re-enabling it.
+- If an artifact metadata row contains a storage key outside the derived
+  tenant/project/run namespace, stop artifact downloads, preserve the database
+  and object-store metadata, and verify the affected tenant and run scope before
+  restoring service.

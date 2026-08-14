@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'medium,high,critical'
   config:
-    description: 'Optional path to an aegis.yml configuration file'
+    description: 'Operator-supplied aegis.yml path; when empty, use the action-bundled trusted configuration'
     required: false
     default: ''
   sarif:
@@ -79,6 +79,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_STRICT: ${{ inputs.strict }}
+        AEGIS_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -uo pipefail
         set +e
@@ -123,22 +124,42 @@ runs:
           fail_input "output-dir cannot contain newlines"
         fi
 
-        if ! mkdir -p "$INPUT_OUTPUT_DIR"; then
+        WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$PWD}"
+        if ! WORKSPACE_ROOT="$(realpath "$WORKSPACE_ROOT")"; then
+          fail_input "GITHUB_WORKSPACE could not be resolved"
+        fi
+        case "$INPUT_OUTPUT_DIR" in
+          /*|..|../*|*/../*|*/..) fail_input "output-dir must be a relative path without '..'" ;;
+        esac
+        if [ -z "$INPUT_OUTPUT_DIR" ]; then
+          fail_input "output-dir must be a non-empty relative path"
+        fi
+        OUTPUT_DIR="$WORKSPACE_ROOT/${INPUT_OUTPUT_DIR#./}"
+        if ! mkdir -p -- "$OUTPUT_DIR"; then
           fail_input "output-dir could not be created"
         fi
-        SUMMARY_PATH="$INPUT_OUTPUT_DIR/summary.json"
+        if ! OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"; then
+          fail_input "output-dir could not be resolved"
+        fi
+        if [ "$OUTPUT_DIR" = "$WORKSPACE_ROOT" ] || [[ "$OUTPUT_DIR" != "$WORKSPACE_ROOT"/* ]]; then
+          fail_input "output-dir must resolve inside GITHUB_WORKSPACE"
+        fi
+
+        CONFIG_PATH="${INPUT_CONFIG:-$AEGIS_ACTION_PATH/aegis.yml}"
+        if [ ! -f "$CONFIG_PATH" ] || [ -L "$CONFIG_PATH" ]; then
+          fail_input "configured aegis.yml could not be found or is a symbolic link"
+        fi
+        SUMMARY_PATH="$OUTPUT_DIR/summary.json"
         ARGS=(
           scan "$INPUT_TARGET"
           --timeout "$INPUT_TIMEOUT"
-          --output "$INPUT_OUTPUT_DIR"
+          --output "$OUTPUT_DIR"
           --fail-on "$INPUT_FAIL_ON"
           --json
+          --config "$CONFIG_PATH"
         )
         if [ "$INPUT_NO_DOCKER" = "true" ]; then
           ARGS+=(--no-docker)
-        fi
-        if [ -n "$INPUT_CONFIG" ]; then
-          ARGS+=(--config "$INPUT_CONFIG")
         fi
         if [ "$INPUT_SARIF" = "true" ]; then
           ARGS+=(--sarif)
@@ -167,8 +188,8 @@ runs:
           STATUS=2
         fi
         cat "$SUMMARY_PATH"
-        if [ -f "$INPUT_OUTPUT_DIR/report.md" ]; then
-          cat "$INPUT_OUTPUT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+        if [ -f "$OUTPUT_DIR/report.md" ]; then
+          cat "$OUTPUT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
         fi
 
         if [ "$STATUS" -eq 0 ]; then

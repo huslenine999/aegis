@@ -17,7 +17,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
-from .config import config_bool, config_list, load_config
+from .artifact_storage import artifact_limits, validate_artifact_sizes
+from .config import config_bool, config_list, load_advisory_config, load_config
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from .scanners import run_clamav_scan as shared_run_clamav_scan
 from .scanners import run_dast_scan as shared_run_dast_scan
@@ -31,11 +32,29 @@ from .scan_engine import CliEventSink, ScanEvent, ScanRunner
 from .cli_output import print_ascii_report, print_timing_summary
 from .version import get_package_version
 from . import cli_stack
-from .evidence import canonical_json, sign_manifest, verify_manifest
+from .evidence import (
+    canonical_json,
+    classify_source_attestation,
+    sign_manifest,
+    verify_manifest,
+    verify_source_descriptor,
+)
 from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     create_sandbox_network, run_sandbox_container, wait_for_container,
     run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
+)
+from .safe_output import SafeOutputRoot
+from .source_attestation import (
+    SourceSnapshot,
+    create_source_snapshot,
+    normalize_scan_report_paths,
+)
+from .resource_budgets import (
+    ResourceLimitError,
+    iter_file_bytes,
+    load_bounded_json,
+    run_bounded_subprocess,
 )
 
 DEFAULT_TOOL_TIMEOUT = int(os.environ.get("AEGIS_CLI_TOOL_TIMEOUT", "120"))
@@ -213,7 +232,12 @@ def suppression_matches(suppression: dict, *, tool: str, rule: str = "", path: s
     return True
 
 
-def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
+def apply_suppressions(
+    scan_dir: Path,
+    suppressions: list[dict],
+    *,
+    safe_output: SafeOutputRoot | None = None,
+):
     if not suppressions:
         return
 
@@ -275,48 +299,48 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
 
     ruff_path = scan_dir / "ruff-report.json"
     if ruff_path.exists():
-        ruff = json.loads(ruff_path.read_text())
+        ruff = read_json(ruff_path)
         if isinstance(ruff, list):
             ruff = [
                 item for item in ruff
                 if not suppress_item("Ruff", item, rule_keys=("code",), path_keys=("filename",))
             ]
-            write_json(ruff_path, ruff)
+            write_json(ruff_path, ruff, safe_output=safe_output)
 
     semgrep_path = scan_dir / "semgrep-report.json"
     if semgrep_path.exists():
-        semgrep = json.loads(semgrep_path.read_text())
+        semgrep = read_json(semgrep_path)
         if isinstance(semgrep, dict):
             results = semgrep.get("results", [])
             semgrep["results"] = [
                 item for item in results
                 if not suppress_item("Semgrep", item, rule_keys=("check_id",), path_keys=("path",))
             ]
-            write_json(semgrep_path, semgrep)
+            write_json(semgrep_path, semgrep, safe_output=safe_output)
 
     yara_path = scan_dir / "yara-report.json"
     if yara_path.exists():
-        yara = json.loads(yara_path.read_text())
+        yara = read_json(yara_path)
         if isinstance(yara, list):
             yara = [
                 item for item in yara
                 if not suppress_item("YARA", item, rule_keys=("rule",), path_keys=("filename",))
             ]
-            write_json(yara_path, yara)
+            write_json(yara_path, yara, safe_output=safe_output)
 
     clamav_path = scan_dir / "clamav-report.json"
     if clamav_path.exists():
-        clamav = json.loads(clamav_path.read_text())
+        clamav = read_json(clamav_path)
         if isinstance(clamav, list):
             clamav = [
                 item for item in clamav
                 if not suppress_item("ClamAV", item, rule_keys=("virus",), path_keys=("filename",))
             ]
-            write_json(clamav_path, clamav)
+            write_json(clamav_path, clamav, safe_output=safe_output)
 
     secrets_path = scan_dir / "secrets-report.json"
     if secrets_path.exists():
-        secrets = json.loads(secrets_path.read_text())
+        secrets = read_json(secrets_path)
         if isinstance(secrets, dict):
             results = secrets.get("results", {})
             for filename, items in list(results.items()):
@@ -326,11 +350,11 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                 ]
                 if not results[filename]:
                     del results[filename]
-            write_json(secrets_path, secrets)
+            write_json(secrets_path, secrets, safe_output=safe_output)
 
     osv_path = scan_dir / "osv-report.json"
     if osv_path.exists():
-        osv = json.loads(osv_path.read_text())
+        osv = read_json(osv_path)
         if isinstance(osv, list):
             osv = [
                 item for item in osv
@@ -341,7 +365,7 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                     path_keys=(),
                 )
             ]
-            write_json(osv_path, osv)
+            write_json(osv_path, osv, safe_output=safe_output)
 
     iac_path = scan_dir / "iac-report.json"
     if iac_path.exists():
@@ -371,7 +395,7 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
                         continue
                     governed.append(item)
                 iac["unmanaged_suppressions"] = governed
-            write_json(iac_path, iac)
+            write_json(iac_path, iac, safe_output=safe_output)
 
     write_json(
         scan_dir / "suppressions-report.json",
@@ -381,10 +405,17 @@ def apply_suppressions(scan_dir: Path, suppressions: list[dict]):
             "expired": expired,
             "invalid": invalid,
         },
+        safe_output=safe_output,
     )
 
 
-def write_sarif_report(path: Path, results: list[dict], base_path: Path | None = None):
+def write_sarif_report(
+    path: Path,
+    results: list[dict],
+    base_path: Path | None = None,
+    *,
+    safe_output: SafeOutputRoot | None = None,
+):
     severity_to_level = {
         "HIGH": "error",
         "CRITICAL": "error",
@@ -453,10 +484,18 @@ def write_sarif_report(path: Path, results: list[dict], base_path: Path | None =
             "results": sarif_results,
         }],
     }
-    write_json(path, sarif)
+    write_json(path, sarif, safe_output=safe_output)
 
 
-def write_json(path: Path, data):
+def write_json(
+    path: Path,
+    data,
+    *,
+    safe_output: SafeOutputRoot | None = None,
+):
+    if safe_output is not None:
+        safe_output.write_json_path(path, data)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -468,8 +507,8 @@ def write_json(path: Path, data):
 
 def read_json(path: Path):
     try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        return load_bounded_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError):
         return None
 
 
@@ -570,18 +609,24 @@ def _cli_evidence_artifacts(scan_dir: Path) -> list[dict]:
         "iac-report.json",
         "zap-report.json",
         "sandbox-status.json",
+        "source-descriptor.json",
     }
     artifacts = []
     for name in sorted(names):
         path = scan_dir / name
         if not path.is_file():
             continue
-        content = path.read_bytes()
+        digest = hashlib.sha256()
+        size = 0
+        for chunk in iter_file_bytes(path, max_bytes=artifact_limits()["per_artifact"]):
+            size += len(chunk)
+            digest.update(chunk)
+        validate_artifact_sizes([(name, size)])
         artifacts.append(
             {
                 "name": name,
-                "size": len(content),
-                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": size,
+                "sha256": digest.hexdigest(),
             }
         )
     return artifacts
@@ -595,15 +640,14 @@ def find_free_host_port() -> int:
 
 def run_scanner_command(command, *, stdout=None, timeout: int = DEFAULT_TOOL_TIMEOUT, label: str = "Scanner") -> int:
     try:
-        result = subprocess.run(
+        result = run_bounded_subprocess(
             command,
-            stdout=stdout if stdout is not None else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
+            stdout_sink=stdout,
             timeout=timeout,
         )
         return result.returncode
+    except ResourceLimitError as exc:
+        print(f"  [{label} Warn] Output budget exceeded: {exc}")
     except subprocess.TimeoutExpired:
         print(f"  [{label} Warn] Timed out after {timeout}s; continuing with available results.")
     except FileNotFoundError:
@@ -652,6 +696,83 @@ def execute_scan(
     strict: bool | None = None,
     return_summary: bool = False,
 ):
+    """Admit the source once, then run every scanner against its stable copy."""
+    submitted_target = Path(target_path_str).expanduser().absolute()
+    if not submitted_target.exists():
+        return _execute_scan(
+            target_path_str,
+            use_docker=use_docker,
+            tool_timeout=tool_timeout,
+            output_dir=output_dir,
+            json_output=json_output,
+            quiet=quiet,
+            fail_on=fail_on,
+            fast=fast,
+            config_path=config_path,
+            sarif=sarif,
+            strict=strict,
+            return_summary=return_summary,
+        )
+    if config_path and not Path(config_path).expanduser().is_file():
+        return _execute_scan(
+            target_path_str,
+            use_docker=use_docker,
+            tool_timeout=tool_timeout,
+            output_dir=output_dir,
+            json_output=json_output,
+            quiet=quiet,
+            fail_on=fail_on,
+            fast=fast,
+            config_path=config_path,
+            sarif=sarif,
+            strict=strict,
+            return_summary=return_summary,
+        )
+
+    source_path = submitted_target.resolve()
+    trusted_config = load_config(source_path, config_path)
+    configured_excludes = resolve_exclude_paths(trusted_config, source_path)
+    snapshot = create_source_snapshot(
+        source_path,
+        ignored_names=IGNORED_DIRS,
+        excluded_paths=configured_excludes,
+    )
+    try:
+        return _execute_scan(
+            target_path_str,
+            use_docker=use_docker,
+            tool_timeout=tool_timeout,
+            output_dir=output_dir,
+            json_output=json_output,
+            quiet=quiet,
+            fail_on=fail_on,
+            fast=fast,
+            config_path=config_path,
+            sarif=sarif,
+            strict=strict,
+            return_summary=return_summary,
+            _source_snapshot=snapshot,
+        )
+    finally:
+        snapshot.cleanup()
+
+
+def _execute_scan(
+    target_path_str: str,
+    *,
+    use_docker: bool = True,
+    tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
+    output_dir: str | None = None,
+    json_output: bool = False,
+    quiet: bool = False,
+    fail_on: str | None = None,
+    fast: bool = False,
+    config_path: str | None = None,
+    sarif: str | bool | None = None,
+    strict: bool | None = None,
+    return_summary: bool = False,
+    _source_snapshot: SourceSnapshot | None = None,
+):
     timings: list[dict] = []
     total_start = time.perf_counter()
     started_at = utc_timestamp()
@@ -671,12 +792,16 @@ def execute_scan(
             }
         return EXIT_OPERATIONAL_ERROR
     validate_untrusted_tree(submitted_target, ignored_names=IGNORED_DIRS)
-    target_path = submitted_target.resolve()
+    source_path = submitted_target.resolve()
+    target_path = source_path
     runner.transition("running", 0)
 
     if config_path and not Path(config_path).expanduser().is_file():
         raise ValueError(f"Config file does not exist: {Path(config_path).expanduser()}")
-    config = load_config(target_path, config_path)
+    # Only an explicitly selected operator config is trusted. A target-local
+    # aegis.yml is advisory-only and cannot change scan execution or output.
+    config = load_config(source_path, config_path)
+    load_advisory_config(source_path)
     if "scan" in config and not isinstance(config["scan"], dict):
         raise ValueError("Aegis config key 'scan' must be a mapping.")
     if config:
@@ -709,10 +834,17 @@ def execute_scan(
     if fast:
         use_docker = False
 
-    excluded_paths = resolve_exclude_paths(config, target_path)
-    suppressions = normalize_suppressions(config, target_path)
+    configured_excluded_paths = resolve_exclude_paths(config, source_path)
+    excluded_paths = (
+        _source_snapshot.map_excluded_paths(configured_excluded_paths)
+        if _source_snapshot
+        else configured_excluded_paths
+    )
+    suppressions = normalize_suppressions(config, source_path)
+    if _source_snapshot:
+        target_path = _source_snapshot.scan_path
 
-    print(f"🛡️  Aegis CLI Scanner: Auditing target path: {target_path}")
+    print(f"🛡️  Aegis CLI Scanner: Auditing target path: {source_path}")
 
     # Set up local scans directory
     dependency_manifests = discover_dependency_manifests(target_path)
@@ -720,13 +852,13 @@ def execute_scan(
     req_file = requirements_manifest.path if requirements_manifest else None
 
     if output_dir:
-        scan_dir = Path(output_dir).expanduser().resolve()
-    elif target_path.is_dir():
-        scan_dir = target_path / ".aegis" / "scans"
+        scan_dir = Path(output_dir).expanduser()
+    elif source_path.is_dir():
+        scan_dir = source_path / ".aegis" / "scans"
     else:
-        scan_dir = target_path.parent / ".aegis" / "scans"
-
-    scan_dir.mkdir(parents=True, exist_ok=True)
+        scan_dir = source_path.parent / ".aegis" / "scans"
+    safe_output = SafeOutputRoot(scan_dir)
+    scan_dir = safe_output.root
 
     # Initialize placeholder reports to satisfy policy engine requirements
     placeholder_reports = {
@@ -742,7 +874,7 @@ def execute_scan(
         "iac-report.json": empty_iac_report(),
     }
     for filename, default_data in placeholder_reports.items():
-        write_json(scan_dir / filename, default_data)
+        write_json(scan_dir / filename, default_data, safe_output=safe_output)
 
     # 1. Dependency Analysis (Safety / OSV)
     if fast:
@@ -756,7 +888,7 @@ def execute_scan(
             print(f"🔍 [SCA] Dependency manifest(s) detected: {manifest_names}. Running available Safety and OSV audits...")
             
             # Safety Scan
-            safety_report_path = scan_dir / "safety-report.json"
+            safety_report_path = safe_output.file("safety-report.json")
             if req_file and safety_enabled:
                 safety_target = target_path if target_path.is_dir() else target_path.parent
                 safety_cmd = [
@@ -776,7 +908,7 @@ def execute_scan(
                 if isinstance(safety_report, (dict, list)):
                     mark_tool("Safety", "completed", return_code=safety_return_code)
                 else:
-                    write_json(safety_report_path, [])
+                    write_json(safety_report_path, [], safe_output=safe_output)
                     mark_tool(
                         "Safety",
                         "failed",
@@ -784,17 +916,17 @@ def execute_scan(
                         return_code=safety_return_code,
                     )
             elif not safety_enabled:
-                write_json(safety_report_path, [])
+                write_json(safety_report_path, [], safe_output=safe_output)
                 mark_tool("Safety", "skipped", detail="optional licensed scanner disabled")
             else:
-                write_json(safety_report_path, [])
+                write_json(safety_report_path, [], safe_output=safe_output)
                 mark_tool("Safety", "skipped", detail="no requirements.txt manifest")
             
             # OSV Scan
-            osv_report_path = scan_dir / "osv-report.json"
+            osv_report_path = safe_output.file("osv-report.json")
             try:
                 osv_findings = query_osv_vulnerabilities(dependency_manifests, raise_on_error=strict)
-                write_json(osv_report_path, osv_findings)
+                write_json(osv_report_path, osv_findings, safe_output=safe_output)
                 print("  [SCA] OSV API checks completed.")
                 mark_tool("OSV", "completed")
             except Exception as e:
@@ -809,7 +941,7 @@ def execute_scan(
     # 2. Python SAST (Ruff)
     with timed_step(timings, "Ruff"):
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
-        ruff_report_path = scan_dir / "ruff-report.json"
+        ruff_report_path = safe_output.file("ruff-report.json")
         ruff_cmd = [sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
         ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
@@ -819,7 +951,7 @@ def execute_scan(
         if ruff_return_code in {0, 1} and isinstance(ruff_report, list):
             mark_tool("Ruff", "completed", return_code=ruff_return_code)
         else:
-            write_json(ruff_report_path, [])
+            write_json(ruff_report_path, [], safe_output=safe_output)
             mark_tool(
                 "Ruff",
                 "failed",
@@ -830,7 +962,7 @@ def execute_scan(
 
     # 3. Python SAST (Semgrep)
     print("🔍 [SAST] Running Semgrep rule-based scans...")
-    semgrep_report_path = scan_dir / "semgrep-report.json"
+    semgrep_report_path = safe_output.file("semgrep-report.json")
     rules_dir = PROJECT_ROOT / "rules"
     rules_dir.mkdir(exist_ok=True)
     semgrep_rules_path = rules_dir / "semgrep_rules.yaml"
@@ -866,7 +998,7 @@ def execute_scan(
             if semgrep_return_code == 0 and isinstance(semgrep_report, dict):
                 mark_tool("Semgrep", "completed", return_code=semgrep_return_code)
             else:
-                write_json(semgrep_report_path, {"results": []})
+                write_json(semgrep_report_path, {"results": []}, safe_output=safe_output)
                 mark_tool(
                     "Semgrep",
                     "failed",
@@ -880,12 +1012,12 @@ def execute_scan(
 
     # 4. Secret Auditing (detect-secrets)
     print("🔍 [Secrets] Scanning codebase for hardcoded keys and credentials...")
-    secrets_report_path = scan_dir / "secrets-report.json"
+    secrets_report_path = safe_output.file("secrets-report.json")
     secrets_excludes = [
         EXCLUDE_FILES_PATTERN,
         *[re.escape(path) for path in sorted(excluded_paths)],
     ]
-    scan_root = target_path if target_path.is_dir() else target_path.parent
+    scan_root = source_path if source_path.is_dir() else source_path.parent
     try:
         output_relative_path = scan_dir.relative_to(scan_root).as_posix()
         secrets_excludes.append(re.escape(output_relative_path))
@@ -903,9 +1035,9 @@ def execute_scan(
         str(target_path),
     ]
     with timed_step(timings, "Secrets"):
-        secrets_raw_path = secrets_report_path.with_suffix(".raw.json")
+        secrets_raw_path = safe_output.file("secrets-report.raw.json")
         try:
-            with open(secrets_raw_path, "w") as f:
+            with secrets_raw_path.open("w") as f:
                 secrets_return_code = run_scanner_command(
                     secrets_cmd,
                     stdout=f,
@@ -914,10 +1046,10 @@ def execute_scan(
                 )
             secrets_report = read_json(secrets_raw_path)
             if secrets_return_code == 0 and isinstance(secrets_report, dict):
-                write_json(secrets_report_path, secrets_report)
+                write_json(secrets_report_path, secrets_report, safe_output=safe_output)
                 mark_tool("Secrets", "completed", return_code=secrets_return_code)
             else:
-                write_json(secrets_report_path, {"results": {}})
+                write_json(secrets_report_path, {"results": {}}, safe_output=safe_output)
                 mark_tool(
                     "Secrets",
                     "failed",
@@ -926,7 +1058,7 @@ def execute_scan(
                 )
         except Exception as e:
             print(f"  [Secrets Error] Failed to run detect-secrets: {e}")
-            write_json(secrets_report_path, {"results": {}})
+            write_json(secrets_report_path, {"results": {}}, safe_output=safe_output)
             mark_tool("Secrets", "failed", detail=str(e))
         finally:
             secrets_raw_path.unlink(missing_ok=True)
@@ -934,8 +1066,16 @@ def execute_scan(
     # 5. YARA Pattern Audits
     with timed_step(timings, "YARA"):
         print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
-        yara_findings = shared_run_yara_scan(target_path, ignored_paths=excluded_paths, log=log_scanner_event)
-        write_json(scan_dir / "yara-report.json", yara_findings)
+        yara_findings = shared_run_yara_scan(
+            target_path,
+            ignored_paths=set(excluded_paths),
+            log=log_scanner_event,
+        )
+        write_json(
+            safe_output.file("yara-report.json"),
+            yara_findings,
+            safe_output=safe_output,
+        )
         mark_tool("YARA", "completed")
 
     # 6. ClamAV Malware Scan
@@ -946,15 +1086,28 @@ def execute_scan(
     else:
         with timed_step(timings, "ClamAV"):
             print("🔍 [ClamAV] Searching files for virus signatures...")
-            clamav_findings = shared_run_clamav_scan(target_path, ignored_paths=excluded_paths, timeout=tool_timeout, log=log_scanner_event)
-            write_json(scan_dir / "clamav-report.json", clamav_findings)
+            clamav_findings = shared_run_clamav_scan(
+                target_path,
+                ignored_paths=set(excluded_paths),
+                timeout=tool_timeout,
+                log=log_scanner_event,
+            )
+            write_json(
+                safe_output.file("clamav-report.json"),
+                clamav_findings,
+                safe_output=safe_output,
+            )
             mark_tool("ClamAV", "completed")
 
     # 7. Infrastructure-as-code configuration auditing (Checkov)
-    iac_report_path = scan_dir / "iac-report.json"
+    iac_report_path = safe_output.file("iac-report.json")
     if fast:
         print("ℹ️  [IaC] Fast mode enabled, skipping IaC configuration checks.")
-        write_json(iac_report_path, empty_iac_report(status="skipped", detail="fast mode"))
+        write_json(
+            iac_report_path,
+            empty_iac_report(status="skipped", detail="fast mode"),
+            safe_output=safe_output,
+        )
         record_timing(timings, "IaC", time.perf_counter(), "skipped")
         mark_tool("IaC", "skipped", detail="fast mode")
     else:
@@ -1003,7 +1156,7 @@ def execute_scan(
             sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
             sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
             sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
-            sandbox_temp_dir = scan_dir / "sandbox" / sandbox_uuid
+            sandbox_temp_dir = safe_output.directory(Path("sandbox") / sandbox_uuid)
             
             try:
                 host_port = find_free_host_port()
@@ -1033,7 +1186,7 @@ def execute_scan(
                 mark_tool("Docker Sandbox", "completed")
 
                 # 7a. Trivy layer audits
-                trivy_report_path = scan_dir / "trivy-report.json"
+                trivy_report_path = safe_output.file("trivy-report.json")
                 print("  [Trivy] Inspecting image layer packages for CVEs...")
                 try:
                     run_trivy_scan(sandbox_image, trivy_report_path)
@@ -1043,12 +1196,12 @@ def execute_scan(
                     mark_tool("Trivy", "failed", detail=str(e))
 
                 # 7b. Aegis DAST Probe active scanning
-                zap_report_path = scan_dir / "zap-report.json"
+                zap_report_path = safe_output.file("zap-report.json")
                 print("  [DAST] Running active crawler against endpoints...")
                 zap_findings = run_dast_scan(
                     target_url, internal_port=container_port
                 )
-                write_json(zap_report_path, zap_findings)
+                write_json(zap_report_path, zap_findings, safe_output=safe_output)
                 mark_tool("DAST", "completed")
 
             except Exception as e:
@@ -1083,10 +1236,13 @@ def execute_scan(
 
     # 8. Run Policy Engine
     print("\nEvaluating all reports against Aegis Security Gate rules...")
-    html_report = scan_dir / "report.html"
-    md_report = scan_dir / "report.md"
+    html_report = safe_output.file("report.html")
+    md_report = safe_output.file("report.md")
     policy_summary = {}
-    apply_suppressions(scan_dir, suppressions)
+    if _source_snapshot:
+        safe_output.write_json("source-descriptor.json", _source_snapshot.descriptor)
+        normalize_scan_report_paths(scan_dir, _source_snapshot, safe_output)
+    apply_suppressions(scan_dir, suppressions, safe_output=safe_output)
 
     def capture_policy_summary(results, final_status, reason, exploitability_score):
         policy_summary.update({
@@ -1111,6 +1267,7 @@ def execute_scan(
             operational_failures=pre_policy_failures if strict else None,
             tool_states=tool_statuses.states(),
             fail_on_scanner_errors=strict,
+            output_root=safe_output,
         )
     record_timing(timings, "Total", total_start)
     mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
@@ -1119,11 +1276,16 @@ def execute_scan(
     if sarif:
         if isinstance(sarif, str) and sarif not in {"1", "true", "yes", "on"}:
             candidate = Path(sarif)
-            sarif_path = candidate if candidate.is_absolute() else scan_dir / candidate
+            sarif_path = safe_output.file_path(candidate)
         else:
-            sarif_path = scan_dir / "aegis.sarif"
-        sarif_base = target_path if target_path.is_dir() else target_path.parent
-        write_sarif_report(sarif_path, policy_summary.get("results", []), base_path=sarif_base)
+            sarif_path = safe_output.file("aegis.sarif")
+        sarif_base = source_path if source_path.is_dir() else source_path.parent
+        write_sarif_report(
+            sarif_path,
+            policy_summary.get("results", []),
+            base_path=sarif_base,
+            safe_output=safe_output,
+        )
         policy_summary["sarif_report"] = str(sarif_path)
 
     failed_tools = tool_statuses.failures()
@@ -1132,18 +1294,48 @@ def execute_scan(
     if strict and failed_tools:
         exit_code = EXIT_OPERATIONAL_ERROR
 
-    manifest = sign_manifest({
-        "schema_version": 2,
-        "aegis_version": get_package_version(),
-        "target": str(target_path),
-        "source": {
-            "identity": target_path.name,
+    policy_contract = {
+        "schema_version": 1,
+        "fail_on_severities": sorted(
+            severity.strip().upper()
+            for severity in str(fail_on or "").split(",")
+            if severity.strip()
+        ),
+        "strict": strict,
+        "fast": fast,
+        "docker_requested": use_docker,
+        "safety_enabled": safety_enabled,
+        "excluded_paths": sorted(configured_excluded_paths),
+        "suppressions": suppressions,
+    }
+    policy_definition_sha256 = hashlib.sha256(
+        canonical_json(policy_contract)
+    ).hexdigest()
+    if _source_snapshot:
+        source_revision = (
+            f"sha256:{_source_snapshot.descriptor['files'][0]['sha256']}"
+            if _source_snapshot.descriptor["root_kind"] == "file"
+            else "local-worktree"
+        )
+        source_record = _source_snapshot.manifest_source(
+            identity=source_path.name,
+            revision=source_revision,
+            policy_sha256=policy_definition_sha256,
+        )
+    else:
+        source_record = {
+            "identity": source_path.name,
             "revision": (
-                f"sha256:{hashlib.sha256(target_path.read_bytes()).hexdigest()}"
-                if target_path.is_file()
+                f"sha256:{hashlib.sha256(source_path.read_bytes()).hexdigest()}"
+                if source_path.is_file()
                 else "local-worktree"
             ),
-        },
+        }
+    manifest = sign_manifest({
+        "schema_version": 3 if _source_snapshot else 2,
+        "aegis_version": get_package_version(),
+        "target": str(source_path),
+        "source": source_record,
         "started_at": started_at,
         "completed_at": utc_timestamp(),
         "strict": strict,
@@ -1159,16 +1351,17 @@ def execute_scan(
         "operational_failures": failed_tools,
         "tools": tool_statuses.records,
         "policy_sha256": hashlib.sha256(canonical_json(policy_summary)).hexdigest(),
+        "policy_definition_sha256": policy_definition_sha256,
         "artifacts": _cli_evidence_artifacts(scan_dir),
     })
-    write_json(scan_dir / "scan-manifest.json", manifest)
+    write_json(scan_dir / "scan-manifest.json", manifest, safe_output=safe_output)
     policy_summary["tools"] = tool_statuses.records
 
     print(f"\nScan complete. Dossier report available at: {html_report}")
     if not json_output and not quiet:
         print_timing_summary(timings)
     if return_summary:
-        return build_scan_summary(target_path, scan_dir, exit_code, policy_summary, timings)
+        return build_scan_summary(source_path, scan_dir, exit_code, policy_summary, timings)
     return exit_code
 
 
@@ -1421,8 +1614,8 @@ def run_verify_evidence(
 ) -> int:
     path = Path(manifest_path).expanduser().resolve()
     try:
-        manifest = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = load_bounded_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError) as exc:
         print(f"Evidence verification failed: {exc}", file=sys.stderr)
         return EXIT_OPERATIONAL_ERROR
     if not public_key and not trust_embedded_key:
@@ -1444,8 +1637,14 @@ def run_verify_evidence(
             return EXIT_OPERATIONAL_ERROR
         artifact_path = path.parent / name
         try:
-            content = artifact_path.read_bytes()
-        except OSError:
+            content = b"".join(
+                iter_file_bytes(
+                    artifact_path,
+                    max_bytes=artifact_limits()["per_artifact"],
+                    chunk_size=1024 * 1024,
+                )
+            )
+        except (OSError, ResourceLimitError):
             print(f"Evidence verification failed: missing artifact {name}.", file=sys.stderr)
             return EXIT_OPERATIONAL_ERROR
         if len(content) != int(artifact.get("size", -1)) or not hmac_compare_digest(
@@ -1453,9 +1652,37 @@ def run_verify_evidence(
         ):
             print(f"Evidence verification failed: artifact mismatch for {name}.", file=sys.stderr)
             return EXIT_OPERATIONAL_ERROR
+    source_status = classify_source_attestation(manifest)
+    if source_status == "invalid":
+        print("Evidence verification failed: source attestation is invalid.", file=sys.stderr)
+        return EXIT_OPERATIONAL_ERROR
+    if source_status == "source-bound":
+        if not any(
+            isinstance(artifact, dict)
+            and artifact.get("name") == "source-descriptor.json"
+            for artifact in manifest.get("artifacts", [])
+        ):
+            print(
+                "Evidence verification failed: source descriptor is not attested as an artifact.",
+                file=sys.stderr,
+            )
+            return EXIT_OPERATIONAL_ERROR
+        descriptor_path = path.parent / "source-descriptor.json"
+        try:
+            descriptor = load_bounded_json(descriptor_path)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError):
+            print(
+                "Evidence verification failed: source descriptor is missing or invalid.",
+                file=sys.stderr,
+            )
+            return EXIT_OPERATIONAL_ERROR
+        if not isinstance(descriptor, dict) or not verify_source_descriptor(manifest, descriptor):
+            print("Evidence verification failed: source descriptor mismatch.", file=sys.stderr)
+            return EXIT_OPERATIONAL_ERROR
     print(
         "Evidence verified: Ed25519 signature and "
-        f"{len(manifest.get('artifacts', []))} artifact hashes are valid."
+        f"{len(manifest.get('artifacts', []))} artifact hashes are valid; "
+        f"source attestation: {source_status}."
     )
     return EXIT_ALLOWED
 
@@ -1532,7 +1759,10 @@ def main():
     scan_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON summary to stdout")
     scan_parser.add_argument("--quiet", action="store_true", help="Suppress scan progress output")
     scan_parser.add_argument("--fail-on", help="Comma-separated severities that should block, e.g. high,critical")
-    scan_parser.add_argument("--config", help="Path to aegis.yml config file")
+    scan_parser.add_argument(
+        "--config",
+        help="Explicit operator-selected trusted aegis.yml config file",
+    )
     scan_parser.add_argument("--sarif", nargs="?", const="aegis.sarif", help="Write SARIF output, optionally to the given filename")
     scan_parser.add_argument(
         "--strict",

@@ -3,11 +3,69 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterable
+
+from .resource_budgets import iter_bounded, resource_budgets
 
 
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SAFE_ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+DEFAULT_MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+DEFAULT_MAX_TOTAL_ARTIFACT_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_REPORT_BUNDLE_BYTES = 64 * 1024 * 1024
+
+
+class ArtifactLimitError(ValueError):
+    """Raised when generated or downloaded evidence exceeds a configured budget."""
+
+
+def _positive_limit(name: str, default: int) -> int:
+    raw_value = os.environ.get(name, str(default))
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ArtifactLimitError(f"{name} must be a positive integer.") from exc
+    if value < 1:
+        raise ArtifactLimitError(f"{name} must be a positive integer.")
+    return value
+
+
+def artifact_limits() -> dict[str, int]:
+    return {
+        "per_artifact": _positive_limit(
+            "AEGIS_MAX_ARTIFACT_BYTES", DEFAULT_MAX_ARTIFACT_BYTES
+        ),
+        "total": _positive_limit(
+            "AEGIS_MAX_TOTAL_ARTIFACT_BYTES", DEFAULT_MAX_TOTAL_ARTIFACT_BYTES
+        ),
+        "bundle": _positive_limit(
+            "AEGIS_MAX_REPORT_BUNDLE_BYTES", DEFAULT_MAX_REPORT_BUNDLE_BYTES
+        ),
+    }
+
+
+def validate_artifact_sizes(artifacts: Iterable[tuple[str, int]]) -> int:
+    """Validate per-artifact and per-run evidence sizes before reading or publishing."""
+    limits = artifact_limits()
+    total = 0
+    for name, raw_size in artifacts:
+        try:
+            size = int(raw_size)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactLimitError(f"Artifact {name!r} has an invalid size.") from exc
+        if size < 0:
+            raise ArtifactLimitError(f"Artifact {name!r} has an invalid size.")
+        if size > limits["per_artifact"]:
+            raise ArtifactLimitError(
+                f"Artifact {name!r} exceeds the per-artifact limit of "
+                f"{limits['per_artifact']} bytes."
+            )
+        total += size
+        if total > limits["total"]:
+            raise ArtifactLimitError(
+                f"Artifacts exceed the total per-run limit of {limits['total']} bytes."
+            )
+    return total
 
 
 def run_directory(
@@ -113,14 +171,30 @@ class S3ArtifactStore:
     def open(self, key: str) -> BinaryIO:
         return self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
 
-    def read(self, key: str) -> bytes:
+    def iter_bytes(
+        self,
+        key: str,
+        *,
+        max_bytes: int | None = None,
+        chunk_size: int | None = None,
+    ) -> Iterable[bytes]:
+        """Stream an object while enforcing an actual-read response budget."""
+
+        limit = (
+            resource_budgets().max_response_bytes
+            if max_bytes is None
+            else max_bytes
+        )
         body = self.open(key)
         try:
-            return body.read()
+            yield from iter_bounded(body, limit, chunk_size=chunk_size)
         finally:
             close = getattr(body, "close", None)
             if close:
                 close()
+
+    def read(self, key: str, *, max_bytes: int | None = None) -> bytes:
+        return b"".join(self.iter_bytes(key, max_bytes=max_bytes))
 
     def verify(self, key: str, expected_size: int, expected_sha256: str) -> bool:
         response = self.client.head_object(Bucket=self.bucket, Key=key)
@@ -143,15 +217,39 @@ def publish_artifacts(
     if backend not in {"local", "s3"}:
         raise RuntimeError("AEGIS_ARTIFACT_BACKEND must be local or s3.")
     store = S3ArtifactStore() if backend == "s3" else None
-    artifacts = []
+    candidates: list[tuple[str, Path, int]] = []
     for name in sorted(names):
         path = report_dir / name
         if not path.is_file():
             continue
+        if path.is_symlink():
+            raise RuntimeError("Artifact paths must not be symbolic links.")
+        candidates.append((name, path, path.stat().st_size))
+    limits = artifact_limits()
+    validate_artifact_sizes((name, size) for name, _, size in candidates)
+
+    artifacts = []
+    actual_total = 0
+    for name, path, size in candidates:
         digest = hashlib.sha256()
+        actual_size = 0
         with path.open("rb") as artifact:
-            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            for chunk in iter_bounded(
+                artifact,
+                limits["per_artifact"],
+                chunk_size=1024 * 1024,
+            ):
+                actual_size += len(chunk)
                 digest.update(chunk)
+        if actual_size != size:
+            raise ArtifactLimitError(
+                f"Artifact {name!r} changed while it was being published."
+            )
+        actual_total += actual_size
+        if actual_total > limits["total"]:
+            raise ArtifactLimitError(
+                f"Artifacts exceed the total per-run limit of {limits['total']} bytes."
+            )
         sha256 = digest.hexdigest()
         key = artifact_key(tenant_id, project_id, job_id, name)
         if store:
@@ -159,7 +257,7 @@ def publish_artifacts(
         artifacts.append(
             {
                 "name": name,
-                "size": path.stat().st_size,
+                "size": size,
                 "sha256": sha256,
                 "backend": backend,
                 "storage_key": key if store else None,

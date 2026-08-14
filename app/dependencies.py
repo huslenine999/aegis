@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .resource_budgets import read_bounded_text
+
 
 IGNORED_DEPENDENCY_DIRS = {
     ".aegis",
@@ -120,7 +122,7 @@ def extract_packages_from_manifest(path: Path, kind: str | None = None, ecosyste
 
 def _packages_from_requirements(path: Path) -> list[DependencyPackage]:
     packages = []
-    for line in path.read_text(errors="ignore").splitlines():
+    for line in read_bounded_text(path, errors="ignore").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line or line.startswith(("-", "git+", "http://", "https://")):
             continue
@@ -131,7 +133,7 @@ def _packages_from_requirements(path: Path) -> list[DependencyPackage]:
 
 
 def _packages_from_pyproject(path: Path) -> list[DependencyPackage]:
-    data = tomllib.loads(path.read_text(errors="ignore"))
+    data = tomllib.loads(read_bounded_text(path, errors="ignore"))
     packages = []
     project = data.get("project", {})
     for value in project.get("dependencies", []) or []:
@@ -155,7 +157,7 @@ def _packages_from_pyproject(path: Path) -> list[DependencyPackage]:
 
 
 def _packages_from_python_lock(path: Path) -> list[DependencyPackage]:
-    data = tomllib.loads(path.read_text(errors="ignore"))
+    data = tomllib.loads(read_bounded_text(path, errors="ignore"))
     packages = []
     for item in data.get("package", []) or []:
         if isinstance(item, dict) and item.get("name"):
@@ -164,7 +166,7 @@ def _packages_from_python_lock(path: Path) -> list[DependencyPackage]:
 
 
 def _packages_from_package_json(path: Path) -> list[DependencyPackage]:
-    data = json.loads(path.read_text(errors="ignore"))
+    data = json.loads(read_bounded_text(path, errors="ignore"))
     packages = []
     for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
         deps = data.get(section, {})
@@ -175,7 +177,7 @@ def _packages_from_package_json(path: Path) -> list[DependencyPackage]:
 
 
 def _packages_from_package_lock(path: Path) -> list[DependencyPackage]:
-    data = json.loads(path.read_text(errors="ignore"))
+    data = json.loads(read_bounded_text(path, errors="ignore"))
     packages = []
     package_entries = data.get("packages")
     if isinstance(package_entries, dict):
@@ -195,7 +197,7 @@ def _packages_from_package_lock(path: Path) -> list[DependencyPackage]:
 def _packages_from_pnpm_lock(path: Path) -> list[DependencyPackage]:
     packages = []
     in_packages = False
-    for line in path.read_text(errors="ignore").splitlines():
+    for line in read_bounded_text(path, errors="ignore").splitlines():
         if line.startswith("packages:"):
             in_packages = True
             continue

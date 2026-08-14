@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from .database import USING_POSTGRES, get_connection
+from .github_lifecycle import ensure_legacy_repository_binding, revoke_github_capabilities
 
 
 PROJECT_ROLE_LEVEL = {"viewer": 10, "operator": 20, "admin": 30}
@@ -73,6 +74,7 @@ def create_project(
     if scan_preset not in VALID_PRESETS:
         raise ValueError("Invalid scan preset.")
     repository_url = normalize_github_repository_url(repository_url)
+    github_full_name = str(github_full_name or "").strip()
     with get_connection() as connection:
         user_tenant_id = _tenant_for_user(connection, user_id)
         if tenant_id is not None and int(tenant_id) != user_tenant_id:
@@ -108,6 +110,10 @@ def create_project(
                VALUES (?, ?, ?, ?)""",
             (project_id, user_id, "admin", _now()),
         )
+        if github_full_name:
+            ensure_legacy_repository_binding(
+                connection, int(project_id), int(tenant_id), github_full_name
+            )
     return int(project_id)
 
 
@@ -227,6 +233,7 @@ def update_project(
 
 
 def delete_project(project_id: int) -> list[str]:
+    revoke_github_capabilities(project_id=project_id)
     with get_connection() as connection:
         job_ids = [
             row[0]

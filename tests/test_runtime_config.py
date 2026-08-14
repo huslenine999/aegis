@@ -167,6 +167,20 @@ def test_worker_mirrors_latest_reports_without_copying_run_workspace(tmp_path, m
     assert not (latest_dir / "internal.log").exists()
 
 
+def test_worker_rejects_symlinked_latest_report_source(tmp_path, monkeypatch):
+    source_dir = tmp_path / "runs" / "job-1"
+    source_dir.mkdir(parents=True)
+    latest_dir = tmp_path / "latest"
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"secret": true}')
+    (source_dir / "ruff-report.json").symlink_to(outside)
+    monkeypatch.setattr(app_worker, "SCANS_DIR", latest_dir)
+
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        app_worker._mirror_latest_reports(source_dir)
+    assert not (latest_dir / "ruff-report.json").exists()
+
+
 def test_container_runtime_is_hardened_and_persistent():
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text()
     compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())

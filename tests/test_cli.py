@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -136,11 +137,58 @@ def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
     manifest = json.loads((output_dir / "scan-manifest.json").read_text())
     assert manifest["status"] == "allowed"
     assert manifest["exit_code"] == 0
+    assert manifest["schema_version"] == 3
+    assert manifest["source"]["attestation"]["status"] == "source-bound"
+    descriptor_path = output_dir / "source-descriptor.json"
+    assert descriptor_path.exists()
+    assert manifest["source"]["attestation"]["descriptor_sha256"] == hashlib.sha256(
+        json.dumps(
+            json.loads(descriptor_path.read_text()),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+    assert (
+        manifest["source"]["attestation"]["policy_sha256"]
+        == manifest["policy_definition_sha256"]
+    )
+    assert any(
+        artifact["name"] == "source-descriptor.json"
+        for artifact in manifest["artifacts"]
+    )
     assert any(tool["name"] == "Ruff" for tool in manifest["tools"])
     semgrep_result = next(result for result in summary["results"] if result["tool"] == "Semgrep")
     assert semgrep_result["status"] == "ERROR"
     assert any(timing["name"] == "Ruff" for timing in summary["timings"])
     assert any(timing["name"] == "Total" for timing in summary["timings"])
+
+
+def test_execute_scan_ignores_target_local_execution_and_output_config(tmp_path, monkeypatch):
+    target_file = tmp_path / "safe.py"
+    target_file.write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "aegis.yml").write_text(
+        "scan:\n"
+        "  no_docker: true\n"
+        "  fail_on: critical\n"
+        "  output_dir: ../attacker-controlled-output\n"
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
+        summary = execute_scan(
+            str(target_file),
+            use_docker=False,
+            tool_timeout=5,
+            quiet=True,
+            return_summary=True,
+        )
+
+    expected_output = (tmp_path / ".aegis" / "scans").resolve()
+    assert summary["scan_dir"] == str(expected_output)
+    assert not (tmp_path.parent / "attacker-controlled-output").exists()
 
 
 def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):

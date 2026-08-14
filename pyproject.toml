@@ -119,6 +119,10 @@ source = [
   "app.rate_limit",
   "app.scan_engine",
   "app.security_middleware",
+  "app.artifact_storage",
+  "app.reporting",
+  "app.resource_budgets",
+  "app.github_lifecycle",
 ]
 
 [tool.coverage.report]

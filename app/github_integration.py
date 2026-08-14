@@ -15,6 +15,10 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from .database import get_connection
+from .github_lifecycle import (
+    require_active_github_binding,
+    revoke_github_capabilities,
+)
 
 
 GITHUB_API = "https://api.github.com"
@@ -83,9 +87,22 @@ def github_app_jwt() -> str:
     return f"{header}.{claims}.{_base64url(signature)}"
 
 
-def github_installation_token(installation_id: int) -> str:
+def github_installation_token(
+    installation_id: int,
+    *,
+    tenant_id: int | None = None,
+    repository: str | None = None,
+) -> str:
     if int(installation_id) < 1:
         raise ValueError("GitHub installation ID is invalid.")
+    if tenant_id is not None:
+        if not repository:
+            raise ValueError("GitHub repository is required for a tenant-bound token.")
+        require_active_github_binding(
+            tenant_id=int(tenant_id),
+            installation_id=int(installation_id),
+            repository_full_name=repository,
+        )
     response = requests.post(
         f"{GITHUB_API}/app/installations/{int(installation_id)}/access_tokens",
         headers={
@@ -103,14 +120,25 @@ def github_installation_token(installation_id: int) -> str:
 
 
 def _github_app_api(
-    method: str, installation_id: int, path: str, payload: dict
+    method: str,
+    installation_id: int,
+    path: str,
+    payload: dict,
+    *,
+    tenant_id: int | None = None,
+    repository: str | None = None,
 ) -> dict:
     response = requests.request(
         method,
         f"{GITHUB_API}{path}",
         headers={
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {github_installation_token(installation_id)}",
+            "Authorization": (
+                "Bearer "
+                + github_installation_token(
+                    installation_id, tenant_id=tenant_id, repository=repository
+                )
+            ),
             "X-GitHub-Api-Version": "2022-11-28",
         },
         json=payload,
@@ -121,7 +149,12 @@ def _github_app_api(
 
 
 def create_check_run(
-    installation_id: int, repository: str, revision: str, details_url: str = ""
+    installation_id: int,
+    repository: str,
+    revision: str,
+    details_url: str = "",
+    *,
+    tenant_id: int | None = None,
 ) -> int:
     payload = {
         "name": "Aegis security gate",
@@ -136,7 +169,12 @@ def create_check_run(
     if details_url:
         payload["details_url"] = details_url
     result = _github_app_api(
-        "POST", installation_id, f"/repos/{repository}/check-runs", payload
+        "POST",
+        installation_id,
+        f"/repos/{repository}/check-runs",
+        payload,
+        tenant_id=tenant_id,
+        repository=repository,
     )
     return int(result["id"])
 
@@ -151,6 +189,7 @@ def complete_check_run(
     summary: str,
     details_url: str = "",
     annotations: list[dict] | None = None,
+    tenant_id: int | None = None,
 ) -> None:
     allowed = {"success", "failure", "neutral", "cancelled", "timed_out", "action_required"}
     if conclusion not in allowed:
@@ -171,6 +210,8 @@ def complete_check_run(
         installation_id,
         f"/repos/{repository}/check-runs/{int(check_run_id)}",
         payload,
+        tenant_id=tenant_id,
+        repository=repository,
     )
 
 
@@ -202,8 +243,11 @@ def verify_and_record_webhook(
     if not isinstance(payload, dict):
         raise ValueError("GitHub webhook body must be a JSON object.")
     repository = payload.get("repository") or {}
-    repository_name = str(repository.get("full_name") or "")[:255]
-    if repository_name and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository_name):
+    repository_name = str(repository.get("full_name") or "").strip()
+    if len(repository_name) > 255 or (
+        repository_name
+        and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository_name)
+    ):
         raise ValueError("GitHub repository identity is invalid.")
     digest = hashlib.sha256(body).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
@@ -236,14 +280,21 @@ def verify_and_record_webhook(
                     "accepted",
                 ),
             )
+    def payload_integer(value) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
     return {
         "delivery_id": delivery_id,
         "event_type": event_type,
         "repository": repository_name,
         "payload_sha256": digest,
         "action": str(payload.get("action") or "")[:64],
-        "installation_id": int((payload.get("installation") or {}).get("id") or 0),
-        "pull_request": int((payload.get("pull_request") or {}).get("number") or 0),
+        "repository_id": payload_integer(repository.get("id")),
+        "installation_id": payload_integer((payload.get("installation") or {}).get("id")),
+        "pull_request": payload_integer((payload.get("pull_request") or {}).get("number")),
         "head_sha": str(
             ((payload.get("pull_request") or {}).get("head") or {}).get("sha") or ""
         )[:64],
@@ -360,21 +411,38 @@ def complete_oauth(code: str, state: str, callback_url: str) -> int:
     profile = _github_get(token, "/user")
     user_id = int(row[0])
     with get_connection() as connection:
-        connection.execute(
-            "DELETE FROM github_connections WHERE user_id = ?", (user_id,)
-        )
-        connection.execute(
-            """INSERT INTO github_connections
-               (user_id, github_login, token_encrypted, scopes, connected_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (
-                user_id,
-                profile["login"],
-                _encrypt(token),
-                payload.get("scope", ""),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
+        connected_at = datetime.now(timezone.utc).isoformat()
+        encrypted_token = _encrypt(token)
+        existing = connection.execute(
+            "SELECT 1 FROM github_connections WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if existing:
+            connection.execute(
+                """UPDATE github_connections
+                   SET github_login = ?, token_encrypted = ?, scopes = ?,
+                       connected_at = ?, revoked_at = NULL
+                   WHERE user_id = ?""",
+                (
+                    profile["login"],
+                    encrypted_token,
+                    payload.get("scope", ""),
+                    connected_at,
+                    user_id,
+                ),
+            )
+        else:
+            connection.execute(
+                """INSERT INTO github_connections
+                   (user_id, github_login, token_encrypted, scopes, connected_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    user_id,
+                    profile["login"],
+                    encrypted_token,
+                    payload.get("scope", ""),
+                    connected_at,
+                ),
+            )
     return user_id
 
 
@@ -396,7 +464,8 @@ def _github_get(token: str, path: str, params: dict | None = None):
 def github_connection(user_id: int) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT github_login, scopes, connected_at FROM github_connections WHERE user_id = ?",
+            """SELECT github_login, scopes, connected_at FROM github_connections
+               WHERE user_id = ? AND revoked_at IS NULL AND token_encrypted <> ''""",
             (user_id,),
         ).fetchone()
     if not row:
@@ -407,7 +476,10 @@ def github_connection(user_id: int) -> dict | None:
 def github_token(user_id: int) -> str | None:
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT token_encrypted FROM github_connections WHERE user_id = ?",
+            """SELECT c.token_encrypted FROM github_connections c
+               JOIN auth_users u ON u.id = c.user_id
+               WHERE c.user_id = ? AND u.active = 1 AND c.revoked_at IS NULL
+                 AND c.token_encrypted <> ''""",
             (user_id,),
         ).fetchone()
     return _decrypt(row[0]) if row else None
@@ -478,7 +550,4 @@ def create_repository_issue(
 
 
 def disconnect_github(user_id: int) -> None:
-    with get_connection() as connection:
-        connection.execute(
-            "DELETE FROM github_connections WHERE user_id = ?", (user_id,)
-        )
+    revoke_github_capabilities(user_id=user_id)

@@ -10,9 +10,9 @@ import time
 import re
 import base64
 import hashlib
-import queue as thread_queue
-import threading
+from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, get_connection, redis_client
 from .config import environment_positive_int
@@ -39,15 +39,29 @@ from .projects import (
 from .findings import sync_findings
 from .policies import get_policy
 from .evidence import canonical_json, sign_manifest
-from .artifact_storage import publish_artifacts, run_directory
+from .artifact_storage import (
+    artifact_limits,
+    publish_artifacts,
+    run_directory,
+    validate_artifact_sizes,
+)
+from .safe_output import SafeOutputError, SafeOutputRoot
+from .source_attestation import SourceSnapshot, create_source_snapshot, normalize_scan_report_paths
 from .github_integration import complete_check_run, github_installation_token, github_token
+from .github_lifecycle import GitHubLifecycleError, authorize_queued_scan
 from .notifications import queue_project_notification
 from .observability import record_scan_queue_age, record_worker_failure
 from .reporting import load_json_report
+from .resource_budgets import (
+    ResourceLimitError,
+    iter_bounded,
+    resource_budgets,
+    run_bounded_subprocess,
+)
 from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
     create_sandbox_network, run_sandbox_container, wait_for_container,
-    run_trivy_scan, stop_and_cleanup_sandbox, validate_untrusted_tree
+    run_trivy_scan, stop_and_cleanup_sandbox
 )
 
 EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
@@ -72,31 +86,55 @@ RECORDED_ARTIFACT_NAMES = {
     "zap-report.json",
     "iac-report.json",
     "sandbox-status.json",
+    "source-descriptor.json",
     "scan-manifest.json",
 }
 logger = logging.getLogger("aegis.worker")
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    expected_size: int | None = None,
+) -> str:
     digest = hashlib.sha256()
+    actual_size = 0
     with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        for chunk in iter_bounded(
+            stream,
+            max_bytes or resource_budgets().max_response_bytes,
+            chunk_size=1024 * 1024,
+        ):
+            actual_size += len(chunk)
             digest.update(chunk)
+    if expected_size is not None and actual_size != expected_size:
+        raise RuntimeError(f"Artifact {path.name!r} changed while it was being inventoried.")
     return digest.hexdigest()
 
 
 def _artifact_inventory(report_dir: Path) -> list[dict]:
     inventory = []
+    candidates: list[tuple[str, Path, int]] = []
     for name in sorted(RECORDED_ARTIFACT_NAMES - {"scan-manifest.json"}):
         path = report_dir / name
         if path.is_file():
-            inventory.append(
-                {
-                    "name": name,
-                    "size": path.stat().st_size,
-                    "sha256": _sha256_file(path),
-                }
-            )
+            if path.is_symlink():
+                raise RuntimeError("Artifact paths must not be symbolic links.")
+            candidates.append((name, path, path.stat().st_size))
+    validate_artifact_sizes((name, size) for name, _, size in candidates)
+    for name, path, size in candidates:
+        inventory.append(
+            {
+                "name": name,
+                "size": size,
+                "sha256": _sha256_file(
+                    path,
+                    max_bytes=artifact_limits()["per_artifact"],
+                    expected_size=size,
+                ),
+            }
+        )
     return inventory
 
 
@@ -106,16 +144,15 @@ def _source_revision(target_path: str | Path) -> str:
     git = shutil.which("git")
     if git:
         try:
-            result = subprocess.run(
+            output = BytesIO()
+            result = run_bounded_subprocess(
                 [git, "rev-parse", "HEAD"],
                 cwd=working_directory,
                 env=scanner_subprocess_environment(),
-                capture_output=True,
-                text=True,
-                check=False,
+                stdout_sink=output,
                 timeout=10,
             )
-            revision = result.stdout.strip().lower()
+            revision = output.getvalue().decode("utf-8", errors="replace").strip().lower()
             if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", revision):
                 return revision
         except (OSError, subprocess.SubprocessError):
@@ -247,57 +284,45 @@ def execute_subprocess_log(
 ):
     publish_job_event(job_id, "log", {"text": f"[{tool_name}] Executing: {' '.join(cmd)}", "color": "var(--text-muted)"})
     try:
-        p = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env or scanner_subprocess_environment(),
-            start_new_session=os.name != "nt",
-        )
-        output: thread_queue.Queue[str | None] = thread_queue.Queue()
-
-        def read_output() -> None:
-            if p.stdout is not None:
-                for line in p.stdout:
-                    output.put(line)
-            output.put(None)
-
-        threading.Thread(target=read_output, daemon=True).start()
-        deadline = time.monotonic() + timeout
-        while True:
-            _check_cancelled(job_id)
-            if time.monotonic() >= deadline:
-                p.terminate()
-                try:
-                    p.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    p.kill()
+        def publish_output(data: bytes) -> None:
+            for line in data.decode("utf-8", errors="replace").splitlines():
                 publish_job_event(
                     job_id,
                     "log",
-                    {
-                        "text": f"[{tool_name} Error] Timed out after {timeout}s.",
-                        "color": "var(--danger)",
-                    },
+                    {"text": f"[{tool_name}] {line[:4000]}", "color": "var(--text-main)"},
                 )
-                return -1
-            try:
-                line = output.get(timeout=0.25)
-            except thread_queue.Empty:
-                if p.poll() is not None:
-                    break
-                continue
-            if line is None:
-                break
-            publish_job_event(job_id, "log", {"text": f"[{tool_name}] {line.strip()}", "color": "var(--text-main)"})
-        p.wait(timeout=5)
-        return p.returncode
+
+        completed = run_bounded_subprocess(
+            cmd,
+            cwd=cwd,
+            env=env or scanner_subprocess_environment(),
+            timeout=timeout,
+            on_output=publish_output,
+            check_callback=lambda: _check_cancelled(job_id),
+        )
+        return completed.returncode
     except ScanCancelled:
-        if "p" in locals() and p.poll() is None:
-            p.terminate()
         raise
+    except ResourceLimitError as exc:
+        publish_job_event(
+            job_id,
+            "log",
+            {
+                "text": f"[{tool_name} Error] Output budget exceeded: {exc}",
+                "color": "var(--danger)",
+            },
+        )
+        return -1
+    except subprocess.TimeoutExpired:
+        publish_job_event(
+            job_id,
+            "log",
+            {
+                "text": f"[{tool_name} Error] Timed out after {timeout}s.",
+                "color": "var(--danger)",
+            },
+        )
+        return -1
     except Exception as e:
         publish_job_event(job_id, "log", {"text": f"[{tool_name} Error] Failed to run command: {e}", "color": "var(--danger)"})
         return -1
@@ -340,11 +365,17 @@ def _clone_github_project(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if revision and not re.fullmatch(r"[0-9a-f]{40,64}", revision):
         raise RuntimeError("GitHub source revision is invalid.")
-    token = github_installation_token(installation_id) if installation_id else None
+    token = (
+        github_installation_token(
+            installation_id,
+            tenant_id=project["tenant_id"],
+            repository=project["github_full_name"],
+        )
+        if installation_id
+        else None
+    )
     if not token:
         token = github_token(requested_by)
-    if not token and requested_by != project["created_by"]:
-        token = github_token(project["created_by"])
     environment = scanner_subprocess_environment()
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
@@ -365,38 +396,28 @@ def _clone_github_project(
         clone_command.extend(["--single-branch", "--branch", project["default_branch"]])
     repository_url = normalize_github_repository_url(project["repository_url"])
     clone_command.extend(["--", repository_url, str(destination)])
-    result = subprocess.run(
+    result = run_bounded_subprocess(
         clone_command,
         env=environment,
-        capture_output=True,
-        text=True,
         timeout=120,
-        check=False,
     )
     if result.returncode != 0:
         shutil.rmtree(destination, ignore_errors=True)
-        raise RuntimeError(f"Repository clone failed: {result.stderr[-500:]}")
+        raise RuntimeError("Repository clone failed.")
     if revision:
-        fetch = subprocess.run(
+        fetch = run_bounded_subprocess(
             [git_executable, "-C", str(destination), "fetch", "--depth", "1", "origin", revision],
             env=environment,
-            capture_output=True,
-            text=True,
             timeout=120,
-            check=False,
         )
-        checkout = subprocess.run(
+        checkout = run_bounded_subprocess(
             [git_executable, "-C", str(destination), "checkout", "--detach", revision],
             env=environment,
-            capture_output=True,
-            text=True,
             timeout=60,
-            check=False,
         )
         if fetch.returncode != 0 or checkout.returncode != 0:
             shutil.rmtree(destination, ignore_errors=True)
-            detail = fetch.stderr if fetch.returncode else checkout.stderr
-            raise RuntimeError(f"Repository revision checkout failed: {detail[-500:]}")
+            raise RuntimeError("Repository revision checkout failed.")
     return str(destination), destination
 
 
@@ -426,6 +447,7 @@ def _complete_github_scan_check(
             summary=summary,
             details_url=details_url,
             annotations=annotations,
+            tenant_id=project["tenant_id"],
         )
     except Exception as exc:
         publish_job_event(
@@ -547,16 +569,25 @@ def _target_requirements_file(target_path: str | Path) -> Path | None:
 
 
 def _mirror_latest_reports(source_dir: Path) -> None:
-    source_dir.mkdir(parents=True, exist_ok=True)
-    SCANS_DIR.mkdir(parents=True, exist_ok=True)
-    for path in source_dir.iterdir():
+    source_output = SafeOutputRoot(source_dir)
+    latest_output = SafeOutputRoot(SCANS_DIR)
+    for path in source_output.root.iterdir():
+        if path.is_symlink():
+            raise SafeOutputError("Output paths may not contain symbolic links.")
         if not path.is_file():
             continue
         if (
             path.name.endswith("-report.json")
-            or path.name in {"osv-report.json", "sandbox-status.json", "report.html", "report.md", "sbom.json"}
+            or path.name in {
+                "osv-report.json",
+                "sandbox-status.json",
+                "source-descriptor.json",
+                "report.html",
+                "report.md",
+                "sbom.json",
+            }
         ):
-            shutil.copy2(path, SCANS_DIR / path.name)
+            shutil.copy2(path, latest_output.file(path.name))
 
 
 def _cleanup_expired_artifacts(current_job_id: str) -> None:
@@ -657,16 +688,32 @@ def async_scan_task(
         project_id=project_id,
         create=True,
     )
-    report_dir.mkdir(parents=True, exist_ok=True)
+    safe_output = SafeOutputRoot(report_dir)
+    report_dir = safe_output.root
     _cleanup_expired_artifacts(job_id)
     tool_statuses = ToolStatusTracker()
     runner = ScanRunner(RedisEventSink(job_id), tool_statuses)
     mark_tool = runner.mark_tool
 
     def write_json(path: Path, value) -> None:
-        path.write_text(json.dumps(value, indent=2))
+        safe_output.write_json_path(path, value)
 
+    source_snapshot: SourceSnapshot | None = None
+    attested_source_path: Path | None = None
     try:
+        if project_id and scan_run_id:
+            try:
+                authorize_queued_scan(
+                    job_id=job_id,
+                    scan_run_id=scan_run_id,
+                    project_id=project_id,
+                    requested_by=requested_by or 0,
+                    preset=preset,
+                    source_revision=source_revision,
+                    github_installation_id=github_installation_id,
+                )
+            except GitHubLifecycleError as exc:
+                raise RuntimeError(str(exc)) from exc
         python_bin = sys.executable
         is_custom_scan = custom_file_path is not None
         target_path = custom_file_path if is_custom_scan else None
@@ -718,15 +765,20 @@ def async_scan_task(
         if is_custom_scan:
             if custom_file_path is None:
                 raise RuntimeError("Custom scans require a target file path.")
-            target_path = custom_file_path
-            workspace_limits = validate_untrusted_tree(Path(target_path))
+            attested_source_path = Path(custom_file_path).expanduser().resolve()
+            source_snapshot = create_source_snapshot(attested_source_path)
+            target_path = str(source_snapshot.scan_path)
+            workspace_limits = {
+                "files": source_snapshot.file_count,
+                "bytes": source_snapshot.total_bytes,
+            }
             dependency_manifests = discover_dependency_manifests(target_path)
             # Empty placeholders for custom scans
-            with open(report_dir / "safety-report.json", "w") as f:
+            with safe_output.file("safety-report.json").open("w") as f:
                 json.dump([], f)
-            with open(report_dir / "osv-report.json", "w") as f:
+            with safe_output.file("osv-report.json").open("w") as f:
                 json.dump([], f)
-            with open(report_dir / "trivy-report.json", "w") as f:
+            with safe_output.file("trivy-report.json").open("w") as f:
                 json.dump({"Results": []}, f)
             mark_tool("Safety", "skipped", detail="single-file scan")
             mark_tool("OSV", "skipped", detail="single-file scan")
@@ -740,9 +792,16 @@ def async_scan_task(
 
             if target_path is None:
                 raise RuntimeError("Unable to resolve the scan target path.")
-            workspace_limits = validate_untrusted_tree(
-                Path(target_path), ignored_names=DEFAULT_IGNORED_DIRS
+            attested_source_path = Path(target_path).expanduser().resolve()
+            source_snapshot = create_source_snapshot(
+                attested_source_path,
+                ignored_names=DEFAULT_IGNORED_DIRS,
             )
+            target_path = str(source_snapshot.scan_path)
+            workspace_limits = {
+                "files": source_snapshot.file_count,
+                "bytes": source_snapshot.total_bytes,
+            }
             dependency_manifests = discover_dependency_manifests(target_path)
                 
             # Run Safety SCA
@@ -768,7 +827,7 @@ def async_scan_task(
                         str(requirements_file.parent),
                         "--save-as",
                         "json",
-                        str(report_dir / "safety-report.json"),
+                        str(safe_output.file("safety-report.json")),
                     ]
                     safety_environment = scanner_subprocess_environment()
                     if os.environ.get("SAFETY_API_KEY"):
@@ -780,7 +839,7 @@ def async_scan_task(
                         timeout=120,
                         env=safety_environment,
                     )
-                    safety_report = load_json_report(report_dir / "safety-report.json")
+                    safety_report = load_json_report(safe_output.file("safety-report.json"))
                     if isinstance(safety_report, (dict, list)):
                         mark_tool("Safety", "completed", return_code=completed.returncode)
                         publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
@@ -816,13 +875,15 @@ def async_scan_task(
                 mark_tool("OSV", "skipped", detail="dependency manifest not found")
             
             # Ensure trivy-report.json exists
-            trivy_path = report_dir / "trivy-report.json"
+            trivy_path = safe_output.file("trivy-report.json")
             if not trivy_path.exists():
-                with open(trivy_path, "w") as f:
+                with trivy_path.open("w") as f:
                     json.dump({"Results": []}, f)
 
         if target_path is None:
             raise RuntimeError("Unable to resolve the scan target path.")
+        if source_snapshot is None or attested_source_path is None:
+            raise RuntimeError("Source attestation was not established.")
 
         publish_job_event(
             job_id,
@@ -838,7 +899,7 @@ def async_scan_task(
 
         # IaC is a static configuration audit. It intentionally runs before
         # Docker/DAST and does not depend on the sandbox being available.
-        iac_report_path = report_dir / "iac-report.json"
+        iac_report_path = safe_output.file("iac-report.json")
         if skip_external_scanners or is_custom_scan:
             detail = "scan preset" if skip_external_scanners else "standalone upload scope"
             write_json(iac_report_path, empty_iac_report(status="skipped", detail=detail))
@@ -889,7 +950,7 @@ def async_scan_task(
         sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
         sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
         sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
-        sandbox_temp_dir = report_dir / "sandbox" / sandbox_uuid
+        sandbox_temp_dir = safe_output.directory(Path("sandbox") / sandbox_uuid)
         host_port = None
         sandbox_started = False
         sandbox_cleanup_required = False
@@ -947,7 +1008,7 @@ def async_scan_task(
         else:
             mark_tool("Docker Sandbox", "skipped", detail="scan preset")
 
-        sandbox_status_file = report_dir / "sandbox-status.json"
+        sandbox_status_file = safe_output.file("sandbox-status.json")
         write_json(
             sandbox_status_file,
             {"status": "active" if sandbox_active else "simulated_fallback"},
@@ -960,7 +1021,7 @@ def async_scan_task(
         _check_cancelled(job_id)
         
         # SAST: Ruff (SAST)
-        ruff_report_path = report_dir / "ruff-report.json"
+        ruff_report_path = safe_output.file("ruff-report.json")
         if has_python:
             ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
@@ -977,7 +1038,7 @@ def async_scan_task(
             publish_job_event(job_id, "log", {"text": "[SAST:Ruff (SAST)] Skipped (No Python scripts found)", "color": "var(--text-muted)"})
 
         # SAST: Semgrep
-        semgrep_report_path = report_dir / "semgrep-report.json"
+        semgrep_report_path = safe_output.file("semgrep-report.json")
         if has_python and not skip_external_scanners:
             try:
                 semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
@@ -1018,7 +1079,7 @@ def async_scan_task(
             publish_job_event(job_id, "log", {"text": f"[SAST:Semgrep] Skipped ({reason}).", "color": "var(--text-muted)"})
 
         # Secrets Scanner
-        secrets_report_path = report_dir / "secrets-report.json"
+        secrets_report_path = safe_output.file("secrets-report.json")
         try:
             if skip_external_scanners:
                 write_json(secrets_report_path, {"results": {}})
@@ -1032,12 +1093,11 @@ def async_scan_task(
                     target_path
                 ]
                 publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
-                with open(secrets_report_path, "w") as report_file:
-                    completed = subprocess.run(
+                with secrets_report_path.open("w") as report_file:
+                    completed = run_bounded_subprocess(
                         secrets_cmd,
                         cwd=PROJECT_ROOT,
-                        check=False,
-                        stdout=report_file,
+                        stdout_sink=report_file,
                         timeout=120,
                         env=scanner_subprocess_environment(),
                     )
@@ -1054,37 +1114,37 @@ def async_scan_task(
             mark_tool("Secrets", "failed", detail=str(exc))
 
         # YARA Scanner
-        yara_report_path = report_dir / "yara-report.json"
+        yara_report_path = safe_output.file("yara-report.json")
         try:
             publish_job_event(job_id, "log", {"text": "[YARA] Triggering YARA signature engine...", "color": "var(--text-muted)"})
             yara_findings = run_yara_scan(target_path, job_id)
-            with open(yara_report_path, "w") as f:
+            with yara_report_path.open("w") as f:
                 json.dump(yara_findings, f, indent=2)
             mark_tool("YARA", "completed")
             publish_job_event(job_id, "log", {"text": "[YARA] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
             publish_job_event(job_id, "log", {"text": f"[YARA Error] {e}", "color": "var(--danger)"})
-            with open(yara_report_path, "w") as f:
+            with yara_report_path.open("w") as f:
                 json.dump([], f)
             mark_tool("YARA", "failed", detail=str(e))
 
         # ClamAV Scanner
-        clamav_report_path = report_dir / "clamav-report.json"
+        clamav_report_path = safe_output.file("clamav-report.json")
         try:
             publish_job_event(job_id, "log", {"text": "[ClamAV] Triggering ClamAV antivirus scanner...", "color": "var(--text-muted)"})
             clamav_findings = run_clamav_scan(target_path, job_id)
-            with open(clamav_report_path, "w") as f:
+            with clamav_report_path.open("w") as f:
                 json.dump(clamav_findings, f, indent=2)
             mark_tool("ClamAV", "completed")
             publish_job_event(job_id, "log", {"text": "[ClamAV] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
             publish_job_event(job_id, "log", {"text": f"[ClamAV Error] {e}", "color": "var(--danger)"})
-            with open(clamav_report_path, "w") as f:
+            with clamav_report_path.open("w") as f:
                 json.dump([], f)
             mark_tool("ClamAV", "failed", detail=str(e))
 
         # Aegis DAST Probe Scanner
-        zap_report_path = report_dir / "zap-report.json"
+        zap_report_path = safe_output.file("zap-report.json")
         try:
             if not enable_dynamic_scanners:
                 zap_findings = []
@@ -1114,8 +1174,9 @@ def async_scan_task(
         if sandbox_active:
             publish_job_event(job_id, "log", {"text": "[Trivy] Auditing built image layers for CVEs...", "color": "var(--text-muted)"})
             try:
-                run_trivy_scan(sandbox_image, report_dir / "trivy-report.json")
-                trivy_report = load_json_report(report_dir / "trivy-report.json")
+                trivy_path = safe_output.file("trivy-report.json")
+                run_trivy_scan(sandbox_image, trivy_path)
+                trivy_report = load_json_report(trivy_path)
                 if not isinstance(trivy_report, dict):
                     raise RuntimeError("Trivy did not produce a valid JSON report")
                 mark_tool("Trivy", "completed")
@@ -1133,6 +1194,9 @@ def async_scan_task(
         else:
             write_json(report_dir / "trivy-report.json", {"Results": []})
             mark_tool("Trivy", "skipped", detail="scan preset")
+
+        safe_output.write_json("source-descriptor.json", source_snapshot.descriptor)
+        normalize_scan_report_paths(report_dir, source_snapshot, safe_output)
 
         # 3. State: ANALYZING -> CORRELATING
         runner.transition("correlating", 70)
@@ -1163,13 +1227,14 @@ def async_scan_task(
                     )
         policy_exit_code = run_policy_engine(
             scan_dir=report_dir,
-            html_path=report_dir / "report.html",
-            md_path=report_dir / "report.md",
+            html_path=safe_output.file("report.html"),
+            md_path=safe_output.file("report.md"),
             dependency_manifests=dependency_manifests,
             reporter_callback=capture_policy_summary,
             operational_failures=operational_failures or None,
             tool_states=tool_statuses.states(),
             waf_enabled=waf_enabled,
+            output_root=safe_output,
             fail_on_severities=(
                 set(policy_definition["fail_on_severities"])
                 if policy_definition
@@ -1244,28 +1309,46 @@ def async_scan_task(
             ),
         }
         policy_digest = hashlib.sha256(canonical_json(policy_summary)).hexdigest()
+        default_policy_definition: dict[str, Any] = {
+            "schema_version": 1,
+            "fail_on_severities": ["MEDIUM", "HIGH", "CRITICAL"],
+            "required_tools": [],
+        }
+        configured_policy_definition = policy.get("definition") if policy else None
+        attested_policy_definition: dict[str, Any] = default_policy_definition
+        if isinstance(configured_policy_definition, dict):
+            attested_policy_definition = dict(configured_policy_definition)
+        configured_policy_sha256 = policy.get("sha256") if policy else None
+        policy_definition_sha256 = (
+            str(configured_policy_sha256)
+            if configured_policy_sha256
+            else hashlib.sha256(canonical_json(attested_policy_definition)).hexdigest()
+        )
         target_identity = (
             project["github_full_name"] or project["repository_url"]
             if project
             else "uploaded-file" if is_custom_scan else str(target)
         )
+        source_record = source_snapshot.manifest_source(
+            identity=target_identity,
+            revision=source_revision or _source_revision(attested_source_path),
+            policy_sha256=policy_definition_sha256,
+            branch=project["default_branch"] if project else None,
+        )
         write_json(
             report_dir / "scan-manifest.json",
             sign_manifest({
-                "schema_version": 2,
+                "schema_version": 3,
                 "job_id": job_id,
                 "project_id": project_id,
                 "scan_run_id": scan_run_id,
                 "tenant_id": project["tenant_id"] if project else None,
-                "source": {
-                    "identity": target_identity,
-                    "revision": _source_revision(target_path),
-                    "branch": project["default_branch"] if project else None,
-                },
+                "source": source_record,
                 "preset": preset,
                 "policy_status": final_status,
                 "policy_exit_code": policy_exit_code,
                 "policy_sha256": policy_digest,
+                "policy_definition_sha256": policy_definition_sha256,
                 "policy_version": result_payload["policy_version"],
                 "operational_failures": operational_failures,
                 "tools": [dict(item) for item in tool_statuses.records],
@@ -1304,7 +1387,7 @@ def async_scan_task(
                 f"{result_payload.get('new_findings', 0)}. Blocking tools: "
                 f"{', '.join(blocking_tools) or 'none'}."
             ),
-            _github_check_annotations(result_payload, target_path),
+            _github_check_annotations(result_payload, attested_source_path),
         )
         if project_id:
             project = get_project(project_id)
@@ -1381,6 +1464,8 @@ def async_scan_task(
             shutil.rmtree(cleanup_temp_dir, ignore_errors=True)
         if external_project_dir:
             shutil.rmtree(external_project_dir, ignore_errors=True)
+        if source_snapshot:
+            source_snapshot.cleanup()
         if custom_file_path:
             upload_root = (SCANS_DIR / "uploads").resolve()
             upload_path = Path(custom_file_path).resolve()

@@ -8,8 +8,10 @@ from cryptography.fernet import Fernet
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import hashlib
+import json
 import pytest
 from types import SimpleNamespace
+from starlette.responses import StreamingResponse
 
 
 def configure_project_database(tmp_path, monkeypatch):
@@ -289,7 +291,7 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     response = app_main.project_scan_artifact(
         7, 3, "report.html", principal=object()
     )
-    assert response.path == str(run_dir / "report.html")
+    assert isinstance(response, StreamingResponse)
 
     (run_dir / "report.html").write_text("tampered")
     with pytest.raises(app_main.HTTPException, match="integrity verification failed"):
@@ -386,10 +388,8 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     (target / "safe.py").write_text("def add(left, right):\n    return left + right\n")
-    runtime_venv = tmp_path / "runtime-venv"
-    runtime_venv.mkdir()
-    (runtime_venv / "python").write_text("runtime placeholder\n")
-    (target / ".venv").symlink_to(runtime_venv, target_is_directory=True)
+    (target / ".venv").mkdir()
+    (target / ".venv" / "python").write_text("runtime placeholder\n")
     monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "true")
     monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
     monkeypatch.setattr(worker, "PROJECT_ROOT", target)
@@ -419,8 +419,13 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
 
     worker.async_scan_task("legacy-job", "project")
 
-    manifest = (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
-    assert '"policy_status": "ALLOWED"' in manifest
+    manifest = json.loads(
+        (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
+    )
+    assert manifest["policy_status"] == "ALLOWED"
+    assert manifest["schema_version"] == 3
+    assert manifest["source"]["attestation"]["status"] == "source-bound"
+    assert (scans_dir / "runs" / "legacy-job" / "source-descriptor.json").exists()
     assert docker_checks == [True]
     assert scanner_commands and "--no-cache" in scanner_commands[0]
 

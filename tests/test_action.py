@@ -195,6 +195,8 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     assert 'python -m pip install "./trusted-aegis[scanner]"' in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
+    assert 'OUTPUT_DIR="${GITHUB_WORKSPACE}/aegis-reports"' in scan_script
+    assert 'realpath "$OUTPUT_DIR"' in scan_script
     assert "aegis scan target \\" in scan_script
     assert "--no-docker" in scan_script
     assert "--fast" not in scan_script
@@ -275,6 +277,53 @@ def test_action_passes_inputs_through_environment_and_bash_array():
     assert 'aegis "${ARGS[@]}"' in script
     assert "${{ inputs.scan-target }}" not in script
     assert "${{ inputs.output-dir }}" not in script
+    assert 'CONFIG_PATH="${INPUT_CONFIG:-$AEGIS_ACTION_PATH/aegis.yml}"' in script
+    assert '--config "$CONFIG_PATH"' in script
+
+
+def test_action_rejects_output_paths_outside_workspace(tmp_path):
+    action = load_action()
+    scan_step = next(step for step in action["runs"]["steps"] if step.get("id") == "aegis")
+    script_path = tmp_path / "action-step.sh"
+    output_path = tmp_path / "github-output"
+    summary_path = tmp_path / "github-summary"
+    script_path.write_text(scan_step["run"])
+    environment = {
+        **os.environ,
+        "INPUT_TARGET": ".",
+        "INPUT_OUTPUT_DIR": "../reports",
+        "INPUT_NO_DOCKER": "true",
+        "INPUT_TIMEOUT": "120",
+        "INPUT_FAIL_ON": "high,critical",
+        "INPUT_CONFIG": "",
+        "INPUT_SARIF": "false",
+        "INPUT_STRICT": "true",
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(output_path),
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "PATH": f"{PROJECT_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        ["bash", str(script_path)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    output_lines = output_path.read_text().splitlines()
+    assert "decision=error" in output_lines
+    summary_file = next(
+        Path(line.split("=", 1)[1])
+        for line in output_lines
+        if line.startswith("summary-json=")
+    )
+    error = json.loads(summary_file.read_text())
+    assert error["error"] == "output-dir must be a relative path without '..'"
 
 
 def test_action_shell_script_has_valid_bash_syntax(tmp_path):
@@ -313,6 +362,7 @@ def test_action_invalid_input_sets_error_outputs(tmp_path):
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_OUTPUT": str(output_path),
         "GITHUB_STEP_SUMMARY": str(summary_path),
+        "PATH": f"{PROJECT_ROOT / '.venv' / 'bin'}:{os.environ['PATH']}",
     }
 
     result = subprocess.run(
