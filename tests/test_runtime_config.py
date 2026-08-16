@@ -219,6 +219,7 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["proxy"]["ports"] == ["80:80", "443:443", "443:443/udp"]
     assert services["dashboard"]["environment"]["DATABASE_URL"].startswith("postgresql://")
     assert services["dashboard"]["environment"]["FORWARDED_ALLOW_IPS"] != "*"
+    assert "AEGIS_ADMIN_TOKEN" not in services["dashboard"]["environment"]
     assert "AEGIS_SESSION_SECRET" not in services["worker"]["environment"]
     assert "AEGIS_ADMIN_TOKEN" not in services["worker"]["environment"]
     assert services["worker"]["entrypoint"] == [
@@ -283,7 +284,6 @@ def test_container_preflight_rejects_missing_production_configuration(monkeypatc
     monkeypatch.setenv("AEGIS_ENV", "production")
     monkeypatch.setenv("AEGIS_HOST", "0.0.0.0")
     for name in (
-        "AEGIS_ADMIN_TOKEN",
         "AEGIS_ALLOWED_HOSTS",
         "AEGIS_AUDIT_HMAC_KEY",
         "AEGIS_BOOTSTRAP_ADMIN_PASSWORD",
@@ -328,7 +328,6 @@ def test_dashboard_renders_with_current_starlette_template_api():
 
 def test_production_configuration_fails_closed(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
-    monkeypatch.delenv("AEGIS_ADMIN_TOKEN", raising=False)
     monkeypatch.delenv("AEGIS_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("AEGIS_CORS_ORIGINS", raising=False)
     monkeypatch.delenv("AEGIS_REQUIRE_REDIS", raising=False)
@@ -341,7 +340,6 @@ def test_production_configuration_fails_closed(monkeypatch):
 
 def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
-    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "a" * 32)
     monkeypatch.setenv("AEGIS_ALLOWED_HOSTS", "aegis.example.com")
     monkeypatch.setenv("AEGIS_CORS_ORIGINS", "https://aegis.example.com")
     monkeypatch.setenv("AEGIS_PUBLIC_URL", "https://aegis.example.com")

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
+import hashlib
 import sys
 
 import pytest
@@ -168,17 +169,14 @@ def test_s3_artifact_store_uses_encryption_lock_and_integrity_metadata(tmp_path,
         def upload_file(self, filename, bucket, key, ExtraArgs):
             calls.update(filename=filename, bucket=bucket, key=key, extra=ExtraArgs)
 
-        def head_object(self, **kwargs):
-            return {
-                "ContentLength": path.stat().st_size,
-                "Metadata": {"sha256": calls["extra"]["Metadata"]["sha256"]},
-            }
+        def get_object(self, **kwargs):
+            return {"Body": path.open("rb")}
 
     monkeypatch.setenv("AEGIS_S3_BUCKET", "evidence")
     monkeypatch.setenv("AEGIS_S3_KMS_KEY_ID", "kms-key")
     monkeypatch.setenv("AEGIS_S3_OBJECT_LOCK_DAYS", "30")
     store = artifact_storage.S3ArtifactStore(Client())
-    digest = "a" * 64
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
     store.put(path, "tenant/run/report.json", digest)
 
     assert calls["bucket"] == "evidence"

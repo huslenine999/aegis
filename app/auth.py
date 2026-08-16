@@ -18,6 +18,7 @@ from .database import get_connection
 SESSION_COOKIE = "aegis_session"
 ROLE_LEVEL = {"viewer": 10, "operator": 20, "admin": 30}
 TOKEN_SCOPES = {"read", "write", "admin"}
+API_TOKEN_HASH_SCHEME = "hmac-sha256-v1"
 AUTH_REQUIRED = os.environ.get("AEGIS_REQUIRE_AUTH", "").lower() in {"1", "true", "yes", "on"} or (
     os.environ.get("AEGIS_ENV", "development").lower() == "production"
 )
@@ -126,11 +127,16 @@ def _consume_second_factor(
     if not match:
         return False
     recovery_hashes.remove(match)
-    connection.execute(
-        "UPDATE auth_users SET mfa_recovery_hashes = ? WHERE id = ?",
-        (json.dumps(recovery_hashes, separators=(",", ":")), user_id),
+    updated = connection.execute(
+        """UPDATE auth_users SET mfa_recovery_hashes = ?
+           WHERE id = ? AND COALESCE(mfa_recovery_hashes, '[]') = ?""",
+        (
+            json.dumps(recovery_hashes, separators=(",", ":")),
+            user_id,
+            recovery_json or "[]",
+        ),
     )
-    return True
+    return bool(getattr(updated, "rowcount", 0))
 
 
 def begin_mfa_setup(user_id: int, username: str) -> dict:
@@ -332,14 +338,22 @@ def authenticate(username: str, password: str, second_factor: str = "") -> Princ
             )
         if not row or not valid_password or not valid_second_factor or locked:
             if row and not locked:
-                failures = int(row[5] or 0) + 1
-                locked_until = None
-                if failures >= LOGIN_FAILURE_LIMIT:
-                    locked_until = (now + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)).isoformat()
                 connection.execute(
-                    """UPDATE auth_users SET failed_login_count = ?, locked_until = ?
-                       WHERE id = ?""",
-                    (failures, locked_until, row[0]),
+                    """UPDATE auth_users
+                       SET failed_login_count = COALESCE(failed_login_count, 0) + 1,
+                           locked_until = CASE
+                               WHEN COALESCE(failed_login_count, 0) + 1 >= ?
+                               THEN ?
+                               ELSE locked_until
+                           END
+                       WHERE id = ? AND active = 1
+                         AND (locked_until IS NULL OR locked_until <= ?)""",
+                    (
+                        LOGIN_FAILURE_LIMIT,
+                        (now + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)).isoformat(),
+                        row[0],
+                        now.isoformat(),
+                    ),
                 )
             return None
         connection.execute(
@@ -497,28 +511,16 @@ def reauthenticate_session(
 
 
 def _api_token_principal(token: str) -> Principal | None:
-    legacy = os.environ.get("AEGIS_ADMIN_TOKEN", "")
-    if legacy and hmac.compare_digest(token, legacy):
-        with get_connection() as connection:
-            row = connection.execute(
-                """SELECT id, username, role, tenant_id FROM auth_users
-                   WHERE role = 'admin' AND active = 1 ORDER BY id LIMIT 1"""
-            ).fetchone()
-        return (
-            Principal(int(row[0]), row[1], row[2], "", int(row[3]), ("*",), "token")
-            if row
-            else None
-        )
     token_hash = hash_api_token(token)
-    legacy_hash = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
     with get_connection() as connection:
         row = connection.execute(
             """SELECT u.id, u.username, u.role, u.tenant_id, t.scopes, t.id
                FROM auth_tokens t JOIN auth_users u ON u.id = t.user_id
-               WHERE t.token_hash IN (?, ?) AND u.active = 1
+               WHERE t.hash_scheme = ? AND t.token_hash = ?
+               AND t.revoked_at IS NULL AND u.active = 1
                AND (t.expires_at IS NULL OR t.expires_at > ?)""",
-            (token_hash, legacy_hash, now),
+            (API_TOKEN_HASH_SCHEME, token_hash, now),
         ).fetchone()
         if row:
             connection.execute(

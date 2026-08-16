@@ -25,6 +25,7 @@ from .scanners import run_dast_scan as shared_run_dast_scan
 from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
+from .scanners import safety_report_is_complete
 from .scanners import write_semgrep_rules
 from .iac_scanner import empty_iac_report, run_iac_scan
 from .scan_status import ToolStatusTracker
@@ -55,6 +56,8 @@ from .resource_budgets import (
     iter_file_bytes,
     load_bounded_json,
     run_bounded_subprocess,
+    run_bounded_subprocess_to_file,
+    run_bounded_subprocess_stdout_to_file,
 )
 
 DEFAULT_TOOL_TIMEOUT = int(os.environ.get("AEGIS_CLI_TOOL_TIMEOUT", "120"))
@@ -638,13 +641,39 @@ def find_free_host_port() -> int:
         return s.getsockname()[1]
 
 
-def run_scanner_command(command, *, stdout=None, timeout: int = DEFAULT_TOOL_TIMEOUT, label: str = "Scanner") -> int:
+def run_scanner_command(
+    command,
+    *,
+    stdout=None,
+    output_path: Path | None = None,
+    stdout_output_path: Path | None = None,
+    accepted_return_codes: set[int] | None = None,
+    timeout: int = DEFAULT_TOOL_TIMEOUT,
+    label: str = "Scanner",
+) -> int:
     try:
-        result = run_bounded_subprocess(
-            command,
-            stdout_sink=stdout,
-            timeout=timeout,
-        )
+        if output_path is not None and stdout_output_path is not None:
+            raise ValueError("Choose one scanner output transport.")
+        if stdout_output_path is not None:
+            result = run_bounded_subprocess_stdout_to_file(
+                command,
+                stdout_output_path,
+                timeout=timeout,
+                accepted_return_codes=accepted_return_codes,
+            )
+        elif output_path is not None:
+            result = run_bounded_subprocess_to_file(
+                command,
+                output_path,
+                timeout=timeout,
+                accepted_return_codes=accepted_return_codes,
+            )
+        else:
+            result = run_bounded_subprocess(
+                command,
+                stdout_sink=stdout,
+                timeout=timeout,
+            )
         return result.returncode
     except ResourceLimitError as exc:
         print(f"  [{label} Warn] Output budget exceeded: {exc}")
@@ -898,14 +927,22 @@ def _execute_scan(
                     "scan",
                     "--target",
                     str(safety_target),
-                    "--save-as",
+                    "--output",
                     "json",
-                    str(safety_report_path),
                 ]
                 safety_report_path.unlink(missing_ok=True)
-                safety_return_code = run_scanner_command(safety_cmd, timeout=tool_timeout, label="Safety")
+                safety_return_code = run_scanner_command(
+                    safety_cmd,
+                    stdout_output_path=safety_report_path,
+                    accepted_return_codes={0, 1},
+                    timeout=tool_timeout,
+                    label="Safety",
+                )
                 safety_report = read_json(safety_report_path)
-                if isinstance(safety_report, (dict, list)):
+                if (
+                    safety_return_code in {0, 1}
+                    and safety_report_is_complete(safety_report)
+                ):
                     mark_tool("Safety", "completed", return_code=safety_return_code)
                 else:
                     write_json(safety_report_path, [], safe_output=safe_output)
@@ -942,11 +979,17 @@ def _execute_scan(
     with timed_step(timings, "Ruff"):
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
         ruff_report_path = safe_output.file("ruff-report.json")
-        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", str(target_path)]
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
         ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
         ruff_report_path.unlink(missing_ok=True)
-        ruff_return_code = run_scanner_command(ruff_cmd, timeout=tool_timeout, label="Ruff")
+        ruff_return_code = run_scanner_command(
+            ruff_cmd,
+            stdout_output_path=ruff_report_path,
+            accepted_return_codes={0, 1},
+            timeout=tool_timeout,
+            label="Ruff",
+        )
         ruff_report = read_json(ruff_report_path)
         if ruff_return_code in {0, 1} and isinstance(ruff_report, list):
             mark_tool("Ruff", "completed", return_code=ruff_return_code)
@@ -991,9 +1034,14 @@ def _execute_scan(
             add_semgrep_excludes(semgrep_cmd)
             for excluded_path in sorted(excluded_paths):
                 semgrep_cmd.extend(["--exclude", excluded_path])
-            semgrep_cmd.extend(["-o", str(semgrep_report_path), str(target_path)])
+            semgrep_cmd.append(str(target_path))
             semgrep_report_path.unlink(missing_ok=True)
-            semgrep_return_code = run_scanner_command(semgrep_cmd, timeout=tool_timeout, label="Semgrep")
+            semgrep_return_code = run_scanner_command(
+                semgrep_cmd,
+                stdout_output_path=semgrep_report_path,
+                timeout=tool_timeout,
+                label="Semgrep",
+            )
             semgrep_report = read_json(semgrep_report_path)
             if semgrep_return_code == 0 and isinstance(semgrep_report, dict):
                 mark_tool("Semgrep", "completed", return_code=semgrep_return_code)
@@ -1066,17 +1114,18 @@ def _execute_scan(
     # 5. YARA Pattern Audits
     with timed_step(timings, "YARA"):
         print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
-        yara_findings = shared_run_yara_scan(
-            target_path,
-            ignored_paths=set(excluded_paths),
-            log=log_scanner_event,
-        )
-        write_json(
-            safe_output.file("yara-report.json"),
-            yara_findings,
-            safe_output=safe_output,
-        )
-        mark_tool("YARA", "completed")
+        try:
+            yara_findings = shared_run_yara_scan(
+                target_path,
+                ignored_paths=set(excluded_paths),
+                log=log_scanner_event,
+            )
+            safe_output.write_bounded_json("yara-report.json", yara_findings)
+            mark_tool("YARA", "completed")
+        except Exception as exc:
+            print(f"  [YARA Warn] Report was discarded: {exc}")
+            safe_output.write_json("yara-report.json", [])
+            mark_tool("YARA", "failed", detail=str(exc))
 
     # 6. ClamAV Malware Scan
     if fast:
@@ -1086,18 +1135,19 @@ def _execute_scan(
     else:
         with timed_step(timings, "ClamAV"):
             print("🔍 [ClamAV] Searching files for virus signatures...")
-            clamav_findings = shared_run_clamav_scan(
-                target_path,
-                ignored_paths=set(excluded_paths),
-                timeout=tool_timeout,
-                log=log_scanner_event,
-            )
-            write_json(
-                safe_output.file("clamav-report.json"),
-                clamav_findings,
-                safe_output=safe_output,
-            )
-            mark_tool("ClamAV", "completed")
+            try:
+                clamav_findings = shared_run_clamav_scan(
+                    target_path,
+                    ignored_paths=set(excluded_paths),
+                    timeout=tool_timeout,
+                    log=log_scanner_event,
+                )
+                safe_output.write_bounded_json("clamav-report.json", clamav_findings)
+                mark_tool("ClamAV", "completed")
+            except Exception as exc:
+                print(f"  [ClamAV Warn] Report was discarded: {exc}")
+                safe_output.write_json("clamav-report.json", [])
+                mark_tool("ClamAV", "failed", detail=str(exc))
 
     # 7. Infrastructure-as-code configuration auditing (Checkov)
     iac_report_path = safe_output.file("iac-report.json")

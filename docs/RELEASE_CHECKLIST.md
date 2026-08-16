@@ -68,8 +68,8 @@ service restart, then removes only its temporary containers and volumes.
 The 2026-08-14 gate was executed against the current Phase 0–5 working tree.
 It is not an approval to tag or publish yet:
 
-- SQLite migrations 1–19 passed, including an idempotent rerun.
-- PostgreSQL migrations 1–19 passed in the pinned PostgreSQL 17.5 image,
+- SQLite migrations 1–20 passed, including an idempotent rerun.
+- PostgreSQL migrations 1–20 passed in the pinned PostgreSQL 17.5 image,
   including an idempotent rerun.
 - The targeted security regressions passed: 66 tests.
 - Full unit tests passed: 286 passed, 2 skipped; configured security-boundary
@@ -86,9 +86,37 @@ It is not an approval to tag or publish yet:
   one low. The report is incomplete until those findings are remediated or
   formally accepted.
 - Python dependency auditing reported three advisories for transitive
-  `mcp==1.23.3` through Semgrep; use a fixed `mcp` release before publishing.
+  `mcp==1.23.3` through Semgrep; this is addressed in the remediation record
+  below by upgrading to Semgrep 1.173.0 / MCP 1.29.0.
 
-Do not tag a release while the scan findings, dependency advisories, or any
-deferred artifact-storage namespace review remain open. Re-run this gate after
-the fixes and record the new scan ID, lockfile digest, dependency audit, and
-Compose evidence here.
+Do not tag a release until the remediation record below is followed by a fresh
+security scan and complete release gate.
+
+## Phase 6 remediation evidence
+
+The 2026-08-16 remediation patch closes the three application findings and the
+dependency finding from scan `af4a0e33-d9ad-4906-a803-b8381ce88af6`, and closes
+the additional repository-review issues found during refinement:
+
+- Migration 20 versions API-token hashes, revokes unclassifiable legacy rows,
+  and authenticates only current keyed hashes.
+- Migration 21 binds GitHub OAuth state to the initiating browser session;
+  MFA recovery and failed-login updates are race-safe; WebSocket streams
+  enforce project/tenant authorization; and OIDC return paths reject browser
+  normalization bypasses.
+- Safety, Ruff, Semgrep, and Trivy emit reports through the portable bounded
+  stdout transport; the parent owns the temporary sink and oversized partial
+  reports are discarded before atomic promotion.
+- Webhook destinations now require every resolved address to be global and
+  read response bodies under a fixed limit.
+- S3 artifact writes, listings, and downloads verify the derived
+  tenant/project/run key; downloads hash the exact GET payload before exposure.
+- Semgrep is pinned to 1.173.0 with MCP 1.29.0 in `uv.lock` and
+  `requirements.txt`.
+
+Focused remediation tests pass. The full local suite is 305 passed and 2
+skipped; Ruff, mypy, compile, and diff checks pass. The follow-up Codex
+Security scan `95f06103-6ec8-4229-a9dc-9d7a2c84bccc` is indexed with zero
+reportable findings. Its worktree changed during scan execution, so the current
+source state is additionally evidenced by the final local regression suite; a
+clean release must rerun the full release harness after commit.

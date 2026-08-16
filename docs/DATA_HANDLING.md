@@ -23,10 +23,10 @@ Evidence handling uses a signed `scan-manifest.json` to bind the admitted source
 descriptor, policy/tool state, and artifact hashes. Artifact metadata and object
 keys must remain derived from the tenant, project, scan run, and validated
 artifact name; a storage key supplied by an untrusted caller must never be
-trusted as a namespace decision. Keep the signed manifest, artifact-integrity
-checks, and audit-chain record together through retention and deletion. The
-release gate currently has a follow-up item for direct database writes to S3
-artifact metadata; this is not evidence that the namespace check is complete.
+trusted as a namespace decision. The write path, listing path, and download
+path all recompute the expected namespace; object bytes are hash-verified
+before a download is exposed. Keep the signed manifest, artifact-integrity
+checks, and audit-chain record together through retention and deletion.
 
 The production subprocessor register must name the hosting provider, GitHub,
 email or notification providers, monitoring/SIEM provider, support systems,

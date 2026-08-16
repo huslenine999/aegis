@@ -49,6 +49,7 @@ from .config import (
 )
 from .auth import (
     AUTH_REQUIRED,
+    API_TOKEN_HASH_SCHEME,
     Principal,
     SESSION_COOKIE,
     TOKEN_SCOPES,
@@ -156,6 +157,7 @@ from .reporting import (
 from .artifact_storage import (
     ArtifactLimitError,
     S3ArtifactStore,
+    artifact_key_matches,
     artifact_limits,
     project_directory,
     run_directory,
@@ -173,7 +175,7 @@ from .version import get_package_version
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
 DEMO_LAB_ENABLED = os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower() in {"1", "true", "yes", "on"}
-ADMIN_TOKEN = os.environ.get("AEGIS_ADMIN_TOKEN")
+DEV_ADMIN_TOKEN = os.environ.get("AEGIS_DEV_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
 MAX_REQUEST_BYTES = environment_positive_int(
     "AEGIS_MAX_REQUEST_BYTES", MAX_UPLOAD_BYTES + 64 * 1024
@@ -221,9 +223,16 @@ def require_access(minimum_role: str):
     role_dependency = require_role(minimum_role)
 
     def dependency(request: Request):
-        if not AUTH_REQUIRED and ADMIN_TOKEN and minimum_role in {"operator", "admin"}:
+        if (
+            not AUTH_REQUIRED
+            and DEV_ADMIN_TOKEN
+            and minimum_role in {"operator", "admin"}
+            and not _connection_is_loopback(request)
+        ):
+            raise HTTPException(status_code=401, detail="Protected actions are local-only.")
+        if not AUTH_REQUIRED and DEV_ADMIN_TOKEN and minimum_role in {"operator", "admin"}:
             supplied = request.headers.get("X-Aegis-Token", "")
-            if not supplied or not hmac.compare_digest(supplied, ADMIN_TOKEN):
+            if not supplied or not hmac.compare_digest(supplied, DEV_ADMIN_TOKEN):
                 raise HTTPException(status_code=401, detail="Missing or invalid Aegis admin token.")
         return role_dependency(request)
 
@@ -1019,6 +1028,15 @@ def _artifact_integrity(metadata: dict, path: Path) -> bool:
     )
 
 
+def _s3_artifact_key_is_valid(metadata: dict, run: dict, project_id: int) -> bool:
+    return artifact_key_matches(
+        metadata,
+        tenant_id=int(run["tenant_id"]),
+        project_id=project_id,
+        job_id=str(run["job_id"]),
+    )
+
+
 def _artifact_bytes(metadata: dict, path: Path) -> bytes:
     try:
         validate_artifact_sizes([(str(metadata.get("name", "artifact")), metadata["size"])])
@@ -1139,7 +1157,14 @@ def project_scan_artifacts(
         if name not in RUN_ARTIFACTS:
             continue
         try:
-            integrity = _artifact_integrity(metadata, path)
+            integrity = (
+                _s3_artifact_key_is_valid(metadata, run, project_id)
+                and S3ArtifactStore().verify(
+                    str(metadata["storage_key"]), metadata["size"], metadata["sha256"]
+                )
+                if metadata.get("backend") == "s3"
+                else _artifact_integrity(metadata, path)
+            )
         except Exception as exc:
             logger.warning(
                 "Artifact integrity verification failed for run %s artifact %s: %s",
@@ -1198,38 +1223,58 @@ def project_scan_artifact(
                 detail="Report bundle exceeds configured artifact limits.",
             ) from exc
         artifact_sources: dict[str, ReportSource] = {}
-        for metadata in recorded:
-            path = report_dir / metadata["name"]
-            if metadata.get("backend") == "s3":
-                key = metadata.get("storage_key")
-                store = S3ArtifactStore()
-                if not key or not store.verify(key, metadata["size"], metadata["sha256"]):
+        staged_s3_paths: list[Path] = []
+        try:
+            for metadata in recorded:
+                if metadata.get("name") not in RUN_ARTIFACTS:
                     record_artifact_integrity_failure()
                     raise HTTPException(
                         status_code=409,
                         detail="Artifact integrity verification failed.",
                     )
-                storage_key = str(key)
-                def s3_source(
-                    store: S3ArtifactStore = store,
-                    key: str = storage_key,
-                    size: int = int(metadata["size"]),
-                ):
-                    return store.iter_bytes(key, max_bytes=size)
-
-                artifact_sources[metadata["name"]] = s3_source
-            else:
-                if not _artifact_integrity(metadata, path):
-                    record_artifact_integrity_failure()
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Artifact integrity verification failed.",
+                path = report_dir / metadata["name"]
+                if metadata.get("backend") == "s3":
+                    key = metadata.get("storage_key")
+                    if not key or not _s3_artifact_key_is_valid(metadata, run, project_id):
+                        record_artifact_integrity_failure()
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Artifact integrity verification failed.",
+                        )
+                    descriptor, temporary_name = tempfile.mkstemp(
+                        prefix=f".s3-{metadata['name']}.",
+                        suffix=".artifact",
+                        dir=report_dir,
                     )
-                artifact_sources[metadata["name"]] = path
-        return _stream_bundle_response(
-            artifact_sources,
-            filename=f"aegis-{project_id}-{run_id}.zip",
-        )
+                    os.close(descriptor)
+                    staged = Path(temporary_name)
+                    staged_s3_paths.append(staged)
+                    try:
+                        S3ArtifactStore().download_verified(
+                            str(key), metadata["size"], metadata["sha256"], staged
+                        )
+                    except (OSError, ResourceLimitError, TypeError, ValueError, KeyError) as exc:
+                        record_artifact_integrity_failure()
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Artifact integrity verification failed.",
+                        ) from exc
+                    artifact_sources[metadata["name"]] = staged
+                else:
+                    if not _artifact_integrity(metadata, path):
+                        record_artifact_integrity_failure()
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Artifact integrity verification failed.",
+                        )
+                    artifact_sources[metadata["name"]] = path
+            return _stream_bundle_response(
+                artifact_sources,
+                filename=f"aegis-{project_id}-{run_id}.zip",
+            )
+        finally:
+            for staged in staged_s3_paths:
+                staged.unlink(missing_ok=True)
     media_type = RUN_ARTIFACTS.get(artifact_name)
     artifact_path = report_dir / artifact_name
     artifact_metadata = get_scan_artifact(run_id, artifact_name)
@@ -1242,17 +1287,39 @@ def project_scan_artifact(
             )
         except (ArtifactLimitError, KeyError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
-        store = S3ArtifactStore()
+        if not _s3_artifact_key_is_valid(artifact_metadata, run, project_id):
+            record_artifact_integrity_failure()
+            raise HTTPException(
+                status_code=409,
+                detail="Artifact integrity verification failed.",
+            )
         key = artifact_metadata.get("storage_key")
-        if not key or not store.verify(key, artifact_metadata["size"], artifact_metadata["sha256"]):
+        if not key:
             record_artifact_integrity_failure()
             raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
         if int(artifact_metadata["size"]) > resource_budgets().max_response_bytes:
             raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
-        return StreamingResponse(
-            store.iter_bytes(key, max_bytes=int(artifact_metadata["size"])),
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".s3-{artifact_name}.", suffix=".artifact", dir=report_dir
+        )
+        os.close(descriptor)
+        staged = Path(temporary_name)
+        try:
+            S3ArtifactStore().download_verified(
+                str(key), artifact_metadata["size"], artifact_metadata["sha256"], staged
+            )
+        except (OSError, ResourceLimitError, TypeError, ValueError, KeyError) as exc:
+            staged.unlink(missing_ok=True)
+            record_artifact_integrity_failure()
+            raise HTTPException(
+                status_code=409,
+                detail="Artifact integrity verification failed.",
+            ) from exc
+        return _stream_file_response(
+            staged,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{artifact_name}"'},
+            filename=artifact_name,
+            cleanup=True,
         )
     if not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -1755,19 +1822,35 @@ def github_status(principal=Depends(require_role("viewer"))):
 
 @router.get("/api/github/connect")
 def github_connect(request: Request, principal=Depends(require_recent_access("viewer"))):
+    session_token = request.cookies.get(SESSION_COOKIE, "")
+    if not session_token:
+        raise HTTPException(
+            status_code=401,
+            detail="GitHub OAuth requires a browser session.",
+        )
     try:
-        url = begin_oauth(principal.user_id, _github_callback_url(request))
-    except RuntimeError as exc:
+        url = begin_oauth(
+            principal.user_id,
+            _github_callback_url(request),
+            session_token,
+        )
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return RedirectResponse(url, status_code=302)
 
 
 @router.get("/api/github/callback", name="github_callback")
 def github_callback(request: Request, code: str = "", state: str = ""):
-    if not code or not state:
+    session_token = request.cookies.get(SESSION_COOKIE, "")
+    if not code or not state or not session_token:
         return RedirectResponse("/projects?github=denied", status_code=303)
     try:
-        complete_oauth(code, state, _github_callback_url(request))
+        complete_oauth(
+            code,
+            state,
+            _github_callback_url(request),
+            session_token,
+        )
     except Exception as exc:
         logger.warning("GitHub OAuth callback failed: %s", exc)
         return RedirectResponse("/projects?github=error", status_code=303)
@@ -1988,11 +2071,13 @@ async def create_api_token(
             raise HTTPException(status_code=400, detail="Token scope exceeds the user's role.")
         connection.execute(
             """INSERT INTO auth_tokens
-               (user_id, token_hash, name, expires_at, created_at, scopes)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (user_id, token_hash, hash_scheme, revoked_at, name,
+                expires_at, created_at, scopes)
+               VALUES (?, ?, ?, NULL, ?, ?, ?, ?)""",
             (
                 user_id,
                 hash_api_token(token),
+                API_TOKEN_HASH_SCHEME,
                 name or "automation",
                 expires_at,
                 datetime.now(timezone.utc).isoformat(),
@@ -2524,20 +2609,25 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         await websocket.close(code=4404, reason="Scan job not found")
         return
     owner_id = int(owner.decode() if isinstance(owner, bytes) else owner)
-    if principal.role != "admin":
-        project_value = redis_client.hget(f"job:{job_id}", "project_id")
-        if project_value:
-            project_id = int(
-                project_value.decode() if isinstance(project_value, bytes) else project_value
+    project_value = redis_client.hget(f"job:{job_id}", "project_id")
+    if project_value:
+        project_id = int(
+            project_value.decode() if isinstance(project_value, bytes) else project_value
+        )
+        try:
+            require_project_role(
+                project_id,
+                principal.user_id,
+                principal.role,
+                "viewer",
+                principal.tenant_id,
             )
-            try:
-                require_project_role(project_id, principal.user_id, principal.role, "viewer")
-            except PermissionError:
-                await websocket.close(code=4403, reason="Scan job access denied")
-                return
-        elif owner_id != principal.user_id:
+        except PermissionError:
             await websocket.close(code=4403, reason="Scan job access denied")
             return
+    elif owner_id != principal.user_id:
+        await websocket.close(code=4403, reason="Scan job access denied")
+        return
     await websocket.accept()
     
     r_conn = redis_client

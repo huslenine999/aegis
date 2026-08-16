@@ -23,7 +23,7 @@ def local_environment_values() -> dict[str, str]:
         "AEGIS_ALLOWED_HOSTS": "localhost,127.0.0.1",
         "AEGIS_CORS_ORIGINS": "http://localhost",
         "AEGIS_REQUIRE_AUTH": "true",
-        "AEGIS_ADMIN_TOKEN": secrets.token_urlsafe(40),
+        "AEGIS_DEV_ADMIN_TOKEN": secrets.token_urlsafe(40),
         "AEGIS_SESSION_SECRET": secrets.token_urlsafe(48),
         "AEGIS_TOKEN_PEPPER": secrets.token_urlsafe(48),
         "AEGIS_AUDIT_HMAC_KEY": secrets.token_urlsafe(48),

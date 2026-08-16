@@ -16,12 +16,14 @@ import urllib3
 from cryptography.fernet import Fernet
 
 from .database import get_connection
+from .resource_budgets import ResourceLimitError
 from .observability import record_notification_failure
 
 
 CHANNEL_TYPES = {"webhook", "slack", "teams", "email"}
 EVENT_TYPES = {"completed", "blocked", "failed", "cancelled"}
 LOGGER = logging.getLogger("aegis.notifications")
+MAX_WEBHOOK_RESPONSE_BYTES = 64 * 1024
 
 
 def _now() -> str:
@@ -53,6 +55,7 @@ def _resolve_webhook_url(url: str):
             or ip.is_link_local
             or ip.is_multicast
             or ip.is_reserved
+            or not ip.is_global
         ):
             raise ValueError("Webhook URL resolves to a non-public address.")
         resolved.add(str(ip))
@@ -100,14 +103,22 @@ def _post_pinned(url: str, **kwargs):
         block=True,
     )
     try:
-        return pool.urlopen(
+        response = pool.urlopen(
             "POST",
             target,
             body=body,
             headers=headers,
             redirect=False,
             retries=False,
+            preload_content=False,
         )
+        try:
+            response_body = response.read(MAX_WEBHOOK_RESPONSE_BYTES + 1)
+            if len(response_body) > MAX_WEBHOOK_RESPONSE_BYTES:
+                raise ResourceLimitError("Webhook response exceeds the configured limit.")
+            return response
+        finally:
+            response.close()
     finally:
         pool.close()
 

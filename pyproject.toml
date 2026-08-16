@@ -47,7 +47,7 @@ dependencies = [
 [project.optional-dependencies]
 scanner = [
   "checkov==3.1.0",
-  "semgrep==1.172.0",
+  "semgrep==1.173.0",
   "safety==3.8.1",
   # Checkov 3.1.0's CycloneDX adapter requires the 5.x model API.
   "cyclonedx-python-lib==5.2.0",

@@ -42,12 +42,14 @@ database compromise, and signing-key misuse.
 
 - If a database disclosure may include legacy API-token rows, immediately
   disable/revoke those rows, rotate the token pepper, issue replacement tokens,
-  and review `last_used_at`, audit events, and access logs. Pepper rotation is
-  not sufficient while a raw-SHA-256 authentication fallback remains enabled.
+  and review `last_used_at`, audit events, and access logs. Migration 20 is the
+  fail-closed control for unclassifiable legacy rows; Migration 21 binds new
+  GitHub OAuth transactions to browser sessions. Pepper rotation remains a
+  separate incident-response action.
 - If scanner output causes worker disk pressure, stop the affected workers,
   preserve the run directory and scanner logs, prevent new hostile scans, and
-  inspect every report file before cleanup. Do not resume release evidence until
-  file-writing scanners enforce the configured byte budget during execution.
+  inspect every report file before cleanup. The file-writing sink should already
+  discard reports that exceed the configured byte budget.
 - If a notification destination is suspected of reaching an internal or shared
   address range, disable the channel, preserve its encrypted configuration and
   delivery records, review outbound logs, and require a fresh global-address

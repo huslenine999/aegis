@@ -58,7 +58,6 @@ services:
     environment:
       AEGIS_ENV: ${AEGIS_ENV:-production}
       AEGIS_PUBLIC_URL: https://${AEGIS_DOMAIN}
-      AEGIS_ADMIN_TOKEN: ${AEGIS_ADMIN_TOKEN:?Set AEGIS_ADMIN_TOKEN to at least 32 characters}
       AEGIS_SESSION_SECRET: ${AEGIS_SESSION_SECRET:?Set AEGIS_SESSION_SECRET to at least 32 characters}
       AEGIS_TOKEN_PEPPER: ${AEGIS_TOKEN_PEPPER:?Set AEGIS_TOKEN_PEPPER to at least 32 characters}
       AEGIS_AUDIT_HMAC_KEY: ${AEGIS_AUDIT_HMAC_KEY:?Set AEGIS_AUDIT_HMAC_KEY to at least 32 characters}

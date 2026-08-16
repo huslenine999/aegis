@@ -141,11 +141,13 @@ def test_api_tokens_are_keyed_scoped_and_track_last_use(tmp_path, monkeypatch):
         token = "aegis-test-token"
         connection.execute(
             """INSERT INTO auth_tokens
-               (user_id, token_hash, name, expires_at, created_at, scopes)
-               VALUES (?, ?, 'read-only', NULL, ?, 'read')""",
+               (user_id, token_hash, hash_scheme, revoked_at, name,
+                expires_at, created_at, scopes)
+               VALUES (?, ?, ?, NULL, 'read-only', NULL, ?, 'read')""",
             (
                 user_id,
                 auth.hash_api_token(token),
+                auth.API_TOKEN_HASH_SCHEME,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -162,6 +164,77 @@ def test_api_tokens_are_keyed_scoped_and_track_last_use(tmp_path, monkeypatch):
         assert connection.execute(
             "SELECT last_used_at FROM auth_tokens WHERE user_id = ?", (user_id,)
         ).fetchone()[0]
+
+
+def test_legacy_api_token_rows_are_rejected_and_versioned_tokens_work(
+    tmp_path, monkeypatch
+):
+    configure_database(tmp_path, monkeypatch)
+    with database.get_connection() as connection:
+        tenant_id = int(connection.execute("SELECT id FROM tenants").fetchone()[0])
+        user_id = add_user(connection, "legacy-token-user", "operator", tenant_id)
+        legacy_token = "legacy-unsalted-token"
+        current_token = "current-keyed-token"
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            """INSERT INTO auth_tokens
+               (user_id, token_hash, name, expires_at, created_at, scopes)
+               VALUES (?, ?, 'legacy', NULL, ?, 'read')""",
+            (user_id, hashlib.sha256(legacy_token.encode()).hexdigest(), now),
+        )
+        connection.execute(
+            """INSERT INTO auth_tokens
+               (user_id, token_hash, hash_scheme, revoked_at, name,
+                expires_at, created_at, scopes)
+               VALUES (?, ?, ?, NULL, 'current', NULL, ?, 'read')""",
+            (
+                user_id,
+                auth.hash_api_token(current_token),
+                auth.API_TOKEN_HASH_SCHEME,
+                now,
+            ),
+        )
+
+    assert auth._api_token_principal(legacy_token) is None
+    principal = auth._api_token_principal(current_token)
+    assert principal is not None
+    assert principal.username == "legacy-token-user"
+
+
+def test_static_admin_token_is_not_an_api_authentication_path(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("AEGIS_ADMIN_TOKEN", "static-admin-token-for-tests")
+    with database.get_connection() as connection:
+        tenant_id = int(connection.execute("SELECT id FROM tenants").fetchone()[0])
+        add_user(connection, "static-admin-user", "admin", tenant_id)
+
+    assert auth._api_token_principal("static-admin-token-for-tests") is None
+
+
+def test_api_token_migration_revokes_unclassified_rows(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    with database.get_connection() as connection:
+        tenant_id = int(connection.execute("SELECT id FROM tenants").fetchone()[0])
+        user_id = add_user(connection, "migration-token-user", "operator", tenant_id)
+        connection.execute(
+            """INSERT INTO auth_tokens
+               (user_id, token_hash, hash_scheme, revoked_at, name,
+                expires_at, created_at, scopes)
+               VALUES (?, ?, 'legacy', NULL, 'legacy', NULL, ?, 'read')""",
+            (
+                user_id,
+                hashlib.sha256(b"legacy-migration-token").hexdigest(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+        database._migration_020_api_token_hash_version(connection.cursor())
+
+        revoked_at = connection.execute(
+            "SELECT revoked_at FROM auth_tokens WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+
+    assert revoked_at
 
 
 def test_login_lockout_blocks_a_correct_password_until_expiry(tmp_path, monkeypatch):
@@ -216,6 +289,30 @@ def test_totp_mfa_and_recovery_codes_are_encrypted_and_single_use(
             "SELECT mfa_secret_encrypted FROM auth_users WHERE id = ?", (user_id,)
         ).fetchone()
     assert setup["secret"] not in row[0]
+
+
+def test_mfa_recovery_consumption_uses_compare_and_swap(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("AEGIS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with database.get_connection() as connection:
+        tenant_id = int(connection.execute("SELECT id FROM tenants").fetchone()[0])
+        user_id = add_user(connection, "mfa-cas-user", "admin", tenant_id)
+
+    setup = auth.begin_mfa_setup(user_id, "mfa-cas-user")
+    recovery_codes = auth.confirm_mfa_setup(user_id, auth._totp(setup["secret"]))
+    with database.get_connection() as connection:
+        row = connection.execute(
+            """SELECT mfa_secret_encrypted, mfa_recovery_hashes
+               FROM auth_users WHERE id = ?""",
+            (user_id,),
+        ).fetchone()
+        stale_recovery_json = row[1]
+        assert auth._consume_second_factor(
+            connection, user_id, recovery_codes[0], row[0], stale_recovery_json
+        )
+        assert not auth._consume_second_factor(
+            connection, user_id, recovery_codes[0], row[0], stale_recovery_json
+        )
 
 
 def test_signed_evidence_detects_manifest_tampering():

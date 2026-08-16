@@ -1,11 +1,12 @@
 import hashlib
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
-from .resource_budgets import iter_bounded, resource_budgets
+from .resource_budgets import ResourceLimitError, iter_bounded, resource_budgets
 
 
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -126,6 +127,25 @@ def artifact_key(tenant_id: int, project_id: int, job_id: str, name: str) -> str
     )
 
 
+def artifact_key_matches(
+    metadata: dict,
+    *,
+    tenant_id: int,
+    project_id: int,
+    job_id: str,
+) -> bool:
+    """Require recorded S3 metadata to stay in its owning run namespace."""
+    name = metadata.get("name")
+    storage_key = metadata.get("storage_key")
+    if not isinstance(name, str) or not isinstance(storage_key, str):
+        return False
+    try:
+        expected = artifact_key(tenant_id, project_id, job_id, name)
+    except (TypeError, ValueError):
+        return False
+    return storage_key == expected
+
+
 class S3ArtifactStore:
     """Private S3-compatible evidence storage with integrity metadata."""
 
@@ -197,12 +217,59 @@ class S3ArtifactStore:
         return b"".join(self.iter_bytes(key, max_bytes=max_bytes))
 
     def verify(self, key: str, expected_size: int, expected_sha256: str) -> bool:
-        response = self.client.head_object(Bucket=self.bucket, Key=key)
-        metadata = response.get("Metadata") or {}
-        return (
-            int(response.get("ContentLength", -1)) == int(expected_size)
-            and metadata.get("sha256") == expected_sha256
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+            body = response["Body"]
+            digest = hashlib.sha256()
+            actual_size = 0
+            try:
+                for chunk in iter_bounded(body, int(expected_size)):
+                    actual_size += len(chunk)
+                    digest.update(chunk)
+            finally:
+                close = getattr(body, "close", None)
+                if close:
+                    close()
+            return (
+                actual_size == int(expected_size)
+                and digest.hexdigest() == expected_sha256
+            )
+        except (KeyError, OSError, ResourceLimitError, TypeError, ValueError):
+            return False
+
+    def download_verified(
+        self,
+        key: str,
+        expected_size: int,
+        expected_sha256: str,
+        destination: Path,
+    ) -> None:
+        """Stage and verify the exact GET payload before exposing it to callers."""
+        if int(expected_size) < 1:
+            raise ValueError("Artifact size must be positive.")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
         )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        body = response["Body"]
+        digest = hashlib.sha256()
+        actual_size = 0
+        try:
+            with temporary.open("wb") as output:
+                for chunk in iter_bounded(body, int(expected_size)):
+                    actual_size += len(chunk)
+                    digest.update(chunk)
+                    output.write(chunk)
+            if actual_size != int(expected_size) or digest.hexdigest() != expected_sha256:
+                raise ValueError("S3 object bytes failed integrity verification.")
+            os.replace(temporary, destination)
+        finally:
+            close = getattr(body, "close", None)
+            if close:
+                close()
+            temporary.unlink(missing_ok=True)
 
 
 def publish_artifacts(

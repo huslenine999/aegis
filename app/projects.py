@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from .artifact_storage import artifact_key
 from .database import USING_POSTGRES, get_connection
 from .github_lifecycle import ensure_legacy_repository_binding, revoke_github_capabilities
 
@@ -527,6 +528,20 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
 
 def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
     with get_connection() as connection:
+        run = connection.execute(
+            "SELECT job_id, project_id, tenant_id FROM scan_runs WHERE id = ?",
+            (scan_run_id,),
+        ).fetchone()
+        if not run:
+            raise ValueError("Scan run not found for artifact metadata.")
+        for artifact in artifacts:
+            if str(artifact.get("backend") or "local") != "s3":
+                continue
+            expected_key = artifact_key(
+                int(run[2]), int(run[1]), str(run[0]), str(artifact.get("name", ""))
+            )
+            if artifact.get("storage_key") != expected_key:
+                raise ValueError("S3 artifact storage key is outside the scan namespace.")
         connection.execute(
             "DELETE FROM scan_artifacts WHERE scan_run_id = ?", (scan_run_id,)
         )

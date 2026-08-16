@@ -110,7 +110,7 @@ def test_waf_toggle(client):
 
 def test_admin_token_protects_state_changing_routes(client):
     """When configured, admin routes require the Aegis token."""
-    app_main.ADMIN_TOKEN = "test-admin-token"
+    app_main.DEV_ADMIN_TOKEN = "test-admin-token"
     try:
         unauthorized = client.post("/toggle-waf")
         assert unauthorized.status_code == 401
@@ -119,7 +119,7 @@ def test_admin_token_protects_state_changing_routes(client):
         assert authorized.status_code == 200
         assert authorized.json()["waf_enabled"] is True
     finally:
-        app_main.ADMIN_TOKEN = None
+        app_main.DEV_ADMIN_TOKEN = None
         if app_main.WAF_ENABLED:
             client.post("/toggle-waf")
 

@@ -49,7 +49,6 @@ def production_environment_values() -> dict[str, str]:
         "AEGIS_DOMAIN": "localhost",
         "AEGIS_ALLOWED_HOSTS": "localhost,127.0.0.1",
         "AEGIS_CORS_ORIGINS": "https://localhost",
-        "AEGIS_ADMIN_TOKEN": secrets.token_urlsafe(40),
         "AEGIS_SESSION_SECRET": secrets.token_urlsafe(48),
         "AEGIS_TOKEN_PEPPER": secrets.token_urlsafe(48),
         "AEGIS_AUDIT_HMAC_KEY": secrets.token_urlsafe(48),

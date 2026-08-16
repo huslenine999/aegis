@@ -5,11 +5,18 @@ import subprocess
 import time
 import os
 import stat
+from io import BytesIO
 from pathlib import Path
 from typing import List, Dict, Any
 
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
-from .resource_budgets import load_bounded_json, read_bounded_text, run_bounded_subprocess
+from .resource_budgets import (
+    load_bounded_json,
+    read_bounded_text,
+    ResourceLimitError,
+    run_bounded_subprocess,
+    run_bounded_subprocess_stdout_to_file,
+)
 
 
 logger = logging.getLogger("aegis.sandbox")
@@ -21,6 +28,16 @@ SANDBOX_MAX_FILES = int(os.environ.get("AEGIS_SANDBOX_MAX_FILES", "100000"))
 SANDBOX_MAX_CONTEXT_BYTES = int(
     os.environ.get("AEGIS_SANDBOX_MAX_CONTEXT_BYTES", str(2 * 1024 * 1024 * 1024))
 )
+
+
+def _run_docker_command(command: list[str], *, timeout: int):
+    output = BytesIO()
+    completed = run_bounded_subprocess(
+        command,
+        stdout_sink=output,
+        timeout=timeout,
+    )
+    return completed, output.getvalue()
 
 
 def validate_untrusted_tree(
@@ -95,9 +112,9 @@ def is_docker_available() -> bool:
     if not shutil.which("docker"):
         return False
     try:
-        res = subprocess.run(["docker", "ps"], capture_output=True, check=False, timeout=2)
+        res, _ = _run_docker_command(["docker", "ps"], timeout=2)
         return res.returncode == 0
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.debug("Docker availability check failed: %s", exc)
         return False
 
@@ -223,14 +240,12 @@ def build_sandbox_image(temp_dir: Path, image_tag: str) -> bool:
 def create_sandbox_network(network_name: str) -> bool:
     """Create a per-scan network with no route to external networks."""
     try:
-        result = subprocess.run(
+        result, _ = _run_docker_command(
             ["docker", "network", "create", "--internal", network_name],
-            capture_output=True,
-            check=False,
             timeout=30,
         )
         return result.returncode == 0
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.warning("Sandbox network creation failed for %s: %s", network_name, exc)
         return False
 
@@ -269,14 +284,9 @@ def run_sandbox_container(
         if network_name:
             cmd.extend(["--network", network_name])
         cmd.append(image_tag)
-        res = subprocess.run(
-            cmd,
-            capture_output=True,
-            check=False,
-            timeout=SANDBOX_COMMAND_TIMEOUT,
-        )
+        res, _ = _run_docker_command(cmd, timeout=SANDBOX_COMMAND_TIMEOUT)
         return res.returncode == 0
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.warning("Sandbox container launch failed for %s: %s", container_name, exc)
         return False
 
@@ -304,10 +314,14 @@ def run_trivy_scan(image_tag: str, output_path: Path) -> List[Dict[str, Any]]:
     if not is_trivy_available():
         raise RuntimeError("Trivy executable is unavailable")
     try:
-        completed = run_bounded_subprocess([
-            "trivy", "image", "--format", "json",
-            "--output", str(output_path), image_tag
-        ], timeout=SANDBOX_COMMAND_TIMEOUT)
+        completed = run_bounded_subprocess_stdout_to_file(
+            [
+                "trivy", "image", "--format", "json",
+                image_tag,
+            ],
+            output_path,
+            timeout=SANDBOX_COMMAND_TIMEOUT,
+        )
         if completed.returncode != 0:
             raise RuntimeError(f"Trivy exited with code {completed.returncode}.")
         if not output_path.exists():
@@ -326,32 +340,24 @@ def stop_and_cleanup_sandbox(
     Cleans up docker container and image assets.
     """
     try:
-        subprocess.run(
-            ["docker", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
-            timeout=SANDBOX_COMMAND_TIMEOUT,
+        _run_docker_command(
+            ["docker", "rm", "-f", container_name], timeout=SANDBOX_COMMAND_TIMEOUT
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.debug("Unable to remove sandbox container %s: %s", container_name, exc)
     try:
-        subprocess.run(
-            ["docker", "rmi", image_tag],
-            capture_output=True,
-            check=False,
-            timeout=SANDBOX_COMMAND_TIMEOUT,
+        _run_docker_command(
+            ["docker", "rmi", image_tag], timeout=SANDBOX_COMMAND_TIMEOUT
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.debug("Unable to remove sandbox image %s: %s", image_tag, exc)
     if network_name:
         try:
-            subprocess.run(
+            _run_docker_command(
                 ["docker", "network", "rm", network_name],
-                capture_output=True,
-                check=False,
                 timeout=SANDBOX_COMMAND_TIMEOUT,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
             logger.debug("Unable to remove sandbox network %s: %s", network_name, exc)
 
 def get_active_sandbox_container() -> str | None:
@@ -361,14 +367,18 @@ def get_active_sandbox_container() -> str | None:
     if not is_docker_available():
         return None
     try:
-        res = subprocess.run([
-            "docker", "ps",
-            "--filter", "name=aegis-sandbox-container-",
-            "--format", "{{.Names}}"
-        ], capture_output=True, text=True, check=False, timeout=2)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip().splitlines()[0]
-    except (OSError, subprocess.SubprocessError) as exc:
+        res, output = _run_docker_command(
+            [
+                "docker", "ps",
+                "--filter", "name=aegis-sandbox-container-",
+                "--format", "{{.Names}}",
+            ],
+            timeout=2,
+        )
+        text = output.decode("utf-8", errors="replace")
+        if res.returncode == 0 and text.strip():
+            return text.strip().splitlines()[0]
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.debug("Unable to discover active sandbox container: %s", exc)
     return None
 
@@ -380,18 +390,22 @@ def get_sandbox_stats(container_name: str) -> Dict[str, Any]:
     if not container_name or not is_docker_available():
         return stats
     try:
-        res = subprocess.run([
-            "docker", "stats", container_name,
-            "--no-stream", "--format", "{{.CPUPerc}}|{{.MemPerc}}"
-        ], capture_output=True, text=True, check=False, timeout=3)
-        if res.returncode == 0 and res.stdout.strip():
-            parts = res.stdout.strip().split("|")
+        res, output = _run_docker_command(
+            [
+                "docker", "stats", container_name,
+                "--no-stream", "--format", "{{.CPUPerc}}|{{.MemPerc}}",
+            ],
+            timeout=3,
+        )
+        text = output.decode("utf-8", errors="replace")
+        if res.returncode == 0 and text.strip():
+            parts = text.strip().split("|")
             if len(parts) == 2:
                 cpu_str = parts[0].replace("%", "").strip()
                 mem_str = parts[1].replace("%", "").strip()
                 stats["cpu"] = float(cpu_str) if cpu_str else 0.0
                 stats["memory"] = float(mem_str) if mem_str else 0.0
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+    except (OSError, ResourceLimitError, subprocess.SubprocessError, ValueError) as exc:
         logger.debug("Unable to read sandbox stats for %s: %s", container_name, exc)
     return stats
 
@@ -402,11 +416,11 @@ def get_sandbox_logs(container_name: str, tail: int = 10) -> List[str]:
     if not container_name or not is_docker_available():
         return []
     try:
-        res = subprocess.run([
-            "docker", "logs", f"--tail={tail}", container_name
-        ], capture_output=True, text=True, check=False, timeout=2)
+        res, output = _run_docker_command(
+            ["docker", "logs", f"--tail={tail}", container_name], timeout=2
+        )
         if res.returncode == 0:
-            return res.stdout.splitlines()
-    except (OSError, subprocess.SubprocessError) as exc:
+            return output.decode("utf-8", errors="replace").splitlines()
+    except (OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
         logger.debug("Unable to read sandbox logs for %s: %s", container_name, exc)
     return []

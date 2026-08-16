@@ -14,8 +14,8 @@ not considered complete merely because an environment variable exists.
 - Project membership rejects users from another tenant.
 - API tokens use keyed hashes, explicit `read`, `write`, or `admin` scopes,
   expiration, revocation, and last-used tracking for current-format tokens.
-  The legacy unsalted-hash authentication fallback remains a release-gate
-  finding until legacy rows are revoked or migrated.
+  Migration 20 revokes rows that cannot be classified as current keyed hashes;
+  there is no legacy unsalted-hash authentication fallback.
 - Repeated login failures produce a timed account lockout.
 - Optional RFC 6238 TOTP MFA encrypts secrets at rest and provides ten
   single-use recovery codes.
@@ -32,12 +32,11 @@ not considered complete merely because an environment variable exists.
   assurance claim. Production still rejects multi-tenant mode with local
   storage, and the current topology uses one isolated deployment per tenant.
 - Artifact metadata includes SHA-256 size and integrity records.
-- Scanner subprocess pipe output, report/parser input, S3 downloads, ZIP entry
-  and uncompressed sizes, and HTTP response bodies are bounded by shared
-  resource budgets. S3 artifacts and report bundles are streamed in chunks
-  rather than assembled into an unbounded response buffer. File-writing
-  scanner outputs still need a concurrent write-time budget; this is a Phase 6
-  release-gate finding, not a completed control.
+- Scanner subprocess pipe output, file-writing reports, in-process scanner
+  findings, report/parser input, S3 downloads, ZIP entry and uncompressed
+  sizes, and HTTP response bodies are bounded by shared resource budgets. S3
+  artifacts and report bundles are streamed in chunks rather than assembled
+  into an unbounded response buffer.
 - Rate-limit keys and HTTP metrics use finite route classes/templates; raw
   request paths are not used as Redis keys or metric labels.
 - Scan manifests are signed with Ed25519 and contain source identity, revision,
@@ -52,12 +51,9 @@ not considered complete merely because an environment variable exists.
 - Suppressions require a reason, approver, ticket, and future expiry. Invalid or
   expired exceptions never remove findings and remain visible in versioned
   suppression evidence.
-- The repository currently carries one short-lived upstream exception for
-  Semgrep 1.172.0's exact MCP 1.23.3 pin. The affected MCP server transports
-  are not invoked by Aegis's Semgrep CLI path. This exception expires on
-  2026-10-20 and must be removed as soon as Semgrep permits a patched MCP
-  version; it is not blanket acceptance of those advisories in customer
-  applications.
+- The scanner extra pins Semgrep 1.173.0 and its fixed MCP 1.29.0
+  dependency. Aegis invokes Semgrep through its CLI path and does not expose
+  MCP server transports.
 
 ### Integrations and runtime boundaries
 
@@ -69,9 +65,14 @@ not considered complete merely because an environment variable exists.
   names are explicitly downgraded until an exact signed repository identity is
   observed.
 - GitHub OAuth connections and App installations share a centralized revocation
-  path. Queued scans re-read their database row, tenant, project membership,
-  source context, and current credential capability immediately before source
-  access.
+  path, and interactive OAuth state is bound to the initiating browser session.
+  Queued scans re-read their database row, tenant, project membership, source
+  context, and current credential capability immediately before source access.
+- MFA recovery-code consumption and login-failure lockout updates use
+  compare-and-swap/atomic database updates. WebSocket scan streams enforce the
+  project role and tenant boundary for administrators as well as other roles.
+- OIDC post-login redirects reject raw or encoded backslash, authority, and
+  control-character normalization bypasses.
 - Database triggers enforce tenant consistency on project, member, and scan
   inserts and updates, reject changes to immutable tenant identities, and reject
   unbound GitHub App installation IDs on scan rows.
@@ -122,6 +123,12 @@ broader tenant-isolation, object-store tenancy, and operational control plane
 remain under review. The S3-compatible artifact backend exists for durable
 single-tenant deployments; sell one tenant per isolated deployment in the
 meantime.
+
+Built-in scanner reports are emitted over a bounded stdout pipe into a
+parent-owned temporary file, then atomically promoted on every supported
+platform. The legacy adapter for scanners that insist on opening a report
+path directly is POSIX-only and fails closed elsewhere; new scanner
+integrations must use the stdout transport.
 
 ## Verification baseline
 

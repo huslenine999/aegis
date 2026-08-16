@@ -410,7 +410,8 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
 
     def run_scanner(command, *args, **kwargs):
         scanner_commands.append(command)
-        output_path = command[command.index("-o") + 1]
+        output_path = kwargs.get("stdout_output_path") or kwargs.get("output_path")
+        assert output_path is not None
         Path(output_path).write_text("[]")
         return 0
 
@@ -476,18 +477,37 @@ def test_github_oauth_uses_pkce_and_encrypts_token(tmp_path, monkeypatch):
 
     monkeypatch.setattr(github_integration.requests, "get", fake_get)
 
+    session_token = "browser-session-token-123456"
     authorization_url = github_integration.begin_oauth(
-        7, "https://aegis.example.com/api/github/callback"
+        7,
+        "https://aegis.example.com/api/github/callback",
+        session_token,
     )
     query = parse_qs(urlparse(authorization_url).query)
     assert query["code_challenge_method"] == ["S256"]
     assert query["state"]
     assert query["code_challenge"]
 
+    with pytest.raises(ValueError, match="invalid or expired"):
+        github_integration.complete_oauth(
+            "oauth-code",
+            query["state"][0],
+            "https://aegis.example.com/api/github/callback",
+            "different-browser-session-123456",
+        )
+
+    authorization_url = github_integration.begin_oauth(
+        7,
+        "https://aegis.example.com/api/github/callback",
+        session_token,
+    )
+    query = parse_qs(urlparse(authorization_url).query)
+
     assert github_integration.complete_oauth(
         "oauth-code",
         query["state"][0],
         "https://aegis.example.com/api/github/callback",
+        session_token,
     ) == 7
     assert github_integration.github_connection(7)["login"] == "octocat"
     assert github_integration.github_token(7) == "secret-github-token"
@@ -584,6 +604,13 @@ def test_webhook_connection_is_pinned_to_validated_address(monkeypatch):
     class Response:
         status_code = 200
 
+        def read(self, amount):
+            assert amount == notifications.MAX_WEBHOOK_RESPONSE_BYTES + 1
+            return b"{}"
+
+        def close(self):
+            return None
+
     class Pool:
         def __init__(self, host, **kwargs):
             pools.append((host, kwargs))
@@ -609,3 +636,47 @@ def test_webhook_connection_is_pinned_to_validated_address(monkeypatch):
     assert pools[0][0] == "8.8.8.8"
     assert pools[0][1]["server_hostname"] == "hooks.example.com"
     assert pools[0][1]["assert_hostname"] == "hooks.example.com"
+
+
+def test_webhook_response_body_is_bounded(monkeypatch):
+    monkeypatch.setattr(
+        notifications.socket,
+        "getaddrinfo",
+        lambda *args: [(2, 1, 6, "", ("8.8.8.8", 443))],
+    )
+
+    class Response:
+        status_code = 200
+
+        def read(self, amount):
+            assert amount == notifications.MAX_WEBHOOK_RESPONSE_BYTES + 1
+            return b"x" * amount
+
+        def close(self):
+            return None
+
+    class Pool:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def urlopen(self, *args, **kwargs):
+            assert kwargs["preload_content"] is False
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(notifications.urllib3, "HTTPSConnectionPool", Pool)
+    with pytest.raises(ValueError, match="response exceeds"):
+        notifications._post_pinned("https://hooks.example.com/hook", json={})
+
+
+def test_webhook_rejects_shared_non_global_address(monkeypatch):
+    monkeypatch.setattr(
+        notifications.socket,
+        "getaddrinfo",
+        lambda *args: [(2, 1, 6, "", ("100.64.0.1", 443))],
+    )
+
+    with pytest.raises(ValueError, match="non-public address"):
+        notifications._validate_webhook_url("https://hooks.example.com/hook")

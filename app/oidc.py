@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import unquote, urlencode, urlparse
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -100,6 +100,21 @@ def _state_hash(state: str) -> str:
 
 def _hash_binding(binding: str) -> str:
     return hashlib.sha256(binding.encode()).hexdigest()
+
+
+def _safe_return_to(value: Any) -> str:
+    """Keep post-login redirects on this origin, including browser edge cases."""
+    if not isinstance(value, str) or not value.startswith("/"):
+        return "/"
+    decoded = unquote(unquote(value))
+    if decoded.startswith("//") or "\\" in decoded or any(
+        ord(character) < 0x20 or ord(character) == 0x7F for character in decoded
+    ):
+        return "/"
+    parsed = urlparse(decoded)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    return value
 
 
 def _safe_host(host: str) -> bool:
@@ -259,8 +274,7 @@ def begin_oidc(
         raise RuntimeError("OIDC is not configured.")
     if not isinstance(callback_url, str) or not callback_url or len(callback_url) > 2048:
         raise ValueError("OIDC callback URL is invalid.")
-    if not return_to.startswith("/") or return_to.startswith("//"):
-        return_to = "/"
+    return_to = _safe_return_to(return_to)
     binding = browser_binding or new_browser_binding()
     if not isinstance(binding, str) or not 16 <= len(binding) <= 256:
         raise ValueError("OIDC browser binding is invalid.")

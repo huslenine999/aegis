@@ -96,6 +96,8 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   `AEGIS_ENABLE_SAFETY=true` and a licensed `SAFETY_API_KEY` on the worker.
 - Keep the resource budgets explicit and size them against the largest approved
   scan: `AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES` bounds scanner pipes,
+  `AEGIS_MAX_SCANNER_REPORT_BYTES` and `AEGIS_MAX_SCANNER_FINDINGS` bound
+  scanner-produced reports and in-process finding lists,
   `AEGIS_MAX_PARSER_INPUT_BYTES` bounds JSON and manifest parsing,
   `AEGIS_MAX_RESPONSE_BYTES` bounds streamed downloads,
   `AEGIS_MAX_ZIP_ENTRIES` and `AEGIS_MAX_ZIP_UNCOMPRESSED_BYTES` bound report
@@ -103,15 +105,18 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   remove these limits to accommodate a single unusually large repository; raise
   them deliberately and review the resulting disk, memory, and bandwidth
   exposure.
-- Before a release, enumerate `auth_tokens` and revoke/reissue any row from a
-  legacy unsalted-hash format. `AEGIS_TOKEN_PEPPER` rotation does not invalidate
-  a legacy verifier that still accepts raw SHA-256. Do not approve a release
-  until every scanner that writes `--output`, `-o`, or `--save-as` is bounded at
-  the file-write boundary, not only when its report is later parsed.
-- Notification webhook validation must reject every resolved address for which
+- Before a release, verify Migrations 20 and 21 are applied and Migration 20
+  has revoked/reissued every row from a legacy unsalted-hash format.
+  `AEGIS_TOKEN_PEPPER` rotation does not replace that migration. Built-in
+  scanner reports use a parent-owned bounded stdout pipe and atomic promotion;
+  keep that transport when adding scanners rather than allowing a child to
+  write directly into the report path. Verify GitHub OAuth completion is bound
+  to the initiating session and that project WebSocket streams enforce tenant
+  role checks.
+- Notification webhook validation rejects every resolved address for which
   `ipaddress.ip_address(address).is_global` is false. HTTPS, TLS hostname
-  validation, DNS pinning, and redirect denial are necessary but are not a
-  substitute for the global-address check.
+  validation, DNS pinning, and redirect denial remain required alongside the
+  global-address check.
 
 ## Scanner runtime
 
@@ -190,8 +195,8 @@ python scripts/pilot_readiness.py --docker-smoke \
 
 ## Key rotation
 
-- `AEGIS_ADMIN_TOKEN`: rotate by updating `.env`, restarting dashboard/worker,
-  and replacing CI or automation callers.
+- API tokens: revoke and reissue affected rows through the operations console
+  after a planned `AEGIS_TOKEN_PEPPER` rotation or suspected disclosure.
 - `AEGIS_SESSION_SECRET`: rotation invalidates browser sessions. Restart the
   dashboard after updating it.
 - `AEGIS_TOKEN_PEPPER`: rotation invalidates API tokens and MFA recovery codes.

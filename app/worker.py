@@ -27,6 +27,7 @@ from .scanners import DEFAULT_IGNORED_DIRS
 from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
+from .scanners import safety_report_is_complete
 from .scanners import write_semgrep_rules
 from .iac_scanner import empty_iac_report, run_iac_scan
 from .projects import (
@@ -57,6 +58,8 @@ from .resource_budgets import (
     iter_bounded,
     resource_budgets,
     run_bounded_subprocess,
+    run_bounded_subprocess_to_file,
+    run_bounded_subprocess_stdout_to_file,
 )
 from .sandbox import (
     is_docker_available, scaffold_sandbox_context, build_sandbox_image,
@@ -280,7 +283,15 @@ def run_dast_scan(
     )
 
 def execute_subprocess_log(
-    cmd, cwd, job_id, tool_name, env=None, timeout: int = SCANNER_TIMEOUT_SECONDS
+    cmd,
+    cwd,
+    job_id,
+    tool_name,
+    env=None,
+    timeout: int = SCANNER_TIMEOUT_SECONDS,
+    output_path: Path | None = None,
+    stdout_output_path: Path | None = None,
+    accepted_return_codes: set[int] | None = None,
 ):
     publish_job_event(job_id, "log", {"text": f"[{tool_name}] Executing: {' '.join(cmd)}", "color": "var(--text-muted)"})
     try:
@@ -292,14 +303,39 @@ def execute_subprocess_log(
                     {"text": f"[{tool_name}] {line[:4000]}", "color": "var(--text-main)"},
                 )
 
-        completed = run_bounded_subprocess(
-            cmd,
-            cwd=cwd,
-            env=env or scanner_subprocess_environment(),
-            timeout=timeout,
-            on_output=publish_output,
-            check_callback=lambda: _check_cancelled(job_id),
-        )
+        if output_path is not None and stdout_output_path is not None:
+            raise ValueError("Choose one scanner output transport.")
+        if stdout_output_path is not None:
+            completed = run_bounded_subprocess_stdout_to_file(
+                cmd,
+                stdout_output_path,
+                cwd=cwd,
+                env=env or scanner_subprocess_environment(),
+                timeout=timeout,
+                accepted_return_codes=accepted_return_codes,
+                on_output=publish_output,
+                check_callback=lambda: _check_cancelled(job_id),
+            )
+        elif output_path is not None:
+            completed = run_bounded_subprocess_to_file(
+                cmd,
+                output_path,
+                cwd=cwd,
+                env=env or scanner_subprocess_environment(),
+                timeout=timeout,
+                accepted_return_codes=accepted_return_codes,
+                on_output=publish_output,
+                check_callback=lambda: _check_cancelled(job_id),
+            )
+        else:
+            completed = run_bounded_subprocess(
+                cmd,
+                cwd=cwd,
+                env=env or scanner_subprocess_environment(),
+                timeout=timeout,
+                on_output=publish_output,
+                check_callback=lambda: _check_cancelled(job_id),
+            )
         return completed.returncode
     except ScanCancelled:
         raise
@@ -825,22 +861,25 @@ def async_scan_task(
                         "scan",
                         "--target",
                         str(requirements_file.parent),
-                        "--save-as",
+                        "--output",
                         "json",
-                        str(safe_output.file("safety-report.json")),
                     ]
                     safety_environment = scanner_subprocess_environment()
                     if os.environ.get("SAFETY_API_KEY"):
                         safety_environment["SAFETY_API_KEY"] = os.environ["SAFETY_API_KEY"]
-                    completed = subprocess.run(
+                    completed = run_bounded_subprocess_stdout_to_file(
                         safety_cmd,
+                        safe_output.file("safety-report.json"),
                         cwd=requirements_file.parent,
-                        check=False,
-                        timeout=120,
                         env=safety_environment,
+                        timeout=120,
+                        accepted_return_codes={0, 1},
                     )
                     safety_report = load_json_report(safe_output.file("safety-report.json"))
-                    if isinstance(safety_report, (dict, list)):
+                    if (
+                        completed.returncode in {0, 1}
+                        and safety_report_is_complete(safety_report)
+                    ):
                         mark_tool("Safety", "completed", return_code=completed.returncode)
                         publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
                     else:
@@ -1023,9 +1062,16 @@ def async_scan_task(
         # SAST: Ruff (SAST)
         ruff_report_path = safe_output.file("ruff-report.json")
         if has_python:
-            ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", "-o", str(ruff_report_path), str(target_path)]
+            ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", str(target_path)]
             ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
-            return_code = execute_subprocess_log(ruff_cmd, PROJECT_ROOT, job_id, "SAST:Ruff (SAST)")
+            return_code = execute_subprocess_log(
+                ruff_cmd,
+                PROJECT_ROOT,
+                job_id,
+                "SAST:Ruff (SAST)",
+                stdout_output_path=ruff_report_path,
+                accepted_return_codes={0, 1},
+            )
             ruff_report = load_json_report(ruff_report_path)
             if return_code in {0, 1} and isinstance(ruff_report, list):
                 mark_tool("Ruff", "completed", return_code=return_code)
@@ -1055,13 +1101,14 @@ def async_scan_task(
                 configure_semgrep_environment(semgrep_environment)
                 semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]
                 add_semgrep_excludes(semgrep_cmd)
-                semgrep_cmd.extend(["-o", str(semgrep_report_path), target_path])
+                semgrep_cmd.append(target_path)
                 return_code = execute_subprocess_log(
                     semgrep_cmd,
                     PROJECT_ROOT,
                     job_id,
                     "SAST:Semgrep",
                     env=semgrep_environment,
+                    stdout_output_path=semgrep_report_path,
                 )
                 semgrep_report = load_json_report(semgrep_report_path)
                 if return_code == 0 and isinstance(semgrep_report, dict):
@@ -1118,8 +1165,7 @@ def async_scan_task(
         try:
             publish_job_event(job_id, "log", {"text": "[YARA] Triggering YARA signature engine...", "color": "var(--text-muted)"})
             yara_findings = run_yara_scan(target_path, job_id)
-            with yara_report_path.open("w") as f:
-                json.dump(yara_findings, f, indent=2)
+            safe_output.write_bounded_json("yara-report.json", yara_findings)
             mark_tool("YARA", "completed")
             publish_job_event(job_id, "log", {"text": "[YARA] Scan complete.", "color": "var(--primary)"})
         except Exception as e:
@@ -1133,8 +1179,7 @@ def async_scan_task(
         try:
             publish_job_event(job_id, "log", {"text": "[ClamAV] Triggering ClamAV antivirus scanner...", "color": "var(--text-muted)"})
             clamav_findings = run_clamav_scan(target_path, job_id)
-            with clamav_report_path.open("w") as f:
-                json.dump(clamav_findings, f, indent=2)
+            safe_output.write_bounded_json("clamav-report.json", clamav_findings)
             mark_tool("ClamAV", "completed")
             publish_job_event(job_id, "log", {"text": "[ClamAV] Scan complete.", "color": "var(--primary)"})
         except Exception as e:

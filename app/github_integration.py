@@ -344,9 +344,16 @@ def _decrypt(value: str) -> str:
         raise RuntimeError("Stored GitHub credential could not be decrypted.") from exc
 
 
-def begin_oauth(user_id: int, callback_url: str) -> str:
+def _oauth_session_hash(session_token: str) -> str:
+    if not isinstance(session_token, str) or not 16 <= len(session_token) <= 512:
+        raise ValueError("GitHub OAuth requires a valid browser session.")
+    return hashlib.sha256(session_token.encode()).hexdigest()
+
+
+def begin_oauth(user_id: int, callback_url: str, session_token: str) -> str:
     if not github_enabled():
         raise RuntimeError("GitHub integration is not configured.")
+    session_hash = _oauth_session_hash(session_token)
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(
@@ -360,9 +367,9 @@ def begin_oauth(user_id: int, callback_url: str) -> str:
         )
         connection.execute(
             """INSERT INTO github_oauth_states
-               (state_hash, user_id, verifier_encrypted, expires_at)
-               VALUES (?, ?, ?, ?)""",
-            (state_hash, user_id, _encrypt(verifier), expires_at),
+               (state_hash, user_id, verifier_encrypted, expires_at, session_hash)
+               VALUES (?, ?, ?, ?, ?)""",
+            (state_hash, user_id, _encrypt(verifier), expires_at, session_hash),
         )
     query = urlencode(
         {
@@ -377,18 +384,26 @@ def begin_oauth(user_id: int, callback_url: str) -> str:
     return f"https://github.com/login/oauth/authorize?{query}"
 
 
-def complete_oauth(code: str, state: str, callback_url: str) -> int:
+def complete_oauth(
+    code: str, state: str, callback_url: str, session_token: str
+) -> int:
     state_hash = hashlib.sha256(state.encode()).hexdigest()
+    session_hash = _oauth_session_hash(session_token)
     with get_connection() as connection:
         row = connection.execute(
-            """SELECT user_id, verifier_encrypted, expires_at
+            """SELECT user_id, verifier_encrypted, expires_at, session_hash
                FROM github_oauth_states WHERE state_hash = ?""",
             (state_hash,),
         ).fetchone()
         connection.execute(
             "DELETE FROM github_oauth_states WHERE state_hash = ?", (state_hash,)
         )
-    if not row or row[2] < datetime.now(timezone.utc).isoformat():
+    if (
+        not row
+        or row[2] < datetime.now(timezone.utc).isoformat()
+        or not row[3]
+        or not hmac.compare_digest(str(row[3]), session_hash)
+    ):
         raise ValueError("GitHub authorization state is invalid or expired.")
     verifier = _decrypt(row[1])
     response = requests.post(

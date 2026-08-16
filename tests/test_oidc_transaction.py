@@ -82,6 +82,13 @@ def test_oidc_callback_rejects_wrong_browser_binding_before_network(tmp_path, mo
         oidc.complete_oidc("code", state, CALLBACK_URL, browser_binding="wrong-binding")
 
 
+@pytest.mark.parametrize(
+    "return_to", [r"/\\evil.example", "/\u0001evil", "/%5c%5cevil.example"]
+)
+def test_oidc_return_to_rejects_browser_normalization_bypass(return_to):
+    assert oidc._safe_return_to(return_to) == "/"
+
+
 def test_oidc_callback_uses_the_stored_snapshot_without_rediscovery(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch)
     discovery_calls = []

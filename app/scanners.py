@@ -7,7 +7,11 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
 
-from .resource_budgets import read_bounded_text, run_bounded_subprocess
+from .resource_budgets import (
+    BoundedFindingList,
+    read_bounded_text,
+    run_bounded_subprocess,
+)
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -138,6 +142,31 @@ def configure_semgrep_environment(environment: dict[str, str] | None = None):
         pass
 
 
+def safety_report_is_complete(report: Any) -> bool:
+    """Accept only Safety schemas that policy_engine can fully interpret."""
+    if isinstance(report, list):
+        return all(isinstance(item, dict) for item in report)
+    if not isinstance(report, dict):
+        return False
+    vulnerabilities = report.get("vulnerabilities")
+    if vulnerabilities is not None:
+        return isinstance(vulnerabilities, list) and all(
+            isinstance(item, dict) for item in vulnerabilities
+        )
+    affected_packages = report.get("affected_packages")
+    if not isinstance(affected_packages, dict):
+        return False
+    for package_data in affected_packages.values():
+        if not isinstance(package_data, dict):
+            return False
+        package_vulnerabilities = package_data.get("vulnerabilities")
+        if not isinstance(package_vulnerabilities, list) or not all(
+            isinstance(item, dict) for item in package_vulnerabilities
+        ):
+            return False
+    return True
+
+
 def write_semgrep_rules(path: Path):
     path.parent.mkdir(exist_ok=True, parents=True)
     path.write_text(SEMGREP_RULES)
@@ -247,7 +276,7 @@ def run_dast_scan(
 
     import requests
 
-    findings = []
+    findings = BoundedFindingList()
     for probe in probes:
         _emit(
             log,
@@ -346,7 +375,7 @@ def run_yara_scan(
     ignored_paths: set[str] | None = None,
     log: LogCallback | None = None,
 ):
-    findings = []
+    findings = BoundedFindingList()
     target = Path(target_path)
     yara_rules_path = Path(rules_path) if rules_path else Path(__file__).resolve().parent.parent / "rules" / "aegis_rules.yar"
 

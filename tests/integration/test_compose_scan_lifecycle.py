@@ -29,7 +29,7 @@ def _configuration() -> tuple[str, str]:
     }:
         pytest.skip("Compose integration tests are disabled.")
     base_url = os.environ.get("AEGIS_INTEGRATION_BASE_URL", "http://127.0.0.1:5001")
-    token = os.environ.get("AEGIS_INTEGRATION_ADMIN_TOKEN", os.environ.get("AEGIS_ADMIN_TOKEN", ""))
+    token = os.environ.get("AEGIS_INTEGRATION_ADMIN_TOKEN", "")
     if not token:
         pytest.skip("AEGIS integration admin token is not configured.")
     return base_url.rstrip("/"), token

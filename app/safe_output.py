@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .resource_budgets import bounded_json_bytes
+
 
 class SafeOutputError(RuntimeError):
     """Raised when scan output would escape or corrupt its output root."""
@@ -126,6 +128,10 @@ class SafeOutputRoot:
             relative,
             json.dumps(value, indent=2, ensure_ascii=False) + "\n",
         )
+
+    def write_bounded_json(self, relative: str | Path, value: Any) -> Path:
+        """Atomically write JSON only when its compact form fits the report budget."""
+        return self.write_bytes(relative, bounded_json_bytes(value))
 
     def write_json_path(self, path: str | Path, value: Any) -> Path:
         return self.write_json(self.relative_path(path), value)

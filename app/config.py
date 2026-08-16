@@ -200,9 +200,6 @@ def validate_runtime_configuration() -> None:
         )
     except RuntimeError as exc:
         errors.append(str(exc))
-    admin_token = os.environ.get("AEGIS_ADMIN_TOKEN", "")
-    if len(admin_token) < 32:
-        errors.append("AEGIS_ADMIN_TOKEN must contain at least 32 characters")
     if environment_bool("AEGIS_ENABLE_DEMO_LAB"):
         errors.append("AEGIS_ENABLE_DEMO_LAB must be false")
     if not environment_bool("AEGIS_REQUIRE_REDIS"):

@@ -14,10 +14,21 @@ from app.cli import install_hook, uninstall_hook, execute_scan, main, run_demo, 
 import app.cli as cli
 
 
-def fake_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
+def fake_scanner_command(
+    command,
+    *,
+    stdout=None,
+    output_path=None,
+    stdout_output_path=None,
+    timeout=120,
+    label="Scanner",
+    accepted_return_codes=None,
+):
+    report_path = Path(stdout_output_path or output_path) if (stdout_output_path or output_path) else None
     if "ruff" in command:
-        output_path = Path(command[command.index("-o") + 1])
-        target_path = Path(command[command.index(str(output_path)) + 1])
+        output_path = report_path
+        target_index = command.index("--exclude") - 1 if "--exclude" in command else -1
+        target_path = Path(command[target_index])
         findings = []
         if target_path.read_text(errors="ignore").find("eval(") >= 0:
             findings.append({
@@ -27,6 +38,8 @@ def fake_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
                 "message": "Use of possibly insecure function; consider using ast.literal_eval",
             })
         output_path.write_text(json.dumps(findings))
+    elif report_path is not None and label != "Semgrep":
+        Path(report_path).write_text(json.dumps([]))
     elif stdout is not None:
         stdout.write('{"results": {}}')
     return 0
@@ -208,9 +221,26 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     commands = []
 
-    def record_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
+    def record_scanner_command(
+        command,
+        *,
+        stdout=None,
+        output_path=None,
+        stdout_output_path=None,
+        timeout=120,
+        label="Scanner",
+        accepted_return_codes=None,
+    ):
         commands.append(command)
-        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+        return fake_scanner_command(
+            command,
+            stdout=stdout,
+            output_path=output_path,
+            stdout_output_path=stdout_output_path,
+            timeout=timeout,
+            label=label,
+            accepted_return_codes=accepted_return_codes,
+        )
 
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
@@ -400,9 +430,26 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     labels = []
 
-    def record_scanner_command(command, *, stdout=None, timeout=120, label="Scanner"):
+    def record_scanner_command(
+        command,
+        *,
+        stdout=None,
+        output_path=None,
+        stdout_output_path=None,
+        timeout=120,
+        label="Scanner",
+        accepted_return_codes=None,
+    ):
         labels.append(label)
-        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+        return fake_scanner_command(
+            command,
+            stdout=stdout,
+            output_path=output_path,
+            stdout_output_path=stdout_output_path,
+            timeout=timeout,
+            label=label,
+            accepted_return_codes=accepted_return_codes,
+        )
 
     with patch("app.cli.query_osv_vulnerabilities") as osv_query, \
          patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
@@ -495,7 +542,16 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
     output_dir = tmp_path / "reports"
     target_file.write_text("def add(a, b):\n    return a + b\n")
 
-    def failing_ruff(command, *, stdout=None, timeout=120, label="Scanner"):
+    def failing_ruff(
+        command,
+        *,
+        stdout=None,
+        output_path=None,
+        stdout_output_path=None,
+        timeout=120,
+        label="Scanner",
+        accepted_return_codes=None,
+    ):
         if label == "Secrets" and stdout is not None:
             stdout.write('{"results": {}}')
             return 0
@@ -527,10 +583,27 @@ def test_non_strict_scan_surfaces_operational_failures(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
 
-    def invalid_ruff(command, *, stdout=None, timeout=120, label="Scanner"):
+    def invalid_ruff(
+        command,
+        *,
+        stdout=None,
+        output_path=None,
+        stdout_output_path=None,
+        timeout=120,
+        label="Scanner",
+        accepted_return_codes=None,
+    ):
         if label == "Ruff":
             return 2
-        return fake_scanner_command(command, stdout=stdout, timeout=timeout, label=label)
+        return fake_scanner_command(
+            command,
+            stdout=stdout,
+            output_path=output_path,
+            stdout_output_path=stdout_output_path,
+            timeout=timeout,
+            label=label,
+            accepted_return_codes=accepted_return_codes,
+        )
 
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=invalid_ruff):

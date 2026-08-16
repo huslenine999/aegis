@@ -62,11 +62,13 @@ migration rerun result, coverage output, lock check, dependency audit, E2E
 result, Compose recovery evidence, and fresh Codex Security scan ID together.
 The release gate is a hold point when any of these is missing or degraded.
 
-In particular, an operator must confirm that legacy unsalted API-token rows have
-been revoked or reissued, scanner file-writing outputs are subject to a
-write-time byte limit, notification destinations reject every non-global
-address, and the Semgrep dependency tree contains a fixed `mcp` release. A
-pepper rotation alone is not evidence that legacy unsalted token rows are safe.
+In particular, an operator must confirm that Migrations 20 and 21 are applied;
+Migration 20 has revoked or reissued legacy unsalted API-token rows; GitHub
+OAuth state is bound to the initiating browser session; scanner file-writing
+outputs use the monitored temporary sink; notification destinations reject
+every non-global address; and the Semgrep dependency tree contains MCP 1.29.0
+or newer. A pepper rotation alone is not evidence that legacy unsalted token
+rows are safe.
 
 Rollback application code only after checking whether the previous version supports
 the current schema. Database migrations are forward-only; restore a coordinated

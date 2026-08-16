@@ -12,6 +12,7 @@ from app.sandbox import (
     run_sandbox_container,
     validate_untrusted_tree,
 )
+import app.sandbox as sandbox
 
 def test_detect_port_from_file(tmp_path):
     # Test file specifying port
@@ -35,20 +36,20 @@ def test_is_docker_available_not_found():
 
 def test_is_docker_available_daemon_down():
     with patch("shutil.which", return_value="/usr/bin/docker"), \
-         patch("subprocess.run") as mock_run:
+         patch.object(sandbox, "_run_docker_command") as mock_run:
         # Mock docker ps returning exit code 1
         mock_result = MagicMock()
         mock_result.returncode = 1
-        mock_run.return_value = mock_result
+        mock_run.return_value = (mock_result, b"")
         assert is_docker_available() is False
 
 def test_is_docker_available_running():
     with patch("shutil.which", return_value="/usr/bin/docker"), \
-         patch("subprocess.run") as mock_run:
+         patch.object(sandbox, "_run_docker_command") as mock_run:
         # Mock docker ps returning exit code 0
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_run.return_value = mock_result
+        mock_run.return_value = (mock_result, b"")
         assert is_docker_available() is True
 
 def test_scaffold_sandbox_context_custom_file(tmp_path):
@@ -142,10 +143,10 @@ def test_untrusted_tree_rejects_ignored_symlinks_and_special_files(tmp_path):
         validate_untrusted_tree(target, ignored_names={".venv"})
 
 def test_run_sandbox_container_args():
-    with patch("subprocess.run") as mock_run:
+    with patch.object(sandbox, "_run_docker_command") as mock_run:
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_run.return_value = mock_result
+        mock_run.return_value = (mock_result, b"")
         
         success = run_sandbox_container(
             image_tag="test-image",
@@ -183,8 +184,8 @@ def test_run_sandbox_container_args():
 
 
 def test_create_sandbox_network_is_internal():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch.object(sandbox, "_run_docker_command") as mock_run:
+        mock_run.return_value = (MagicMock(returncode=0), b"")
         assert create_sandbox_network("test-network") is True
         assert mock_run.call_args[0][0] == [
             "docker", "network", "create", "--internal", "test-network"

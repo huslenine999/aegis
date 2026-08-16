@@ -1233,6 +1233,69 @@ def _migration_019_github_tenant_credential_lifecycle(cursor) -> None:
         """)
 
 
+def _migration_020_api_token_hash_version(cursor) -> None:
+    """Version API-token hashes and revoke rows that predate the marker.
+
+    Existing rows cannot be classified safely because the old schema did not
+    record whether a digest was keyed or an unsalted SHA-256 value.  They are
+    therefore disabled during migration and must be reissued through the token
+    API, which always records the current keyed scheme explicitly.
+    """
+    if USING_POSTGRES:
+        cursor.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'auth_tokens'
+            """
+        )
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(auth_tokens)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+    additions = (
+        ("hash_scheme", "TEXT NOT NULL DEFAULT 'legacy'"),
+        ("revoked_at", "TEXT"),
+    )
+    for column, definition in additions:
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE auth_tokens ADD COLUMN {column} {definition}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        """UPDATE auth_tokens SET revoked_at = ?
+           WHERE revoked_at IS NULL AND hash_scheme <> 'hmac-sha256-v1'""",
+        (now,),
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_auth_tokens_scheme ON auth_tokens(hash_scheme, revoked_at)"
+    )
+
+
+def _migration_021_github_oauth_session_binding(cursor) -> None:
+    """Bind GitHub OAuth transactions to the browser session that started them."""
+    if USING_POSTGRES:
+        cursor.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'github_oauth_states'
+            """
+        )
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(github_oauth_states)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+    if "session_hash" not in columns:
+        cursor.execute(
+            "ALTER TABLE github_oauth_states ADD COLUMN session_hash TEXT NOT NULL DEFAULT ''"
+        )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_github_oauth_states_session "
+        "ON github_oauth_states(state_hash, session_hash)"
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1253,6 +1316,8 @@ MIGRATIONS = (
     Migration(17, "oidc_identity", _migration_017_oidc_identity),
     Migration(18, "oidc_transaction_boundary", _migration_018_oidc_transaction_boundary),
     Migration(19, "github_tenant_credential_lifecycle", _migration_019_github_tenant_credential_lifecycle),
+    Migration(20, "api_token_hash_version", _migration_020_api_token_hash_version),
+    Migration(21, "github_oauth_session_binding", _migration_021_github_oauth_session_binding),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

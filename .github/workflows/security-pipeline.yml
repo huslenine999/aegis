@@ -235,7 +235,6 @@ jobs:
             echo "::add-mask::$value"
             printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
           }
-          write_masked_env AEGIS_ADMIN_TOKEN "$(openssl rand -hex 32)"
           write_masked_env AEGIS_SESSION_SECRET "$(openssl rand -hex 32)"
           write_masked_env AEGIS_BOOTSTRAP_ADMIN_PASSWORD "$(openssl rand -hex 24)"
           write_masked_env AEGIS_ENCRYPTION_KEY "$(python -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
