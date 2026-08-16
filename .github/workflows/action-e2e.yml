@@ -32,7 +32,7 @@ jobs:
 
       - name: Run published Aegis revision
         id: aegis
-        uses: huslenine999/aegis@b2f00d3fd669799473ce601c7f4ca17dcf381c99
+        uses: huslenine999/aegis@d2a9c7ca0a2f53cc2ff4b936f3f86d010e40a7e1
         with:
           scan-target: action-e2e-target
           output-dir: action-e2e-reports
