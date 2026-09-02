@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from jinja2 import Environment, select_autoescape
 
 from app.dependencies import DependencyManifest, DependencyPackage, discover_dependency_manifests, extract_packages_from_manifest
+from app.findings import BASELINE_FINGERPRINT_KEY, extract_findings, strip_baseline_findings
 from app.safe_output import SafeOutputRoot
 from app.version import get_package_version
 from app.resource_budgets import (
@@ -262,6 +263,7 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
             guidance["suggestion"] = f"Review the remediation guide: {issue['remediation_url']}"
 
     enriched.setdefault("finding_status", "Unclassified in this standalone report")
+    enriched.pop(BASELINE_FINGERPRINT_KEY, None)
     enriched["why_it_matters"] = guidance["why"]
     enriched["remediation"] = guidance["fix"]
     enriched["fix_suggestion"] = guidance["suggestion"]
@@ -1223,6 +1225,7 @@ def run_policy_engine(
     fail_on_severities: set[str] | None = None,
     fail_on_scanner_errors: bool = True,
     output_root: SafeOutputRoot | None = None,
+    baseline_fingerprints: set[str] | None = None,
 ) -> int:
     if dependency_manifests is None:
         if req_path:
@@ -1271,19 +1274,35 @@ def run_policy_engine(
             print(f"[WARN] OSV scan execution failed: {e}")
             osv_findings = []
 
+    report_set = {
+        "ruff": ruff_report,
+        "semgrep": semgrep_report,
+        "safety": safety_report,
+        "osv": osv_findings,
+        "trivy": trivy_report,
+        "secrets": secrets_report,
+        "yara": yara_report,
+        "clamav": clamav_report,
+        "zap": zap_report,
+        "iac": iac_report,
+    }
+
+    # Diff-aware gating: tag raw entries with their durable fingerprints, then
+    # exclude findings that already exist in the project baseline from the
+    # blocking evaluation. Persisted evidence reports stay unfiltered.
+    baseline_exempted_total = 0
+    if baseline_fingerprints:
+        extract_findings(report_set)
+        filtered_reports = {}
+        for key, report in report_set.items():
+            filtered_reports[key], exempted = strip_baseline_findings(
+                report, baseline_fingerprints
+            )
+            baseline_exempted_total += exempted
+        report_set = filtered_reports
+
     results = analyze_report_set(
-        {
-            "ruff": ruff_report,
-            "semgrep": semgrep_report,
-            "safety": safety_report,
-            "osv": osv_findings,
-            "trivy": trivy_report,
-            "secrets": secrets_report,
-            "yara": yara_report,
-            "clamav": clamav_report,
-            "zap": zap_report,
-            "iac": iac_report,
-        },
+        report_set,
         fail_on_severities,
     )
 
@@ -1313,6 +1332,11 @@ def run_policy_engine(
     )
     final_status = decision["status"]
     reason = decision["reason"]
+    if baseline_exempted_total and final_status == "ALLOWED":
+        reason += (
+            f" Diff-aware gating: {baseline_exempted_total} pre-existing finding(s) "
+            "excluded from this decision."
+        )
 
     # Determine WAF status from environment (injected by main.py)
     if waf_enabled is None:

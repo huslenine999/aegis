@@ -227,9 +227,10 @@ def test_oidc_verifies_id_token_with_bounded_jwks_fetch(monkeypatch):
 
 def test_oidc_start_sets_a_lax_http_only_browser_binding_cookie(monkeypatch):
     from app import main
+    from app.routes import auth_routes
 
     monkeypatch.setattr(
-        main,
+        auth_routes,
         "begin_oidc",
         lambda callback_url, return_to="/", *, browser_binding: "https://idp.example/authorize",
     )

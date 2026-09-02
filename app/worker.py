@@ -14,11 +14,12 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, get_connection, redis_client
+from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
 from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner
+from .scan_engine import add_semgrep_excludes, exclude_files_pattern
 from .scan_status import ToolStatusTracker
 from .scanners import run_clamav_scan as shared_run_clamav_scan
 from .scanners import run_dast_scan as shared_run_dast_scan
@@ -37,7 +38,7 @@ from .projects import (
     record_scan_artifacts,
     update_scan_run,
 )
-from .findings import sync_findings
+from .findings import project_baseline_fingerprints, sync_findings
 from .policies import get_policy
 from .evidence import canonical_json, sign_manifest
 from .artifact_storage import (
@@ -67,7 +68,7 @@ from .sandbox import (
     run_trivy_scan, stop_and_cleanup_sandbox
 )
 
-EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(DEFAULT_IGNORED_DIRS))})(/|$)"
+EXCLUDE_FILES_PATTERN = exclude_files_pattern()
 JOB_LOG_LIMIT = environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
 JOB_RETENTION_SECONDS = environment_positive_int("AEGIS_JOB_RETENTION_SECONDS", 86400)
 ARTIFACT_RETENTION_DAYS = environment_positive_int("AEGIS_ARTIFACT_RETENTION_DAYS", 30)
@@ -165,12 +166,6 @@ def _source_revision(target_path: str | Path) -> str:
     return "unavailable"
 
 
-def add_semgrep_excludes(command: list[str]) -> list[str]:
-    for ignored_dir in sorted(DEFAULT_IGNORED_DIRS):
-        command.extend(["--exclude", ignored_dir])
-    return command
-
-
 def publish_job_event(job_id: str, event_type: str, data: dict):
     channel = f"job_channel:{job_id}"
     payload = {"type": event_type, **data}
@@ -222,27 +217,6 @@ def _cleanup_job_sandbox(
         stop_and_cleanup_sandbox(container_name, image_tag, network_name)
     finally:
         _clear_job_sandbox_container(job_id)
-
-def load_waf_rules_from_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT pattern, description, enabled FROM waf_rules")
-        rows = cursor.fetchall()
-        rules = []
-        for row in rows:
-            rules.append({
-                "pattern": row[0],
-                "description": row[1],
-                "enabled": bool(row[2])
-            })
-        return rules
-    except Exception as exc:
-        logger.warning("Unable to load WAF rules for worker scan: %s", exc)
-        return []
-    finally:
-        conn.close()
-
 
 def job_log_callback(job_id: str):
     color_by_level = {
@@ -1263,6 +1237,33 @@ def async_scan_task(
             )
 
         operational_failures = tool_statuses.failures()
+
+        baseline_fingerprints = None
+        if isinstance(payload, ScanJobPayload) and payload.diff_aware and payload.project_id:
+            try:
+                baseline_fingerprints = project_baseline_fingerprints(
+                    payload.project_id
+                )
+            except Exception as exc:
+                # Fail closed: without a readable baseline, gate on everything.
+                publish_job_event(
+                    job_id,
+                    "log",
+                    {
+                        "text": f"[POLICY] Diff-aware gating disabled, baseline unavailable: {exc}",
+                        "color": "var(--danger)",
+                    },
+                )
+                baseline_fingerprints = None
+            else:
+                publish_job_event(
+                    job_id,
+                    "log",
+                    {
+                        "text": f"[POLICY] Diff-aware gating active: {len(baseline_fingerprints)} pre-existing fingerprint(s) excluded from blocking.",
+                        "color": "var(--text-muted)",
+                    },
+                )
         if policy_definition:
             tool_states = tool_statuses.states()
             for required_tool in policy_definition.get("required_tools", []):
@@ -1285,6 +1286,7 @@ def async_scan_task(
                 if policy_definition
                 else None
             ),
+            baseline_fingerprints=baseline_fingerprints,
         )
         mark_tool("Policy Engine", "completed", return_code=policy_exit_code)
 

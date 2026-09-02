@@ -1,6 +1,6 @@
 import json
 from policy_engine import parse_cvss_vector, calculate_exploitability_score as calculate_policy_score
-import app.main as app_main
+from app.reporting import calculate_exploitability_score
 
 def test_parse_cvss_vector_critical():
     # AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H is CVSS 10.0 (Network, Low complexity, no privileges, no user interaction, Scope Changed, High confidentiality, integrity, availability)
@@ -58,7 +58,7 @@ def test_app_exploitability_score_calculation(tmp_path):
     (scans_dir / "osv-report.json").write_text(json.dumps([]))
 
     # Assert base score is 0.0 when no issues
-    assert app_main.calculate_exploitability_score(scans_dir, False) == 0.0
+    assert calculate_exploitability_score(scans_dir, False) == 0.0
 
     # Add a Ruff issue (HIGH = 8.5) and a ZAP exposed route issue (exposed multiplier = 1.5)
     (scans_dir / "ruff-report.json").write_text(json.dumps([
@@ -69,9 +69,9 @@ def test_app_exploitability_score_calculation(tmp_path):
     ]))
 
     # Two high-severity findings produce a high score without saturating at 100.
-    score_waf_off = app_main.calculate_exploitability_score(scans_dir, False)
+    score_waf_off = calculate_exploitability_score(scans_dir, False)
     assert score_waf_off == 89.0
 
     # The WAF does not discount the independent static finding.
-    score_waf_on = app_main.calculate_exploitability_score(scans_dir, True)
+    score_waf_on = calculate_exploitability_score(scans_dir, True)
     assert score_waf_on == 89.0

@@ -2,6 +2,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 import app.main as app_main
+from app import web_common
+from app.routes import demo_scan_routes
 from app.main import SCANS_DIR
 
 @pytest.fixture
@@ -9,7 +11,7 @@ def client():
     from app.database import initialize_database
     import shutil
     initialize_database(reset=True)
-    app_main.WAF_ENABLED = False
+    web_common.WAF_ENABLED = False
     
     # Clean up scans/uploads directory to avoid pollution from prior runs
     uploads_dir = SCANS_DIR / "uploads"
@@ -130,7 +132,7 @@ def test_run_scan_rejects_unknown_target(client):
 
 
 def test_run_scan_rejects_oversized_upload(client, monkeypatch):
-    monkeypatch.setattr(app_main, "MAX_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(demo_scan_routes, "MAX_UPLOAD_BYTES", 8)
     response = client.post(
         "/run-scan",
         files={"file": ("large.py", b"print('too large')\n")},

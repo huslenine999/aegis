@@ -133,14 +133,14 @@ def test_download_sbom_route():
 
 def test_download_report_bundle_route(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
-    import app.main as app_main
+    from app.routes import artifact_routes
 
     (tmp_path / "report.html").write_text("<html>Aegis</html>")
     (tmp_path / "report.md").write_text("# Aegis\n")
     (tmp_path / "sbom.json").write_text("{}")
     (tmp_path / "scan-manifest.json").write_text("{}")
     (tmp_path / "ruff-report.json").write_text("[]")
-    monkeypatch.setattr(app_main, "SCANS_DIR", tmp_path)
+    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
 
     client = TestClient(app)
     response = client.get("/download-report-bundle")

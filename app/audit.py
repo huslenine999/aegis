@@ -16,6 +16,12 @@ GENESIS_HASH = "0" * 64
 def _audit_key() -> bytes:
     value = os.environ.get("AEGIS_AUDIT_HMAC_KEY", "")
     if not value:
+        environment = os.environ.get("AEGIS_ENV", "development").strip().lower()
+        if environment == "production":
+            raise RuntimeError(
+                "AEGIS_AUDIT_HMAC_KEY must be set in production; refusing to "
+                "sign audit events with a development fallback key."
+            )
         value = "development-audit-key-not-for-production"
     return value.encode()
 

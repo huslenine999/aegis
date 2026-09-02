@@ -38,3 +38,4 @@ coverage.xml
 htmlcov/
 *.log
 .DS_Store
+.uv-lock-check/

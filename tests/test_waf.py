@@ -2,20 +2,21 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 import app.main as app_main
+from app import web_common
 
 @pytest.fixture
 def client():
     from app.database import initialize_database
     initialize_database(reset=True)
-    app_main.WAF_ENABLED = False
-    app_main.DEMO_LAB_ENABLED = True
+    web_common.WAF_ENABLED = False
+    web_common.DEMO_LAB_ENABLED = True
     yield TestClient(app_main.app)
-    app_main.DEMO_LAB_ENABLED = False
+    web_common.DEMO_LAB_ENABLED = False
 
 
 def test_demo_lab_disabled_by_default():
     """Vulnerable training routes should not be reachable unless explicitly enabled."""
-    app_main.DEMO_LAB_ENABLED = False
+    web_common.DEMO_LAB_ENABLED = False
     client = TestClient(app_main.app)
     response = client.get("/demo-lab/user?name=guest")
     assert response.status_code == 404
@@ -23,7 +24,7 @@ def test_demo_lab_disabled_by_default():
 
 def test_legacy_demo_operational_routes_are_disabled_with_the_lab(monkeypatch):
     monkeypatch.setattr("app.rate_limit.time.time", lambda: 1.0)
-    app_main.DEMO_LAB_ENABLED = False
+    web_common.DEMO_LAB_ENABLED = False
     try:
         client = TestClient(app_main.app)
 
@@ -34,12 +35,12 @@ def test_legacy_demo_operational_routes_are_disabled_with_the_lab(monkeypatch):
         assert client.get("/download-sbom").status_code == 404
         assert client.get("/download-report-bundle").status_code == 404
     finally:
-        app_main.DEMO_LAB_ENABLED = True
+        web_common.DEMO_LAB_ENABLED = True
 
 
 def test_project_scan_websocket_remains_available_when_demo_lab_is_disabled():
     """The authenticated project event stream is a product API, not a demo route."""
-    app_main.DEMO_LAB_ENABLED = False
+    web_common.DEMO_LAB_ENABLED = False
     try:
         client = TestClient(app_main.app)
         with pytest.raises(WebSocketDisconnect) as exc_info:
@@ -49,7 +50,7 @@ def test_project_scan_websocket_remains_available_when_demo_lab_is_disabled():
         assert exc_info.value.code == 4404
         assert exc_info.value.reason == "Scan job not found"
     finally:
-        app_main.DEMO_LAB_ENABLED = True
+        web_common.DEMO_LAB_ENABLED = True
 
 
 def test_demo_lab_is_namespaced_away_from_application_routes(client):
@@ -94,7 +95,7 @@ def test_demo_waf_does_not_filter_product_routes(client):
         assert response.status_code != 403
         assert b"Blocked by Aegis WAF" not in response.content
     finally:
-        if app_main.WAF_ENABLED:
+        if web_common.WAF_ENABLED:
             client.post("/toggle-waf")
 
 def test_waf_toggle(client):
@@ -110,7 +111,7 @@ def test_waf_toggle(client):
 
 def test_admin_token_protects_state_changing_routes(client):
     """When configured, admin routes require the Aegis token."""
-    app_main.DEV_ADMIN_TOKEN = "test-admin-token"
+    web_common.DEV_ADMIN_TOKEN = "test-admin-token"
     try:
         unauthorized = client.post("/toggle-waf")
         assert unauthorized.status_code == 401
@@ -119,8 +120,8 @@ def test_admin_token_protects_state_changing_routes(client):
         assert authorized.status_code == 200
         assert authorized.json()["waf_enabled"] is True
     finally:
-        app_main.DEV_ADMIN_TOKEN = None
-        if app_main.WAF_ENABLED:
+        web_common.DEV_ADMIN_TOKEN = None
+        if web_common.WAF_ENABLED:
             client.post("/toggle-waf")
 
 
@@ -134,7 +135,7 @@ def test_waf_persistence_failure_does_not_leak_internal_details(client, monkeypa
     def fail_to_save(_rules):
         raise RuntimeError("database-password-should-stay-private")
 
-    monkeypatch.setattr(app_main, "save_waf_rules_to_db", fail_to_save)
+    monkeypatch.setattr("app.routes.demo_scan_routes.save_waf_rules_to_db", fail_to_save)
 
     response = client.post(
         "/save-waf-rules",

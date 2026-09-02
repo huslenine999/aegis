@@ -6,10 +6,33 @@ This keeps queue serialization, status tracking, and event delivery from
 drifting while the scanner phases are migrated into this module incrementally.
 """
 
+import re
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from .scanners import DEFAULT_IGNORED_DIRS
 from .scan_status import ToolStatusTracker
+
+
+def exclude_files_pattern(
+    ignored_dirs: Iterable[str] | None = None,
+) -> str:
+    """Build the detect-secrets ``--exclude-files`` regex shared by CLI and worker."""
+    names = sorted(ignored_dirs if ignored_dirs is not None else DEFAULT_IGNORED_DIRS)
+    return rf"(^|/)({'|'.join(re.escape(name) for name in names)})(/|$)"
+
+
+EXCLUDE_FILES_PATTERN = exclude_files_pattern()
+
+
+def add_semgrep_excludes(
+    command: list[str],
+    ignored_dirs: Iterable[str] | None = None,
+) -> list[str]:
+    """Append one ``--exclude`` flag per ignored directory, in a stable order."""
+    for ignored_dir in sorted(ignored_dirs if ignored_dirs is not None else DEFAULT_IGNORED_DIRS):
+        command.extend(["--exclude", ignored_dir])
+    return command
 
 
 @dataclass(frozen=True)
@@ -26,6 +49,7 @@ class ScanJobPayload:
     preset: str = "standard"
     source_revision: str | None = None
     github_installation_id: int | None = None
+    diff_aware: bool = False
 
     def as_rq_kwargs(self) -> dict[str, Any]:
         """Return a stable, explicit representation for queue diagnostics."""

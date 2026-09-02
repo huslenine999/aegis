@@ -20,11 +20,11 @@ from starlette.responses import StreamingResponse
 from app import (
     artifact_storage,
     database,
-    main as app_main,
     rate_limit,
     reporting,
     resource_budgets,
 )
+from app.routes import artifact_routes
 from app.cli import run_scanner_command
 from app.scanners import safety_report_is_complete
 from app.resource_budgets import BoundedFindingList, ResourceLimitError
@@ -232,17 +232,17 @@ def test_s3_artifact_route_rejects_namespace_mismatch(
         "backend": "s3",
         "storage_key": "aegis/tenants/8/projects/11/runs/job-1/report.html",
     }
-    monkeypatch.setattr(app_main, "_authorized_scan", lambda *args, **kwargs: run)
-    monkeypatch.setattr(app_main, "get_scan_artifact", lambda *args, **kwargs: metadata)
+    monkeypatch.setattr(artifact_routes, "_authorized_scan", lambda *args, **kwargs: run)
+    monkeypatch.setattr(artifact_routes, "get_scan_artifact", lambda *args, **kwargs: metadata)
 
     class UnexpectedStore:
         def __init__(self) -> None:
             raise AssertionError("namespace validation must precede S3 access")
 
-    monkeypatch.setattr(app_main, "S3ArtifactStore", UnexpectedStore)
+    monkeypatch.setattr(artifact_routes, "S3ArtifactStore", UnexpectedStore)
 
     with pytest.raises(HTTPException) as error:
-        app_main.project_scan_artifact(11, 1, "report.html", principal=object())
+        artifact_routes.project_scan_artifact(11, 1, "report.html", principal=object())
 
     assert error.value.status_code == 409
 
@@ -266,11 +266,11 @@ def test_s3_artifact_listing_requires_payload_integrity(
         def verify(self, key: str, size: int, digest: str) -> bool:
             return False
 
-    monkeypatch.setattr(app_main, "_authorized_scan", lambda *args, **kwargs: run)
-    monkeypatch.setattr(app_main, "list_scan_artifacts", lambda *args, **kwargs: [metadata])
-    monkeypatch.setattr(app_main, "S3ArtifactStore", Store)
+    monkeypatch.setattr(artifact_routes, "_authorized_scan", lambda *args, **kwargs: run)
+    monkeypatch.setattr(artifact_routes, "list_scan_artifacts", lambda *args, **kwargs: [metadata])
+    monkeypatch.setattr(artifact_routes, "S3ArtifactStore", Store)
 
-    response = app_main.project_scan_artifacts(11, 1, principal=object())
+    response = artifact_routes.project_scan_artifacts(11, 1, principal=object())
 
     assert response["artifacts"][0]["integrity"] == "failed"
 
@@ -360,7 +360,7 @@ def test_response_boundary_rejects_oversized_file(
     monkeypatch.setenv("AEGIS_MAX_RESPONSE_BYTES", "4")
 
     with pytest.raises(HTTPException) as error:
-        app_main._stream_file_response(
+        artifact_routes._stream_file_response(
             path,
             media_type="text/html",
             filename="report.html",
@@ -372,8 +372,8 @@ def test_response_boundary_rejects_oversized_file(
 def test_bundle_response_is_streaming_and_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(app_main, "SCANS_DIR", tmp_path)
-    response = app_main._stream_bundle_response(
+    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
+    response = artifact_routes._stream_bundle_response(
         {"report.html": b"ok"},
         filename="bundle.zip",
     )

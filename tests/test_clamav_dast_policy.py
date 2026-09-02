@@ -2,7 +2,8 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-import app.main as app_main
+from app import web_common
+from app.routes import artifact_routes, demo_scan_routes
 from app.main import app
 from app.worker import run_clamav_scan, run_dast_scan
 from policy_engine import analyze_clamav, analyze_zap
@@ -11,7 +12,7 @@ from policy_engine import analyze_clamav, analyze_zap
 def client():
     from app.database import initialize_database
     initialize_database(reset=True)
-    app_main.WAF_ENABLED = False
+    web_common.WAF_ENABLED = False
     yield TestClient(app)
 
 def test_run_clamav_scan_eicar(tmp_path):
@@ -158,7 +159,8 @@ def test_get_scan_results_endpoint(client):
 
 
 def test_legacy_report_surfaces_fail_closed_on_iac_error(tmp_path, monkeypatch, client):
-    monkeypatch.setattr(app_main, "SCANS_DIR", tmp_path)
+    monkeypatch.setattr(demo_scan_routes, "SCANS_DIR", tmp_path)
+    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
     reports = {
         "ruff-report.json": [],
         "semgrep-report.json": {"results": []},

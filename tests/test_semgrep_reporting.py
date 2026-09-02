@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 from policy_engine import analyze_semgrep
-from app.main import app, generate_fallback_tree
+from app.main import app
+from app.web_common import generate_fallback_tree
 from fastapi.testclient import TestClient
 
 def test_analyze_semgrep_pass():

@@ -196,7 +196,7 @@ def test_run_scan_simulated_fallback():
     from app.main import app as fastapi_app
     client = TestClient(fastapi_app)
     
-    with patch("app.main.is_docker_available", return_value=False):
+    with patch("app.worker.is_docker_available", return_value=False):
         # Trigger scan
         response = client.post('/run-scan', json={"target": "secure"})
         assert response.status_code == 200

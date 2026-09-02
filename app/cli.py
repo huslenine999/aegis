@@ -24,12 +24,14 @@ from .scanners import run_clamav_scan as shared_run_clamav_scan
 from .scanners import run_dast_scan as shared_run_dast_scan
 from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import configure_semgrep_environment
+from .scanners import DEFAULT_IGNORED_DIRS
 from .scanners import find_runtime_executable
 from .scanners import safety_report_is_complete
 from .scanners import write_semgrep_rules
 from .iac_scanner import empty_iac_report, run_iac_scan
 from .scan_status import ToolStatusTracker
 from .scan_engine import CliEventSink, ScanEvent, ScanRunner
+from .scan_engine import add_semgrep_excludes, exclude_files_pattern
 from .cli_output import print_ascii_report, print_timing_summary
 from .version import get_package_version
 from . import cli_stack
@@ -61,25 +63,8 @@ from .resource_budgets import (
 )
 
 DEFAULT_TOOL_TIMEOUT = int(os.environ.get("AEGIS_CLI_TOOL_TIMEOUT", "120"))
-IGNORED_DIRS = {
-    ".aegis",
-    ".antigravitycli",
-    ".git",
-    ".mypy_cache",
-    ".nox",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "scanner-venv",
-    "scans",
-    "venv",
-}
-EXCLUDE_FILES_PATTERN = rf"(^|/)({'|'.join(re.escape(name) for name in sorted(IGNORED_DIRS))})(/|$)"
+IGNORED_DIRS = DEFAULT_IGNORED_DIRS
+EXCLUDE_FILES_PATTERN = exclude_files_pattern()
 FAST_MODE_SKIPPED_SCANNERS = "Safety/OSV, Semgrep, ClamAV, IaC, Docker sandbox, Trivy, and DAST"
 DEFAULT_SCAN_DIR = Path(".aegis") / "scans"
 EXIT_ALLOWED = 0
@@ -91,12 +76,6 @@ LOCAL_ENV_FILE = PROJECT_ROOT / ".env.aegis"
 
 def should_skip_path(path: Path) -> bool:
     return any(part in IGNORED_DIRS for part in path.parts)
-
-
-def add_semgrep_excludes(command: list[str]) -> list[str]:
-    for ignored_dir in sorted(IGNORED_DIRS):
-        command.extend(["--exclude", ignored_dir])
-    return command
 
 
 def get_config_section(config: dict) -> dict:

@@ -53,6 +53,9 @@ def _stable_path(value: Any) -> str:
         return text
 
 
+BASELINE_FINGERPRINT_KEY = "aegis_fingerprint"
+
+
 def _fingerprint(*parts: Any) -> str:
     canonical = json.dumps(
         [str(part or "").strip().lower() for part in parts],
@@ -101,11 +104,16 @@ def extract_findings(result: dict | None) -> list[dict]:
             line = int(line_number) if line_number is not None else None
         except (TypeError, ValueError):
             line = None
+        fingerprint = _fingerprint(
+            *(fingerprint_parts if fingerprint_parts is not None else (tool, rule_id, stable_path, *identity))
+        )
+        if isinstance(raw, dict):
+            # Tag the raw report entry so downstream policy evaluation can
+            # recognize pre-existing findings without recomputing identities.
+            raw.setdefault(BASELINE_FINGERPRINT_KEY, fingerprint)
         normalized.append(
             {
-                "fingerprint": _fingerprint(
-                    *(fingerprint_parts if fingerprint_parts is not None else (tool, rule_id, stable_path, *identity))
-                ),
+                "fingerprint": fingerprint,
                 "tool": tool,
                 "rule_id": str(rule_id or ""),
                 "title": str(title or rule_id or "Security finding")[:1000],
@@ -281,6 +289,64 @@ def extract_findings(result: dict | None) -> list[dict]:
 
     unique = {item["fingerprint"]: item for item in normalized}
     return list(unique.values())
+
+
+def project_baseline_fingerprints(project_id: int) -> set[str]:
+    """Fingerprints this project already carries from previous scans.
+
+    Resolved findings are excluded on purpose: if a finding reappears after a
+    complete scan stopped observing it, that reintroduction is treated as new.
+    """
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT fingerprint FROM security_findings
+               WHERE project_id = ? AND status != 'resolved'""",
+            (project_id,),
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def strip_baseline_findings(report: Any, baseline: set[str]) -> tuple[Any, int]:
+    """Return a copy of a raw scanner report without baseline-tagged entries.
+
+    Only in-memory copies are filtered; persisted evidence artifacts keep the
+    full unfiltered report. Entries without a fingerprint tag are always kept
+    so fail-closed behavior is preserved for anything unrecognized.
+    """
+    if not baseline or report is None or not isinstance(report, (dict, list)):
+        return report, 0
+
+    def split(items: list) -> tuple[list, int]:
+        kept = [item for item in items if item.get(BASELINE_FINGERPRINT_KEY) not in baseline]
+        return kept, len(items) - len(kept)
+
+    exempted = 0
+    if isinstance(report, list):
+        kept, exempted = split(report)
+        return kept, exempted
+
+    filtered = dict(report)
+    if isinstance(filtered.get("results"), list):  # Semgrep
+        filtered["results"], exempted = split(filtered["results"])
+    elif isinstance(filtered.get("results"), dict):  # detect-secrets
+        filtered_results = {}
+        for filename, items in filtered["results"].items():
+            kept, count = split(items if isinstance(items, list) else [])
+            exempted += count
+            filtered_results[filename] = kept
+        filtered["results"] = filtered_results
+    elif isinstance(filtered.get("Results"), list):  # Trivy
+        targets = []
+        for target in filtered["Results"]:
+            target_copy = dict(target)
+            if isinstance(target_copy.get("Vulnerabilities"), list):
+                target_copy["Vulnerabilities"], count = split(target_copy["Vulnerabilities"])
+                exempted += count
+            targets.append(target_copy)
+        filtered["Results"] = targets
+    elif isinstance(filtered.get("findings"), list):  # IaC
+        filtered["findings"], exempted = split(filtered["findings"])
+    return filtered, exempted
 
 
 def _insert_event(

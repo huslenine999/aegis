@@ -89,10 +89,11 @@ def mock_rq_and_redis(monkeypatch):
     # Direct override to prevent real redis socket connections
     import app.main
     import app.worker
-    app.main.redis_client = mock_redis
+    from app.routes import project_routes, demo_scan_routes
+    for module in (app.main, app.worker, project_routes, demo_scan_routes):
+        module.redis_client = mock_redis
+        module.REDIS_AVAILABLE = True
     app.worker.redis_client = mock_redis
-    app.main.REDIS_AVAILABLE = True
-    app.worker.REDIS_AVAILABLE = True
     
     # Mock redis.Redis to return MockRedis
     redis_mock = patch("redis.Redis", return_value=mock_redis)

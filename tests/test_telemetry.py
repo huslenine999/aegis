@@ -50,9 +50,9 @@ def test_stream_telemetry_active_sandbox(client):
     mock_logs_clean = [
         '172.17.0.1 - - [27/May/2026 12:45:56] "GET /user?name=admin HTTP/1.1" 200 -'
     ]
-    with patch("app.main.get_active_sandbox_container", return_value="aegis-sandbox-container-test"), \
-         patch("app.main.get_sandbox_stats", return_value=mock_stats), \
-         patch("app.main.get_sandbox_logs", return_value=mock_logs_clean):
+    with patch("app.routes.demo_scan_routes.get_active_sandbox_container", return_value="aegis-sandbox-container-test"), \
+         patch("app.routes.demo_scan_routes.get_sandbox_stats", return_value=mock_stats), \
+         patch("app.routes.demo_scan_routes.get_sandbox_logs", return_value=mock_logs_clean):
          
         with client.stream("GET", "/stream-telemetry") as response:
             first_event = None
@@ -78,9 +78,9 @@ def test_stream_telemetry_active_sandbox(client):
     mock_logs_exploit = [
         '172.17.0.1 - - [27/May/2026 12:45:58] "GET /ping?host=127.0.0.1;+cat+/etc/passwd HTTP/1.1" 403 -'
     ]
-    with patch("app.main.get_active_sandbox_container", return_value="aegis-sandbox-container-test"), \
-         patch("app.main.get_sandbox_stats", return_value=mock_stats), \
-         patch("app.main.get_sandbox_logs", return_value=mock_logs_exploit):
+    with patch("app.routes.demo_scan_routes.get_active_sandbox_container", return_value="aegis-sandbox-container-test"), \
+         patch("app.routes.demo_scan_routes.get_sandbox_stats", return_value=mock_stats), \
+         patch("app.routes.demo_scan_routes.get_sandbox_logs", return_value=mock_logs_exploit):
          
          with client.stream("GET", "/stream-telemetry") as response:
              first_event = None
@@ -111,13 +111,15 @@ def test_job_sandbox_lookup_does_not_fall_back_to_global_container(monkeypatch):
 
     store = JobStore()
     store.values[("job:authorized", "sandbox_container_id")] = b"aegis-sandbox-container-authorized"
-    monkeypatch.setattr(app_main, "redis_client", store)
+    from app.routes import demo_scan_routes
+
+    monkeypatch.setattr(demo_scan_routes, "redis_client", store)
 
     assert (
-        app_main._job_sandbox_container("authorized")
+        demo_scan_routes._job_sandbox_container("authorized")
         == "aegis-sandbox-container-authorized"
     )
-    assert app_main._job_sandbox_container("other") is None
+    assert demo_scan_routes._job_sandbox_container("other") is None
 
 
 def test_metrics_use_route_templates_and_one_unmatched_bucket():

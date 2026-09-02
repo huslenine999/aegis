@@ -2,12 +2,14 @@ from app import database
 from app import github_integration
 from app import notifications
 from app import projects
-from app import main as app_main
+from app.routes import artifact_routes, project_routes
 from app import worker
 from cryptography.fernet import Fernet
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import hashlib
+
+import fastapi
 import json
 import pytest
 from types import SimpleNamespace
@@ -257,10 +259,19 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     run_dir.mkdir(parents=True)
     (run_dir / "report.html").write_text("<h1>Project report</h1>")
     (run_dir / "sbom.json").write_text("{}")
-    monkeypatch.setattr(app_main, "SCANS_DIR", scans_dir)
-    monkeypatch.setattr(app_main, "_project_access", lambda *args: {"id": 7})
+    monkeypatch.setattr(artifact_routes, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(project_routes, "_project_access", lambda *args: {"id": 7})
     monkeypatch.setattr(
-        app_main,
+        artifact_routes,
+        "_authorized_scan",
+        lambda project_id, run_id, principal: {
+            "id": run_id,
+            "project_id": project_id,
+            "job_id": "job-1",
+        },
+    )
+    monkeypatch.setattr(
+        project_routes,
         "get_scan_run",
         lambda run_id: {"id": run_id, "project_id": 7, "job_id": "job-1"},
     )
@@ -273,29 +284,29 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
         }
         for path in (run_dir / "report.html", run_dir / "sbom.json")
     ]
-    monkeypatch.setattr(app_main, "list_scan_artifacts", lambda run_id: metadata)
+    monkeypatch.setattr(artifact_routes, "list_scan_artifacts", lambda run_id: metadata)
     monkeypatch.setattr(
-        app_main,
+        artifact_routes,
         "get_scan_artifact",
         lambda run_id, name: next(
             (artifact for artifact in metadata if artifact["name"] == name), None
         ),
     )
 
-    listing = app_main.project_scan_artifacts(7, 3, principal=object())
+    listing = artifact_routes.project_scan_artifacts(7, 3, principal=object())
     assert {item["name"] for item in listing["artifacts"]} == {
         "report.html",
         "sbom.json",
         "report-bundle.zip",
     }
-    response = app_main.project_scan_artifact(
+    response = artifact_routes.project_scan_artifact(
         7, 3, "report.html", principal=object()
     )
     assert isinstance(response, StreamingResponse)
 
     (run_dir / "report.html").write_text("tampered")
-    with pytest.raises(app_main.HTTPException, match="integrity verification failed"):
-        app_main.project_scan_artifact(7, 3, "report.html", principal=object())
+    with pytest.raises(fastapi.HTTPException, match="integrity verification failed"):
+        artifact_routes.project_scan_artifact(7, 3, "report.html", principal=object())
 
 
 def test_scan_artifact_metadata_is_persisted(tmp_path, monkeypatch):

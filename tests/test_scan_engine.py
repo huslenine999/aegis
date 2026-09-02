@@ -23,6 +23,7 @@ def test_scan_job_payload_is_typed_and_immutable():
         preset="standard",
         source_revision="a" * 40,
         github_installation_id=None,
+        diff_aware=False,
     )
 
     assert payload.job_id == "job-1"
@@ -37,6 +38,7 @@ def test_scan_job_payload_is_typed_and_immutable():
         "preset": "standard",
         "source_revision": "a" * 40,
         "github_installation_id": None,
+        "diff_aware": False,
     }
     with pytest.raises(FrozenInstanceError):
         payload.job_id = "other"

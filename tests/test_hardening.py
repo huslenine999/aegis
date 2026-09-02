@@ -480,6 +480,13 @@ def test_audit_chain_is_append_only_and_verifiable(tmp_path, monkeypatch):
             connection.execute("DELETE FROM audit_events WHERE tenant_id = ?", (tenant_id,))
 
 
+def test_audit_key_fails_closed_in_production_without_hmac_key(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.delenv("AEGIS_AUDIT_HMAC_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="AEGIS_AUDIT_HMAC_KEY"):
+        audit._audit_key()
+
+
 def test_bank_security_profile_fails_closed(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
     monkeypatch.setenv("AEGIS_SECURITY_PROFILE", "bank")
