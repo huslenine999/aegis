@@ -118,9 +118,9 @@ configuration.
 git clone https://github.com/huslenine999/aegis.git
 cd aegis
 
-python3 -m venv venv
-./venv/bin/python -m pip install -e ".[dev,scanner]"
-./venv/bin/aegis start
+make setup
+source venv/bin/activate
+aegis start
 ```
 
 `aegis start` checks Docker and local ports, generates owner-only development
