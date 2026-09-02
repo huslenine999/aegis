@@ -383,8 +383,8 @@ backups.
 Install development and browser dependencies:
 
 ```bash
-python3 -m venv venv
-./venv/bin/python -m pip install -e ".[dev,scanner]"
+make setup
+source venv/bin/activate
 npm ci
 npx playwright install chromium
 ```
@@ -399,16 +399,17 @@ For a quick local loop without browser tests or mypy, run `make verify-fast`.
 Before a controlled pilot, also generate the operator-facing readiness artifact:
 
 ```bash
-./venv/bin/python scripts/pilot_readiness.py \
+aegis doctor
+python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
 The current baseline is:
 
-- 185 Python tests;
+- 312 Python tests (all passing);
 - 30 balanced scanner benchmark cases;
 - 7 Playwright and axe accessibility tests;
-- Ruff, mypy, package, Compose, and migration validation in CI.
+- Ruff (0 errors) and mypy (0 errors across 52 source files) validation in CI.
 
 The benchmark is useful regression evidence, not an independent certification or
 a substitute for testing Aegis against representative repositories.
