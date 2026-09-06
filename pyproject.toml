@@ -27,37 +27,37 @@ dependencies = [
   "urllib3==2.7.0",
   "PyYAML==6.0.3",
   "Jinja2==3.1.6",
-  "MarkupSafe==2.1.5",
-  "ruff==0.15.17",
+  "MarkupSafe==3.0.3",
+  "ruff==0.16.6",
   "detect-secrets==1.5.0",
-  "yara-python==4.5.0",
-  "pipdeptree==2.35.3",
-  "fastapi==0.138.1",
-  "uvicorn==0.49.0",
-  "redis==5.2.1",
-  "rq==2.1.0",
-  "python-multipart==0.0.31",
-  "websockets==16.0",
-  "psycopg[binary]==3.2.10",
-  "cryptography==50.0.0",
-  "boto3==1.43.52",
+  "yara-python==4.5.4",
+  "pipdeptree==4.2.3",
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+  "redis==8.1.0",
+  "rq==2.12.0",
+  "python-multipart==0.0.32",
+  "websockets==17.1",
+  "psycopg[binary]==3.3.5",
+  "cryptography==50.0.1",
+  "boto3==1.43.88",
   "PyJWT[crypto]==2.13.0",
 ]
 
 [project.optional-dependencies]
 scanner = [
-  "checkov==3.1.0",
-  "semgrep==1.173.0",
+  "checkov==3.3.16",
+  "semgrep==1.176.0",
   "safety==3.8.1",
   # Checkov 3.1.0's CycloneDX adapter requires the 5.x model API.
-  "cyclonedx-python-lib==5.2.0",
+  "cyclonedx-python-lib==11.12.0",
 ]
 dev = [
   "httpx==0.28.1",
-  "mypy==1.18.2",
+  "mypy==2.3.1",
   "pytest==9.1.1",
-  "pytest-cov==6.2.1",
-  "pytest-timeout==2.3.1",
+  "pytest-cov==7.1.0",
+  "pytest-timeout==2.4.0",
 ]
 
 [project.scripts]
