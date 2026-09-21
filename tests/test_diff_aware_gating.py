@@ -137,20 +137,32 @@ def test_project_baseline_excludes_resolved_findings(tmp_path, monkeypatch):
             preset="standard",
         )
 
-    first = {"secrets": json.loads(json.dumps(SECRETS_REPORT))}
+    first = {
+        "secrets": json.loads(json.dumps(SECRETS_REPORT)),
+        "tools": [{"name": "Secrets", "status": "completed"}],
+    }
     sync_findings(new_run(), first)
     assert project_baseline_fingerprints(project_id) == {
         item["fingerprint"] for item in extract_findings(first)
     }
 
     # A later complete scan no longer observes either finding: both resolve.
-    sync_findings(new_run(), {"secrets": {"results": {}}})
+    sync_findings(
+        new_run(),
+        {
+            "secrets": {"results": {}},
+            "tools": [{"name": "Secrets", "status": "completed"}],
+        },
+    )
     baseline_after_resolution = project_baseline_fingerprints(project_id)
     assert baseline_after_resolution == set()
 
     # Reintroduce the same findings; against the empty baseline every one of
     # them is new, so the gate blocks on them again.
-    reintroduced = {"secrets": json.loads(json.dumps(SECRETS_REPORT))}
+    reintroduced = {
+        "secrets": json.loads(json.dumps(SECRETS_REPORT)),
+        "tools": [{"name": "Secrets", "status": "completed"}],
+    }
     observed = {item["fingerprint"] for item in extract_findings(reintroduced)}
     assert observed - baseline_after_resolution == observed
 

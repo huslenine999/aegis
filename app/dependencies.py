@@ -39,6 +39,7 @@ class DependencyManifest:
     kind: str
     ecosystem: str
     packages: tuple[DependencyPackage, ...] = ()
+    parse_error: str | None = None
 
     @property
     def safety_compatible(self) -> bool:
@@ -84,12 +85,23 @@ def discover_dependency_manifests(target_path: str | Path) -> list[DependencyMan
         if manifest_info is None:
             continue
         kind, ecosystem = manifest_info
+        parse_error = None
+        try:
+            packages = tuple(
+                extract_packages_from_manifest(
+                    path, kind, ecosystem, raise_errors=True
+                )
+            )
+        except Exception as exc:
+            packages = ()
+            parse_error = f"{type(exc).__name__}: {exc}"
         manifests.append(
             DependencyManifest(
                 path=path,
                 kind=kind,
                 ecosystem=ecosystem,
-                packages=tuple(extract_packages_from_manifest(path, kind, ecosystem)),
+                packages=packages,
+                parse_error=parse_error,
             )
         )
     return manifests
@@ -99,7 +111,13 @@ def first_requirements_manifest(manifests: list[DependencyManifest]) -> Dependen
     return next((manifest for manifest in manifests if manifest.safety_compatible), None)
 
 
-def extract_packages_from_manifest(path: Path, kind: str | None = None, ecosystem: str | None = None) -> list[DependencyPackage]:
+def extract_packages_from_manifest(
+    path: Path,
+    kind: str | None = None,
+    ecosystem: str | None = None,
+    *,
+    raise_errors: bool = False,
+) -> list[DependencyPackage]:
     kind = kind or path.name
     ecosystem = ecosystem or SUPPORTED_MANIFESTS.get(path.name, (path.name, "unknown"))[1]
     try:
@@ -115,7 +133,11 @@ def extract_packages_from_manifest(path: Path, kind: str | None = None, ecosyste
             return _packages_from_package_lock(path)
         if kind == "pnpm-lock.yaml":
             return _packages_from_pnpm_lock(path)
+        if kind == "yarn.lock":
+            return _packages_from_yarn_lock(path)
     except Exception:
+        if raise_errors:
+            raise
         return []
     return []
 
@@ -128,7 +150,9 @@ def _packages_from_requirements(path: Path) -> list[DependencyPackage]:
             continue
         match = REQUIREMENT_RE.match(line)
         if match:
-            packages.append(DependencyPackage(match.group(1), match.group(3), "PyPI"))
+            operator = match.group(2)
+            version = match.group(3) if operator == "==" else None
+            packages.append(DependencyPackage(match.group(1), version, "PyPI"))
     return packages
 
 
@@ -184,7 +208,7 @@ def _packages_from_package_lock(path: Path) -> list[DependencyPackage]:
         for package_path, details in package_entries.items():
             if not package_path or not isinstance(details, dict):
                 continue
-            name = details.get("name") or package_path.removeprefix("node_modules/")
+            name = details.get("name") or _npm_name_from_lock_path(package_path)
             version = _clean_exact_version(details.get("version"))
             if name and version:
                 packages.append(DependencyPackage(str(name), version, "npm"))
@@ -195,20 +219,140 @@ def _packages_from_package_lock(path: Path) -> list[DependencyPackage]:
 
 
 def _packages_from_pnpm_lock(path: Path) -> list[DependencyPackage]:
-    packages = []
-    in_packages = False
-    for line in read_bounded_text(path, errors="ignore").splitlines():
-        if line.startswith("packages:"):
-            in_packages = True
+    packages: list[DependencyPackage] = []
+    active_section = None
+    seen_sections: set[str] = set()
+    unparsed_entries: list[str] = []
+    lines = read_bounded_text(path, errors="strict").splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if in_packages and line and not line.startswith((" ", "\t")):
-            break
-        if not in_packages:
+        if not line.startswith((" ", "\t")) and stripped.endswith(":"):
+            section = stripped[:-1]
+            active_section = section if section in {"packages", "snapshots"} else None
+            if active_section:
+                seen_sections.add(active_section)
             continue
-        match = re.match(r"^\s{2,}['\"]?/?(@?[^@/]+(?:/[^@/'\"]+)?)/([0-9][^():'\"]*)", line)
-        if match:
-            packages.append(DependencyPackage(match.group(1), _clean_exact_version(match.group(2)), "npm"))
+        if active_section is None:
+            continue
+        indentation = len(line) - len(line.lstrip())
+        if indentation != 2 or not stripped.endswith(":"):
+            continue
+        descriptor = stripped[:-1].strip("\"'")
+        match = re.match(
+            r"^/?(@[^/@]+/[^/@]+|[^/@]+)(?:@|/)([0-9][^():'\"]*)$",
+            descriptor,
+        )
+        if not match:
+            unparsed_entries.append(descriptor)
+            continue
+        version = _clean_exact_version(match.group(2))
+        if version:
+            packages.append(DependencyPackage(match.group(1), version, "npm"))
+    if not seen_sections:
+        meaningful = [
+            line.strip()
+            for line in lines
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if meaningful:
+            raise ValueError("pnpm lockfile has no supported package sections.")
+    if unparsed_entries:
+        raise ValueError(
+            "pnpm lockfile contains unresolved package descriptors: "
+            + ", ".join(unparsed_entries[:5])
+        )
     return _dedupe_packages(packages)
+
+
+def _packages_from_yarn_lock(path: Path) -> list[DependencyPackage]:
+    """Parse the resolved package/version pairs in Yarn lockfiles.
+
+    Yarn lockfiles are declaration-oriented, so a descriptor without a
+    following resolved version is an invalid/incomplete inventory rather than a
+    clean dependency set.
+    """
+
+    packages: list[DependencyPackage] = []
+    descriptors_seen = 0
+    versions_seen = 0
+    current_names: list[str] = []
+    saw_metadata = False
+    entry_active = False
+    metadata_active = False
+    lines = read_bounded_text(path, errors="strict").splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not line.startswith((" ", "\t")) and stripped in {
+            "__metadata__:",
+            "__metadata:",
+        }:
+            saw_metadata = True
+            current_names = []
+            entry_active = False
+            metadata_active = True
+            continue
+        if not line.startswith((" ", "\t")) and stripped.endswith(":"):
+            current_names = [
+                _npm_name_from_spec(item.strip().strip("\"'"))
+                for item in stripped[:-1].split(",")
+            ]
+            current_names = [name for name in current_names if name]
+            descriptors_seen += len(current_names)
+            entry_active = True
+            metadata_active = False
+            continue
+        version_match = re.match(r"^\s+version\s*[:=]?\s*[\"']?([^\"'\s]+)", line)
+        if version_match and metadata_active:
+            continue
+        if version_match and entry_active and current_names:
+            version = _clean_exact_version(version_match.group(1))
+            if version:
+                versions_seen += len(current_names)
+                packages.extend(
+                    DependencyPackage(name, version, "npm") for name in current_names
+                )
+            current_names = []
+            continue
+        if not line.startswith((" ", "\t")):
+            raise ValueError(f"Unrecognized Yarn lockfile entry: {stripped[:80]}")
+        if not entry_active and not metadata_active:
+            raise ValueError(f"Yarn lockfile field has no descriptor: {stripped[:80]}")
+    if descriptors_seen and versions_seen != descriptors_seen:
+        raise ValueError(
+            f"Yarn lockfile resolved {versions_seen} of {descriptors_seen} package descriptors."
+        )
+    if not descriptors_seen and not saw_metadata:
+        meaningful = [
+            line.strip()
+            for line in lines
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if meaningful:
+            raise ValueError("Yarn lockfile contains no package descriptors.")
+    return _dedupe_packages(packages)
+
+
+def _npm_name_from_spec(spec: str) -> str:
+    value = spec.strip()
+    if value.startswith("npm:"):
+        value = value[4:]
+    if value.startswith("@"):
+        separator = value.find("@", 1)
+    else:
+        separator = value.find("@")
+    return value[:separator] if separator > 0 else value
+
+
+def _npm_name_from_lock_path(package_path: str) -> str:
+    marker = "node_modules/"
+    name = package_path.rsplit(marker, 1)[-1]
+    if name.startswith("@") and "/" in name:
+        return name
+    return name
 
 
 def _packages_from_lock_dependencies(deps: dict[str, Any], ecosystem: str) -> list[DependencyPackage]:
@@ -237,6 +381,8 @@ def _version_from_spec(spec: Any) -> str | None:
     spec = spec.strip()
     requirement_match = REQUIREMENT_RE.match(spec)
     if requirement_match:
+        if requirement_match.group(2) != "==":
+            return None
         return _clean_exact_version(requirement_match.group(3))
     if spec.startswith("=="):
         return _clean_exact_version(spec[2:].strip())

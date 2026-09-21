@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -9,7 +10,9 @@ from typing import Any, Callable
 
 from .resource_budgets import (
     BoundedFindingList,
+    ResourceLimitError,
     read_bounded_text,
+    resource_budgets,
     run_bounded_subprocess,
 )
 
@@ -181,19 +184,60 @@ def _emit(log: LogCallback | None, message: str, level: str = "info"):
         log(message, level)
 
 
-def _response_json(response) -> dict[str, Any]:
+def _bounded_response_text(response) -> str:
+    """Read an HTTP response without buffering attacker-controlled bytes."""
+
+    budgets = resource_budgets()
+    iterator = getattr(response, "iter_content", None)
+    if callable(iterator):
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in iterator(chunk_size=budgets.stream_chunk_bytes):
+            if not chunk:
+                continue
+            chunk_bytes = chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+            total += len(chunk_bytes)
+            if total > budgets.max_response_bytes:
+                raise ResourceLimitError(
+                    "DAST response exceeds the configured byte limit."
+                )
+            chunks.append(chunk_bytes)
+        return b"".join(chunks).decode("utf-8", errors="replace")
+
+    raw = getattr(response, "content", None)
+    if raw is None:
+        raw = str(getattr(response, "text", "") or "").encode("utf-8")
+    raw_bytes = raw.encode() if isinstance(raw, str) else bytes(raw)
+    if len(raw_bytes) > budgets.max_response_bytes:
+        raise ResourceLimitError("DAST response exceeds the configured byte limit.")
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def _response_json(response, body: str | None = None) -> dict[str, Any]:
     try:
-        value = response.json()
+        value = json.loads(body) if body and body.strip() else response.json()
     except Exception:
         return {}
     return value if isinstance(value, dict) else {}
 
 
-def _dast_exploit_observed(probe_id: str, response, payload: str) -> bool:
-    body = str(getattr(response, "text", "") or "")
-    data = _response_json(response)
+def _dast_exploit_observed(
+    probe_id: str,
+    response,
+    payload: str,
+    body: str | None = None,
+    baseline_data: dict[str, Any] | None = None,
+) -> bool:
+    body = body if body is not None else str(getattr(response, "text", "") or "")
+    data = _response_json(response, body)
     if probe_id == "sql_injection":
-        return bool(data.get("results"))
+        result_rows = data.get("results")
+        baseline_rows = (baseline_data or {}).get("results")
+        return (
+            isinstance(result_rows, list)
+            and isinstance(baseline_rows, list)
+            and result_rows != baseline_rows
+        )
     if probe_id == "command_injection":
         output = str(data.get("output", body))
         return "root:" in output or "uid=" in output
@@ -284,14 +328,33 @@ def run_dast_scan(
             "muted",
         )
         status_code = 0
+        response = None
         try:
+            baseline_data = None
+            if probe["id"] == "sql_injection":
+                baseline_response = requests.get(
+                    f"{target_url}{probe['route']}",
+                    params={"name": "__aegis_baseline_no_match__"},
+                    timeout=timeout,
+                    allow_redirects=False,
+                    stream=True,
+                )
+                try:
+                    baseline_body = _bounded_response_text(baseline_response)
+                    baseline_data = _response_json(baseline_response, baseline_body)
+                finally:
+                    close = getattr(baseline_response, "close", None)
+                    if callable(close):
+                        close()
             response = requests.get(
                 f"{target_url}{probe['route']}",
                 params=probe["params"],
                 timeout=timeout,
                 allow_redirects=False,
+                stream=True,
             )
             status_code = int(response.status_code)
+            response_body = _bounded_response_text(response)
             if status_code in {404, 405}:
                 status = "NOT_APPLICABLE"
             elif status_code in {400, 401, 403, 422}:
@@ -299,13 +362,23 @@ def run_dast_scan(
             elif 200 <= status_code < 300:
                 status = (
                     "EXPOSED"
-                    if _dast_exploit_observed(probe["id"], response, probe["payload"])
+                    if _dast_exploit_observed(
+                        probe["id"],
+                        response,
+                        probe["payload"],
+                        response_body,
+                        baseline_data,
+                    )
                     else "MITIGATED"
                 )
             else:
                 status = "ERROR"
         except requests.RequestException:
             status = "ERROR"
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
         _emit(
             log,

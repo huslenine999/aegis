@@ -8,6 +8,7 @@ from app.scan_engine import (
     ScanEvent,
     ScanJobPayload,
     ScanRunner,
+    build_ruff_command,
 )
 
 
@@ -71,3 +72,16 @@ def test_redis_event_sink_delegates_to_job_event_publisher(monkeypatch):
     sink.emit(ScanEvent("state", {"state": "completed", "progress": 100}))
 
     assert published == [("job-2", "state", {"state": "completed", "progress": 100})]
+
+
+def test_ruff_command_ignores_target_policy_and_inline_suppressions():
+    command = build_ruff_command(
+        "/usr/bin/python3",
+        "/tmp/target",
+        {".git", "node_modules"},
+    )
+
+    assert command[:4] == ["/usr/bin/python3", "-m", "ruff", "check"]
+    assert "--isolated" in command
+    assert "--ignore-noqa" in command
+    assert command[command.index("--exclude") + 1] == ".git,node_modules"

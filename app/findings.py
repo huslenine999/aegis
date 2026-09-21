@@ -16,6 +16,7 @@ FINDING_STATUSES = {
     "resolved",
 }
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+PRESET_RANK = {"quick": 0, "standard": 1, "deep": 2}
 ALLOWED_TRANSITIONS = {
     "open": {"acknowledged", "accepted", "false_positive", "resolved"},
     "acknowledged": {"open", "accepted", "false_positive", "resolved"},
@@ -382,12 +383,12 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
     now = _now()
     with get_connection() as connection:
         run = connection.execute(
-            "SELECT project_id, tenant_id, state FROM scan_runs WHERE id = ?",
+            "SELECT project_id, tenant_id, state, preset FROM scan_runs WHERE id = ?",
             (scan_run_id,),
         ).fetchone()
         if not run:
             raise ValueError("Scan run not found.")
-        project_id, tenant_id = int(run[0]), int(run[1])
+        project_id, tenant_id, current_preset = int(run[0]), int(run[1]), str(run[3])
         seen: set[str] = set()
         created = reopened = 0
         for item in observed:
@@ -467,15 +468,38 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
                 ),
             )
 
+        completed_tools = {
+            str(tool.get("name", ""))
+            for tool in result.get("tools", [])
+            if isinstance(tool, dict) and tool.get("status") == "completed"
+        }
         resolved = 0
-        if not result.get("operational_failures"):
+        if completed_tools and not result.get("operational_failures"):
             candidates = connection.execute(
-                """SELECT id, fingerprint, status FROM security_findings
-                   WHERE project_id = ? AND status != 'resolved'""",
+                """SELECT f.id, f.fingerprint, f.status, f.tool, previous_run.preset
+                   FROM security_findings f
+                   LEFT JOIN scan_runs previous_run ON previous_run.id = f.last_seen_run_id
+                   WHERE f.project_id = ? AND f.status != 'resolved'""",
                 (project_id,),
             ).fetchall()
-            for finding_id, fingerprint, old_status in candidates:
+            for finding_id, fingerprint, old_status, tool, previous_preset in candidates:
                 if fingerprint in seen:
+                    continue
+                if tool not in completed_tools:
+                    continue
+                highest_observed_rank = PRESET_RANK.get(str(previous_preset), -1)
+                occurrence_presets = connection.execute(
+                    """SELECT scan_runs.preset
+                       FROM finding_occurrences
+                       JOIN scan_runs ON scan_runs.id = finding_occurrences.scan_run_id
+                       WHERE finding_occurrences.finding_id = ?""",
+                    (finding_id,),
+                ).fetchall()
+                highest_observed_rank = max(
+                    highest_observed_rank,
+                    *(PRESET_RANK.get(str(row[0]), -1) for row in occurrence_presets),
+                )
+                if PRESET_RANK.get(current_preset, -1) < highest_observed_rank:
                     continue
                 connection.execute(
                     """UPDATE security_findings SET status = 'resolved',

@@ -19,7 +19,7 @@ from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
 from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner
-from .scan_engine import add_semgrep_excludes, exclude_files_pattern
+from .scan_engine import add_semgrep_excludes, build_ruff_command, exclude_files_pattern
 from .scan_status import ToolStatusTracker
 from .scanners import run_clamav_scan as shared_run_clamav_scan
 from .scanners import run_dast_scan as shared_run_dast_scan
@@ -1036,8 +1036,11 @@ def async_scan_task(
         # SAST: Ruff (SAST)
         ruff_report_path = safe_output.file("ruff-report.json")
         if has_python:
-            ruff_cmd = [python_bin, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", str(target_path)]
-            ruff_cmd.extend(["--exclude", ",".join(sorted(DEFAULT_IGNORED_DIRS))])
+            ruff_cmd = build_ruff_command(
+                python_bin,
+                str(target_path),
+                sorted(DEFAULT_IGNORED_DIRS),
+            )
             return_code = execute_subprocess_log(
                 ruff_cmd,
                 PROJECT_ROOT,
@@ -1233,6 +1236,7 @@ def async_scan_task(
                     "status": final_status,
                     "reason": reason,
                     "exploitability_score": exploitability_score,
+                    "risk_index": exploitability_score,
                 }
             )
 
@@ -1338,6 +1342,7 @@ def async_scan_task(
             "tools": [dict(item) for item in tool_statuses.records],
             "operational_failures": operational_failures,
             "exploitability_score": policy_summary.get("exploitability_score", 0.0),
+            "risk_index": policy_summary.get("risk_index", policy_summary.get("exploitability_score", 0.0)),
             "waf_enabled": waf_enabled,
             "has_run": True,
             "is_blocked": final_status != "ALLOWED",
@@ -1394,6 +1399,7 @@ def async_scan_task(
                 "preset": preset,
                 "policy_status": final_status,
                 "policy_exit_code": policy_exit_code,
+                "risk_index": result_payload["risk_index"],
                 "policy_sha256": policy_digest,
                 "policy_definition_sha256": policy_definition_sha256,
                 "policy_version": result_payload["policy_version"],

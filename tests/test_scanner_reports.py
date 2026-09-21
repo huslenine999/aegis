@@ -82,11 +82,11 @@ def test_generate_sbom(tmp_path):
     assert sbom_data["specVersion"] == "1.5"
     assert len(sbom_data["components"]) == 2
     
-    packages = {c["name"]: c["version"] for c in sbom_data["components"]}
+    packages = {c["name"]: c.get("version") for c in sbom_data["components"]}
     assert "Flask" in packages
     assert packages["Flask"] == "3.1.3"
     assert "requests" in packages
-    assert packages["requests"] == "2.34.2"
+    assert packages["requests"] is None
 
 
 def test_run_yara_scan_webshell(tmp_path):

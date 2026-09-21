@@ -109,12 +109,15 @@ def verify_audit_chain(tenant_id: int = 1) -> dict:
         rows = connection.execute(
             """SELECT id, actor_id, action, resource_type, resource_id,
                       details_json, created_at, previous_hash, event_hash
-               FROM audit_events WHERE tenant_id = ? AND event_hash IS NOT NULL
+               FROM audit_events WHERE tenant_id = ?
                ORDER BY id""",
             (tenant_id,),
         ).fetchall()
     previous_hash = GENESIS_HASH
     for row in rows:
+        if not row[7] or not row[8]:
+            record_audit_integrity_failure()
+            return {"valid": False, "events": len(rows), "failed_event_id": int(row[0])}
         try:
             details = json.loads(row[5])
         except (TypeError, json.JSONDecodeError):

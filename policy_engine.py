@@ -772,8 +772,28 @@ def _normalize_manifests(manifests_or_path: Any) -> list[DependencyManifest]:
             "pnpm-lock.yaml",
             "yarn.lock",
         } else "PyPI"
-        packages = tuple(extract_packages_from_manifest(path, path.name, ecosystem)) if path.exists() else ()
-        return [DependencyManifest(path=path, kind=path.name, ecosystem=ecosystem, packages=packages)]
+        parse_error = None
+        if path.exists():
+            try:
+                packages = tuple(
+                    extract_packages_from_manifest(
+                        path, path.name, ecosystem, raise_errors=True
+                    )
+                )
+            except Exception as exc:
+                packages = ()
+                parse_error = f"{type(exc).__name__}: {exc}"
+        else:
+            packages = ()
+        return [
+            DependencyManifest(
+                path=path,
+                kind=path.name,
+                ecosystem=ecosystem,
+                packages=packages,
+                parse_error=parse_error,
+            )
+        ]
     return list(manifests_or_path)
 
 
@@ -900,6 +920,49 @@ def parse_cvss_vector(vector_str: str) -> float:
 
 
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
+LOCKFILE_KINDS = {
+    "uv.lock",
+    "poetry.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+
+
+def _dependency_inventory_errors(manifests: list[DependencyManifest]) -> list[str]:
+    errors = [
+        f"{manifest.path}: {manifest.parse_error}"
+        for manifest in manifests
+        if manifest.parse_error
+    ]
+    locked_package_names: dict[str, set[str]] = {}
+    for manifest in manifests:
+        if manifest.kind not in LOCKFILE_KINDS or manifest.parse_error:
+            continue
+        names = locked_package_names.setdefault(manifest.ecosystem, set())
+        names.update(package.name.lower() for package in manifest.packages)
+    unresolved_manifests = [
+        manifest
+        for manifest in manifests
+        if any(
+            package.version is None
+            and package.name.lower()
+            not in locked_package_names.get(manifest.ecosystem, set())
+            for package in manifest.packages
+        )
+    ]
+    if unresolved_manifests:
+        descriptions = ", ".join(
+            f"{manifest.path} ({manifest.ecosystem})"
+            for manifest in unresolved_manifests
+        )
+        errors.append(
+            "Dependency inventory incomplete; exact versions are required for "
+            f"OSV queries: {descriptions}"
+        )
+    return errors
+
 
 def query_osv_vulnerabilities(
     manifests_or_path: Any,
@@ -909,7 +972,15 @@ def query_osv_vulnerabilities(
     findings: list[dict[str, Any]] = []
     failed_queries = []
     packages_by_key: dict[tuple[str, str, str], DependencyPackage] = {}
-    for manifest in _normalize_manifests(manifests_or_path):
+    manifests = _normalize_manifests(manifests_or_path)
+    inventory_errors = _dependency_inventory_errors(manifests)
+    if inventory_errors and raise_on_error:
+        raise RuntimeError(
+            "Dependency manifest parsing failed or inventory incomplete: "
+            + "; ".join(inventory_errors)
+        )
+
+    for manifest in manifests:
         for package in manifest.packages:
             if package.version:
                 key = (package.ecosystem, package.name.lower(), package.version)
@@ -922,7 +993,8 @@ def query_osv_vulnerabilities(
     cache = {}
     if OSV_CACHE_FILE.exists():
         try:
-            cache = load_bounded_json(OSV_CACHE_FILE)
+            loaded_cache = load_bounded_json(OSV_CACHE_FILE)
+            cache = loaded_cache if isinstance(loaded_cache, dict) else {}
         except Exception:
             pass
 
@@ -935,11 +1007,18 @@ def query_osv_vulnerabilities(
         pkg_ver = pkg.version
         ecosystem = pkg.ecosystem
         cache_key = f"{ecosystem}:{pkg_name.lower()}@{pkg_ver}"
-        
-        if cache_key in cache:
-            entry = cache[cache_key]
-            if current_time - entry.get("timestamp", 0) < CACHE_TTL:
-                findings.extend(entry.get("vulns", []))
+
+        entry = cache.get(cache_key)
+        cached_vulns = None
+        entry_age = None
+        if isinstance(entry, dict) and isinstance(entry.get("vulns"), list):
+            cached_vulns = entry["vulns"]
+            try:
+                entry_age = current_time - float(entry.get("timestamp", 0))
+            except (TypeError, ValueError):
+                entry_age = None
+            if entry_age is not None and 0 <= entry_age < CACHE_TTL:
+                findings.extend(cached_vulns)
                 continue
 
         url = "https://api.osv.dev/v1/query"
@@ -1009,8 +1088,13 @@ def query_osv_vulnerabilities(
                 time.sleep(0.1)
         except Exception as e:
             print(f"[WARN] Failed to query OSV API for {cache_key}: {e}")
-            if cache_key in cache:
-                findings.extend(cache[cache_key].get("vulns", []))
+            if cached_vulns is not None and entry_age is not None and 0 <= entry_age < CACHE_TTL:
+                findings.extend(cached_vulns)
+            elif cached_vulns is not None:
+                # A stale result may be useful for a best-effort report, but it
+                # must remain an operational failure for strict release gates.
+                findings.extend(cached_vulns)
+                failed_queries.append(cache_key)
             else:
                 failed_queries.append(cache_key)
 
@@ -1022,7 +1106,7 @@ def query_osv_vulnerabilities(
 
     if raise_on_error and failed_queries:
         raise RuntimeError(
-            "OSV queries failed without cached results for: "
+            "OSV queries failed or used stale cache for: "
             + ", ".join(failed_queries)
         )
 
@@ -1041,8 +1125,9 @@ def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: b
 
     if not severities:
         return 0.0
-    # A risk score should reflect the worst credible finding without growing
-    # linearly merely because a scanner emitted many low-confidence matches.
+    # This is a heuristic index, not a probability of exploitation. It reflects
+    # the worst credible finding without growing linearly merely because a
+    # scanner emitted many low-confidence matches.
     maximum_risk = max(severities) * 10.0
     volume_bonus = min(15.0, math.log2(len(severities) + 1) * 2.5)
     return round(min(100.0, maximum_risk + volume_bonus), 1)
@@ -1088,7 +1173,8 @@ def generate_reports(
         f"**Generated on:** {timestamp}",
         f"**Final Decision:** DEPLOYMENT {final_status}",
         f"**Reason:** {reason}",
-        f"**Exploitability Score:** {exploitability_score}%",
+        f"**Heuristic risk index (0-100):** {exploitability_score}",
+        "*This index is a relative severity signal, not a probability of exploitation.*",
         "",
         "## Tool Results",
         "| Tool | Status | Total Issues | Blocking Issues |",
@@ -1227,6 +1313,7 @@ def run_policy_engine(
     output_root: SafeOutputRoot | None = None,
     baseline_fingerprints: set[str] | None = None,
 ) -> int:
+    effective_operational_failures = list(operational_failures or [])
     if dependency_manifests is None:
         if req_path:
             dependency_manifests = _normalize_manifests(req_path)
@@ -1254,7 +1341,20 @@ def run_policy_engine(
 
     osv_report_path = output_root.file("osv-report.json") if output_root else scan_dir / "osv-report.json"
     cached_osv_report = load_json(osv_report_path)
-    if cached_osv_report is not None:
+    inventory_errors = _dependency_inventory_errors(dependency_manifests)
+    if inventory_errors and fail_on_scanner_errors:
+        osv_findings = []
+        if "OSV" not in effective_operational_failures:
+            effective_operational_failures.append("OSV")
+        if output_root:
+            output_root.write_json_path(osv_report_path, osv_findings)
+        else:
+            osv_report_path.write_text(json.dumps(osv_findings, indent=2))
+        print(
+            "[WARN] Dependency manifest/inventory validation failed: "
+            + "; ".join(inventory_errors)
+        )
+    elif cached_osv_report is not None:
         osv_findings = cached_osv_report
     elif not dependency_manifests:
         osv_findings = []
@@ -1264,7 +1364,10 @@ def run_policy_engine(
             osv_report_path.write_text(json.dumps(osv_findings, indent=2))
     else:
         try:
-            osv_findings = query_osv_vulnerabilities(dependency_manifests)
+            osv_findings = query_osv_vulnerabilities(
+                dependency_manifests,
+                raise_on_error=fail_on_scanner_errors,
+            )
             if output_root:
                 output_root.write_json_path(osv_report_path, osv_findings)
             else:
@@ -1273,6 +1376,8 @@ def run_policy_engine(
         except Exception as e:
             print(f"[WARN] OSV scan execution failed: {e}")
             osv_findings = []
+            if fail_on_scanner_errors and "OSV" not in effective_operational_failures:
+                effective_operational_failures.append("OSV")
 
     report_set = {
         "ruff": ruff_report,
@@ -1327,7 +1432,7 @@ def run_policy_engine(
 
     decision = evaluate_policy_results(
         results,
-        operational_failures,
+        effective_operational_failures,
         fail_on_errors=fail_on_scanner_errors,
     )
     final_status = decision["status"]

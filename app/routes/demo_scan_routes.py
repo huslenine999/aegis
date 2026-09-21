@@ -205,6 +205,7 @@ def get_scan_results():
         "yara": yara,
         "iac": iac,
         "exploitability_score": score,
+        "risk_index": score,
         "waf_enabled": web_common.WAF_ENABLED,
         "has_run": has_run,
         "is_blocked": is_blocked,

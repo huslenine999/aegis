@@ -96,6 +96,16 @@ def test_report_includes_print_and_reduced_motion_styles():
     assert "break-inside: avoid" in html
 
 
+def test_report_distinguishes_incomplete_scans_from_allowed_decisions():
+    html = REPORT_TEMPLATE.read_text()
+
+    assert "status-error" in html
+    assert "Scan incomplete" in html
+    assert "final_status == 'ALLOWED'" in html
+    assert "status === 'ERROR' || status !== 'ALLOWED'" in html
+    assert "Relative severity signal; not a probability." in html
+
+
 def test_operations_and_project_pages_have_accessible_status_regions():
     admin = ADMIN_TEMPLATE.read_text()
     projects = PROJECTS_TEMPLATE.read_text()

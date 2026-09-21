@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app import web_common
 from app.routes import artifact_routes, demo_scan_routes
 from app.main import app
+from app.resource_budgets import ResourceLimitError
 from app.worker import run_clamav_scan, run_dast_scan
 from policy_engine import analyze_clamav, analyze_zap
 
@@ -89,14 +90,33 @@ def test_run_dast_scan_requires_observed_exploit_effect(monkeypatch):
     assert {finding["status"] for finding in findings} == {"MITIGATED"}
 
 
+def test_run_dast_scan_rejects_constant_sql_results_as_exploitation(monkeypatch):
+    import requests
+
+    class ConstantResponse:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {"results": [[1, "constant"]]}
+
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: ConstantResponse())
+    findings = run_dast_scan("http://isolated-target", job_id="test_job")
+
+    assert findings[0]["vuln_type"] == "SQL Injection"
+    assert findings[0]["status"] == "MITIGATED"
+
+
 def test_run_dast_scan_detects_probe_markers(monkeypatch):
     import requests
 
     class ExposedResponse:
         status_code = 200
 
-        def __init__(self, url):
+        def __init__(self, url, params=None):
             self.url = url
+            self.params = params or {}
             self.text = ""
             if url.endswith("/ping"):
                 self.text = "root:x:0:0:root:/root:/bin/sh"
@@ -109,16 +129,43 @@ def test_run_dast_scan_detects_probe_markers(monkeypatch):
 
         def json(self):
             if self.url.endswith("/user"):
+                if self.params.get("name") == "__aegis_baseline_no_match__":
+                    return {"results": []}
                 return {"results": [[1, "admin"]]}
             if self.url.endswith("/ssrf"):
                 return {"status": "success", "response": "healthy"}
             return {}
 
     monkeypatch.setattr(
-        requests, "get", lambda url, **kwargs: ExposedResponse(url)
+        requests,
+        "get",
+        lambda url, **kwargs: ExposedResponse(url, kwargs.get("params")),
     )
     findings = run_dast_scan("http://isolated-target", job_id="test_job")
     assert {finding["status"] for finding in findings} == {"EXPOSED"}
+
+
+def test_run_dast_scan_bounds_streamed_response_bytes(monkeypatch):
+    import requests
+
+    class LargeResponse:
+        status_code = 200
+        closed = False
+
+        def iter_content(self, chunk_size):
+            del chunk_size
+            yield b"x" * 16
+
+        def close(self):
+            self.closed = True
+
+    response = LargeResponse()
+    monkeypatch.setenv("AEGIS_MAX_RESPONSE_BYTES", "8")
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: response)
+
+    with pytest.raises(ResourceLimitError, match="DAST response"):
+        run_dast_scan("http://isolated-target", job_id="test_job")
+    assert response.closed is True
 
 def test_policy_engine_clamav():
     # Test analyze_clamav with mock reports

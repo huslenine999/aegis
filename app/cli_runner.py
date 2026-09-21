@@ -59,6 +59,7 @@ from .scan_engine import (
     ScanEvent,
     ScanRunner,
     add_semgrep_excludes,
+    build_ruff_command,
 )
 from .scan_status import ToolStatusTracker
 from .scanners import (
@@ -522,9 +523,8 @@ def _execute_scan(
     with timed_step(timings, "Ruff"):
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
         ruff_report_path = safe_output.file("ruff-report.json")
-        ruff_cmd = [sys.executable, "-m", "ruff", "check", "--no-cache", "--select", "S", "--output-format", "json", str(target_path)]
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
-        ruff_cmd.extend(["--exclude", ",".join(ruff_excludes)])
+        ruff_cmd = build_ruff_command(sys.executable, str(target_path), ruff_excludes)
         ruff_report_path.unlink(missing_ok=True)
         ruff_return_code = _cli_func("run_scanner_command", run_scanner_command)(
             ruff_cmd,
@@ -838,6 +838,7 @@ def _execute_scan(
             "policy_status": final_status,
             "reason": reason,
             "exploitability_score": exploitability_score,
+            "risk_index": exploitability_score,
             "results": results,
         })
         if not json_output and not quiet:
@@ -936,6 +937,7 @@ def _execute_scan(
             EXIT_BLOCKED: "blocked",
             EXIT_OPERATIONAL_ERROR: "error",
         }.get(exit_code, "error"),
+        "risk_index": policy_summary.get("risk_index", policy_summary.get("exploitability_score", 0.0)),
         "operational_failures": failed_tools,
         "tools": tool_statuses.records,
         "policy_sha256": hashlib.sha256(canonical_json(policy_summary)).hexdigest(),

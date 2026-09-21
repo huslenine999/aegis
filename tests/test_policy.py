@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import policy_engine
 from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import (
@@ -80,6 +82,91 @@ def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
 
     assert findings[0]["id"] == "PYSEC-2099-1"
     assert findings[0]["aliases"] == ["GHSA-example"]
+
+
+def test_osv_strict_mode_rejects_stale_clean_cache_on_outage(tmp_path, monkeypatch):
+    cache = tmp_path / "osv-cache.json"
+    cache.write_text(json.dumps({
+        "PyPI:scanner-helper@1.0.0": {
+            "timestamp": 0,
+            "vulns": [],
+        }
+    }))
+    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", cache)
+    monkeypatch.setattr(policy_engine.time, "time", lambda: 200000)
+    monkeypatch.setattr(
+        policy_engine.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("offline")),
+    )
+    manifest = DependencyManifest(
+        path=Path("requirements.txt"),
+        kind="requirements.txt",
+        ecosystem="PyPI",
+        packages=(DependencyPackage("scanner-helper", "1.0.0", "PyPI"),),
+    )
+
+    with pytest.raises(RuntimeError, match="OSV queries failed"):
+        policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
+
+
+def test_osv_strict_mode_rejects_malformed_cache_on_outage(tmp_path, monkeypatch):
+    cache = tmp_path / "osv-cache.json"
+    cache.write_text("[]")
+    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", cache)
+    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("offline")))
+    manifest = DependencyManifest(
+        path=Path("requirements.txt"),
+        kind="requirements.txt",
+        ecosystem="PyPI",
+        packages=(DependencyPackage("scanner-helper", "1.0.0", "PyPI"),),
+    )
+
+    with pytest.raises(RuntimeError, match="OSV queries failed"):
+        policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
+
+
+def test_osv_strict_mode_rejects_unresolved_dependency_inventory():
+    manifest = DependencyManifest(
+        path=Path("requirements.txt"),
+        kind="requirements.txt",
+        ecosystem="PyPI",
+        packages=(DependencyPackage("scanner-helper", None, "PyPI"),),
+    )
+
+    with pytest.raises(RuntimeError, match="inventory incomplete"):
+        policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
+
+
+def test_osv_strict_mode_requires_lockfile_to_cover_unresolved_packages():
+    package_manifest = DependencyManifest(
+        path=Path("package.json"),
+        kind="package.json",
+        ecosystem="npm",
+        packages=(DependencyPackage("lodash", None, "npm"),),
+    )
+    empty_lock = DependencyManifest(
+        path=Path("package-lock.json"),
+        kind="package-lock.json",
+        ecosystem="npm",
+    )
+
+    with pytest.raises(RuntimeError, match="inventory incomplete"):
+        policy_engine.query_osv_vulnerabilities(
+            [package_manifest, empty_lock], raise_on_error=True
+        )
+
+
+def test_osv_strict_mode_rejects_manifest_parse_errors():
+    manifest = DependencyManifest(
+        path=Path("pyproject.toml"),
+        kind="pyproject.toml",
+        ecosystem="PyPI",
+        parse_error="TOMLDecodeError: invalid table",
+    )
+
+    with pytest.raises(RuntimeError, match="manifest parsing failed"):
+        policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
 
 
 def test_analyze_ruff_pass():
@@ -182,6 +269,39 @@ def test_policy_engine_reports_operational_error(tmp_path):
     assert exit_code == 2
     assert "DEPLOYMENT ERROR" in markdown_report.read_text()
     assert "Operational scanner failure(s): Semgrep" in markdown_report.read_text()
+
+
+def test_policy_engine_fails_closed_when_dependency_evidence_is_incomplete(tmp_path):
+    reports = {
+        "ruff-report.json": [],
+        "safety-report.json": [],
+        "trivy-report.json": {"Results": []},
+        "secrets-report.json": {"results": {}},
+        "yara-report.json": [],
+        "semgrep-report.json": {"results": []},
+        "clamav-report.json": [],
+        "zap-report.json": [],
+        "iac-report.json": {"status": "completed", "findings": []},
+    }
+    for filename, payload in reports.items():
+        (tmp_path / filename).write_text(json.dumps(payload))
+
+    manifest = DependencyManifest(
+        path=tmp_path / "requirements.txt",
+        kind="requirements.txt",
+        ecosystem="PyPI",
+        packages=(DependencyPackage("requests", None, "PyPI"),),
+    )
+    markdown_report = tmp_path / "report.md"
+    exit_code = run_policy_engine(
+        tmp_path,
+        md_path=markdown_report,
+        dependency_manifests=[manifest],
+    )
+
+    assert exit_code == 2
+    assert "DEPLOYMENT ERROR" in markdown_report.read_text()
+    assert "OSV" in markdown_report.read_text()
 
 
 def test_policy_decision_treats_scanner_error_as_operational_failure():

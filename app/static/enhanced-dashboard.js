@@ -694,14 +694,14 @@
             }
         }
 
-        const risk = Math.round(data.exploitability_score || 0);
+        const risk = Math.round(data.risk_index ?? data.exploitability_score ?? 0);
         setText("uxRiskScore", String(risk));
         const riskOrbit = $("uxRiskOrbit");
         if (riskOrbit) {
             riskOrbit.style.setProperty("--risk", String(Math.min(100, Math.max(0, risk))));
             riskOrbit.style.setProperty("--risk-color", risk >= 70 ? "var(--danger)" : (risk >= 35 ? "var(--secondary)" : "var(--primary)"));
         }
-        setText("uxRiskLabel", !data.has_run ? "Risk not calculated" : (risk >= 70 ? "Critical exposure" : (risk >= 35 ? "Material exposure" : "Low exploitability")));
+        setText("uxRiskLabel", !data.has_run ? "Risk not calculated" : (risk >= 70 ? "Critical relative severity" : (risk >= 35 ? "Material relative severity" : "Low relative severity")));
         const meter = $("uxRiskMeter");
         if (meter) {
             meter.style.width = `${Math.min(100, Math.max(0, risk))}%`;
@@ -777,7 +777,7 @@
             time: new Date().toLocaleString(),
             target: currentJob?.target || result.target || "Aegis scan",
             status,
-            risk: Math.round(latestResults?.exploitability_score || result.exploitability_score || 0),
+            risk: Math.round(latestResults?.risk_index ?? latestResults?.exploitability_score ?? result.risk_index ?? result.exploitability_score ?? 0),
         });
         writeJson(HISTORY_KEY, history.slice(0, 20));
         renderHistory();

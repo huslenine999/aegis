@@ -41,13 +41,13 @@ def configure_database(tmp_path, monkeypatch):
     return project_id
 
 
-def create_run(project_id: int, job_id: str) -> int:
+def create_run(project_id: int, job_id: str, preset: str = "standard") -> int:
     return projects.create_scan_run(
         job_id=job_id,
         project_id=project_id,
         requested_by=10,
         target="project",
-        preset="standard",
+        preset=preset,
     )
 
 
@@ -60,7 +60,8 @@ def ruff_result(path: str = "src/app.py") -> dict:
                 "filename": path,
                 "location": {"row": 12},
             }
-        ]
+        ],
+        "tools": [{"name": "Ruff", "status": "completed"}],
     }
 
 
@@ -76,7 +77,10 @@ def test_findings_are_idempotent_resolved_and_reopened(tmp_path, monkeypatch):
     assert findings.list_findings(project_id)[0]["occurrence_count"] == 1
 
     second = create_run(project_id, "second")
-    assert findings.sync_findings(second, {})["resolved"] == 1
+    assert findings.sync_findings(
+        second,
+        {"ruff": [], "tools": [{"name": "Ruff", "status": "completed"}]},
+    )["resolved"] == 1
     assert findings.list_findings(project_id)[0]["status"] == "resolved"
 
     third = create_run(project_id, "third")
@@ -84,6 +88,54 @@ def test_findings_are_idempotent_resolved_and_reopened(tmp_path, monkeypatch):
     reopened = findings.list_findings(project_id)[0]
     assert reopened["status"] == "open"
     assert reopened["occurrence_count"] == 2
+
+
+def test_skipped_or_narrower_scans_do_not_resolve_findings(
+    tmp_path, monkeypatch
+):
+    project_id = configure_database(tmp_path, monkeypatch)
+    standard_run = create_run(project_id, "standard-finding", preset="standard")
+    semgrep_result = {
+        "semgrep": {
+            "results": [{
+                "check_id": "python-rce",
+                "path": "src/app.py",
+                "start": {"line": 4},
+                "extra": {"severity": "ERROR", "message": "RCE"},
+            }]
+        },
+        "tools": [{"name": "Semgrep", "status": "completed"}],
+    }
+    findings.sync_findings(standard_run, semgrep_result)
+
+    quick_run = create_run(project_id, "quick-scan", preset="quick")
+    result = findings.sync_findings(
+        quick_run,
+        {
+            "semgrep": {"results": []},
+            "tools": [{"name": "Semgrep", "status": "skipped"}],
+        },
+    )
+
+    assert result["resolved"] == 0
+    assert findings.list_findings(project_id)[0]["status"] == "open"
+
+    # Re-observing the finding during a Quick scan must not erase the broader
+    # Standard-scan provenance used for later resolution decisions.
+    observed_quick = create_run(project_id, "quick-observed", preset="quick")
+    findings.sync_findings(observed_quick, semgrep_result | {
+        "tools": [{"name": "Semgrep", "status": "completed"}],
+    })
+    final_quick = create_run(project_id, "quick-final", preset="quick")
+    final_result = findings.sync_findings(
+        final_quick,
+        {
+            "semgrep": {"results": []},
+            "tools": [{"name": "Semgrep", "status": "completed"}],
+        },
+    )
+    assert final_result["resolved"] == 0
+    assert findings.list_findings(project_id)[0]["status"] == "open"
 
 
 def test_finding_lifecycle_requires_expiring_accepted_risk(tmp_path, monkeypatch):

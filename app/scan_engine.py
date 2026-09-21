@@ -35,6 +35,39 @@ def add_semgrep_excludes(
     return command
 
 
+def build_ruff_command(
+    python_executable: str,
+    target_path: str,
+    excluded_paths: Iterable[str] = (),
+) -> list[str]:
+    """Build the trusted Ruff command used for both CLI and queued scans.
+
+    The repository being inspected is attacker-controlled.  Ruff must not load
+    configuration from that repository or honor inline ``noqa`` directives,
+    otherwise the target can change the detector policy while still returning a
+    successful scan exit code.
+    """
+
+    command = [
+        python_executable,
+        "-m",
+        "ruff",
+        "check",
+        "--isolated",
+        "--ignore-noqa",
+        "--no-cache",
+        "--select",
+        "S",
+        "--output-format",
+        "json",
+        target_path,
+    ]
+    excluded = sorted(set(excluded_paths))
+    if excluded:
+        command.extend(["--exclude", ",".join(excluded)])
+    return command
+
+
 @dataclass(frozen=True)
 class ScanJobPayload:
     """The versioned payload accepted by both local and RQ scan execution."""

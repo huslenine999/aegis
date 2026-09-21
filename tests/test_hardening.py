@@ -480,6 +480,32 @@ def test_audit_chain_is_append_only_and_verifiable(tmp_path, monkeypatch):
             connection.execute("DELETE FROM audit_events WHERE tenant_id = ?", (tenant_id,))
 
 
+def test_audit_verification_rejects_visible_unchained_rows(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("AEGIS_AUDIT_HMAC_KEY", "a" * 40)
+    audit.record_audit(None, "project.created", "project", 1, tenant_id=1)
+
+    with database.get_connection() as connection:
+        connection.execute(
+            """INSERT INTO audit_events
+               (actor_id, action, resource_type, resource_id, details_json,
+                created_at, tenant_id, previous_hash, event_hash)
+               VALUES (NULL, ?, ?, NULL, ?, ?, ?, NULL, NULL)""",
+            (
+                "legacy.unstructured",
+                "project",
+                "{}",
+                datetime.now(timezone.utc).isoformat(),
+                1,
+            ),
+        )
+
+    result = audit.verify_audit_chain(1)
+
+    assert result["valid"] is False
+    assert result["events"] == 2
+
+
 def test_audit_key_fails_closed_in_production_without_hmac_key(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
     monkeypatch.delenv("AEGIS_AUDIT_HMAC_KEY", raising=False)

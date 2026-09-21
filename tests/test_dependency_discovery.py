@@ -29,6 +29,91 @@ def test_dependency_discovery_supports_python_and_npm_manifests(tmp_path):
     assert not any(package.name == "ignored" for manifest in manifests for package in manifest.packages)
 
 
+def test_dependency_discovery_preserves_unresolved_versions_and_parse_errors(tmp_path):
+    (tmp_path / "requirements.txt").write_text("requests>=2.0.0\n")
+    (tmp_path / "pyproject.toml").write_text("[project\nname = 'broken'\n")
+
+    manifests = discover_dependency_manifests(tmp_path)
+    requirements = next(item for item in manifests if item.kind == "requirements.txt")
+    broken = next(item for item in manifests if item.kind == "pyproject.toml")
+
+    assert requirements.packages[0].name == "requests"
+    assert requirements.packages[0].version is None
+    assert broken.packages == ()
+    assert broken.parse_error
+
+
+def test_dependency_discovery_parses_yarn_lock_and_nested_npm_paths(tmp_path):
+    (tmp_path / "yarn.lock").write_text(
+        'lodash@^4.17.21:\n  version "4.17.21"\n'
+    )
+    (tmp_path / "package-lock.json").write_text(json.dumps({
+        "packages": {
+            "node_modules/a/node_modules/lodash": {"version": "4.17.21"},
+        }
+    }))
+
+    manifests = discover_dependency_manifests(tmp_path)
+    packages = [
+        package
+        for manifest in manifests
+        for package in manifest.packages
+    ]
+
+    assert sum(package.name == "lodash" for package in packages) == 2
+    assert not any(package.name == "a/node_modules/lodash" for package in packages)
+
+
+def test_dependency_discovery_rejects_unrecognized_yarn_lock_content(tmp_path):
+    (tmp_path / "yarn.lock").write_text("not a lockfile\n")
+
+    manifest = next(
+        item for item in discover_dependency_manifests(tmp_path) if item.kind == "yarn.lock"
+    )
+
+    assert manifest.packages == ()
+    assert manifest.parse_error
+
+
+def test_dependency_discovery_ignores_yarn_metadata_block(tmp_path):
+    (tmp_path / "yarn.lock").write_text(
+        "__metadata:\n  version: 8\n\n"
+        '"lodash@npm:^4.17.21":\n  version: 4.17.21\n'
+    )
+
+    manifest = next(
+        item for item in discover_dependency_manifests(tmp_path) if item.kind == "yarn.lock"
+    )
+
+    assert [(package.name, package.version) for package in manifest.packages] == [
+        ("lodash", "4.17.21")
+    ]
+
+
+def test_dependency_discovery_parses_pnpm_v9_and_rejects_unknown_shapes(tmp_path):
+    (tmp_path / "pnpm-lock.yaml").write_text(
+        "lockfileVersion: '9.0'\npackages:\n"
+        "  lodash@4.17.21:\n    resolution: {integrity: sha512-demo}\n"
+    )
+    manifest = next(
+        item
+        for item in discover_dependency_manifests(tmp_path)
+        if item.kind == "pnpm-lock.yaml"
+    )
+    assert [(package.name, package.version) for package in manifest.packages] == [
+        ("lodash", "4.17.21")
+    ]
+
+    (tmp_path / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+    malformed = next(
+        item
+        for item in discover_dependency_manifests(tmp_path)
+        if item.kind == "pnpm-lock.yaml"
+    )
+    assert malformed.packages == ()
+    assert malformed.parse_error
+
+
 def test_sbom_includes_discovered_manifest_ecosystems(tmp_path):
     (tmp_path / "requirements.txt").write_text("Flask==3.1.3\n")
     (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"lodash": "4.17.21"}}))

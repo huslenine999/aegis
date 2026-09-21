@@ -282,6 +282,12 @@
             animation: pulse-green-border 2.5s infinite;
         }
 
+        .decision-banner.status-error {
+            border-color: rgba(255, 176, 0, 0.6);
+            background: rgba(255, 176, 0, 0.08);
+            box-shadow: 0 0 20px rgba(255, 176, 0, 0.12);
+        }
+
         @keyframes pulse-red-border {
             0%, 100% { border-color: var(--danger); box-shadow: 0 0 10px rgba(255, 51, 51, 0.15); }
             50% { border-color: #ff6666; box-shadow: 0 0 25px rgba(255, 51, 51, 0.35); }
@@ -303,6 +309,11 @@
         .decision-banner.status-blocked .decision-title {
             color: var(--danger);
             text-shadow: 0 0 10px var(--danger-glow);
+        }
+
+        .decision-banner.status-error .decision-title {
+            color: var(--secondary);
+            text-shadow: 0 0 10px var(--secondary-glow);
         }
 
         .decision-reason {
@@ -1101,6 +1112,10 @@
             color: var(--primary);
         }
 
+        .report-review-card.status-error strong {
+            color: var(--secondary);
+        }
+
         .report-review-card p {
             margin: 0;
             color: var(--text-muted);
@@ -1146,6 +1161,11 @@
             background: linear-gradient(145deg, rgba(255, 102, 94, 0.08), var(--bg-surface));
         }
 
+        body.report-page .decision-banner.status-error {
+            border-color: rgba(255, 176, 0, 0.45);
+            background: linear-gradient(145deg, rgba(255, 176, 0, 0.08), var(--bg-surface));
+        }
+
         body.report-page .decision-title {
             margin: 0;
             color: var(--primary);
@@ -1160,6 +1180,11 @@
 
         body.report-page .decision-banner.status-blocked .decision-title {
             color: var(--danger);
+            text-shadow: none;
+        }
+
+        body.report-page .decision-banner.status-error .decision-title {
+            color: var(--secondary);
             text-shadow: none;
         }
 
@@ -1703,9 +1728,9 @@
         </header>
 
         <section class="report-review-strip reveal" aria-label="Report review summary">
-            <article class="report-review-card {% if final_status == 'BLOCKED' %}status-blocked{% else %}status-passed{% endif %}">
+            <article class="report-review-card {% if final_status == 'BLOCKED' %}status-blocked{% elif final_status == 'ALLOWED' %}status-passed{% else %}status-error{% endif %}">
                 <span>Release gate</span>
-                <strong>{% if final_status == 'BLOCKED' %}Blocked{% else %}Passed{% endif %}</strong>
+                <strong>{% if final_status == 'BLOCKED' %}Blocked{% elif final_status == 'ALLOWED' %}Passed{% else %}Incomplete{% endif %}</strong>
                 <p>{{ reason }}</p>
             </article>
             <article class="report-review-card">
@@ -1719,17 +1744,17 @@
                 <p>Across {{ results | length }} scanner modules.</p>
             </article>
             <article class="report-review-card">
-                <span>Exploitability</span>
-                <strong>{{ exploitability_score }}%</strong>
-                <p>{% if exploitability_score > 75 %}High exposure{% elif exploitability_score > 40 %}Material exposure{% else %}Low exposure{% endif %}</p>
+                <span>Heuristic risk index</span>
+                <strong>{{ exploitability_score }}/100</strong>
+                <p>Relative severity signal; not a probability.</p>
             </article>
         </section>
 
         <!-- Decision Banner -->
-        <div class="decision-banner {% if final_status == 'BLOCKED' %}status-blocked{% else %}status-passed{% endif %} reveal">
+        <div class="decision-banner {% if final_status == 'BLOCKED' %}status-blocked{% elif final_status == 'ALLOWED' %}status-passed{% else %}status-error{% endif %} reveal">
             <div class="decision-content">
                 <h1 class="decision-title" id="decisionTitle" data-status="{{ final_status }}">
-                    {% if final_status == 'BLOCKED' %}Deployment blocked{% else %}Deployment passed{% endif %}
+                    {% if final_status == 'BLOCKED' %}Deployment blocked{% elif final_status == 'ALLOWED' %}Deployment passed{% else %}Scan incomplete{% endif %}
                 </h1>
                 <p class="decision-reason">
                     <span data-i18n="gate_status">> CRITICAL_GATE_STATUS:</span> 
@@ -1741,6 +1766,7 @@
         <div class="explainer-box mono reveal" id="reportExplainerHeader" style="margin-bottom: 2rem; border-color: var(--secondary); background: rgba(255,176,0,0.03); padding: 1.25rem 1.5rem;">
             <h3 style="margin-top: 0; color: var(--secondary); font-size: 1.4rem;" data-i18n="exp_report_title">🎓 EXECUTIVE SECURITY GLOSSARY</h3>
             <p style="margin-bottom: 1rem; font-size: 1.05rem; line-height: 1.55;" data-i18n="exp_report_summary">This report is compiled from automated security scanning tools checking the target codebase. If any severe vulnerabilities are found, the deployment gate blocks the release to ensure the live environment is not compromised.</p>
+            <p style="margin-bottom: 0; font-size: 0.95rem; line-height: 1.45; color: var(--text-muted);">The heuristic risk index is a relative severity signal derived from findings. It is not a calibrated probability of exploitation and does not override the release decision.</p>
             
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 1rem; border-top: 1px dashed rgba(255,176,0,0.2); padding-top: 1rem;">
                 <div>
@@ -1786,9 +1812,9 @@
             </div>
             <div class="metric-card" style="border-color: {% if exploitability_score > 75 %}var(--danger){% elif exploitability_score > 40 %}var(--secondary){% else %}var(--primary){% endif %}; box-shadow: 0 0 10px {% if exploitability_score > 75 %}var(--danger-glow){% elif exploitability_score > 40 %}var(--secondary-glow){% else %}var(--primary-glow){% endif %};">
                 <div class="metric-value" style="color: {% if exploitability_score > 75 %}var(--danger){% elif exploitability_score > 40 %}var(--secondary){% else %}var(--primary){% endif %};">
-                    {{ exploitability_score }}%
+                    {{ exploitability_score }}/100
                 </div>
-                <div class="metric-label" data-i18n="metrics_exploitability">Exploitability Score</div>
+                <div class="metric-label" data-i18n="metrics_exploitability">Heuristic risk index</div>
             </div>
         </div>
 
@@ -2164,7 +2190,7 @@
                 metrics_modules: "Security Modules Run",
                 metrics_vulns: "Total Vulnerabilities",
                 metrics_blocking: "Blocking Issues",
-                metrics_exploitability: "Exploitability Score",
+                metrics_exploitability: "Heuristic risk index",
                 detailed_logs: "Scanner evidence",
                 no_issues: "No issues detected by this scanner.",
                 footer_brand: "AEGIS SECURITY EVIDENCE",
@@ -2179,6 +2205,7 @@
                 // Status mapping
                 blocked: "Deployment blocked",
                 passed: "Deployment passed",
+                error: "Scan incomplete",
                 
                 // Reasons mapping
                 reason_blocked: "Blocking security issues found by: Bandit",
@@ -2254,7 +2281,7 @@
                 metrics_modules: "실행된 보안 모듈 수",
                 metrics_vulns: "총 발견된 취약점 수",
                 metrics_blocking: "차단 취약점 수",
-                metrics_exploitability: "악용 가능성 점수(Exploitability)",
+                metrics_exploitability: "휴리스틱 위험 지수",
                 detailed_logs: "> 상세_분석_로그",
                 no_issues: "탐지된 보안 취약점이 없습니다.",
                 footer_brand: "이지스 보안 진단 제어 평면",
@@ -2269,6 +2296,7 @@
                 // Status mapping
                 blocked: "배포 차단됨",
                 passed: "배포 승인됨",
+                error: "검사 미완료",
                 
                 // Reasons mapping
                 reason_blocked: "차단 보안 결함 발견됨: Bandit",
@@ -2388,6 +2416,8 @@
                 const status = titleEl.getAttribute('data-status');
                 if (status === 'BLOCKED') {
                     titleEl.innerText = i18n[lang]['blocked'];
+                } else if (status === 'ERROR' || status !== 'ALLOWED') {
+                    titleEl.innerText = i18n[lang]['error'];
                 } else {
                     titleEl.innerText = i18n[lang]['passed'];
                 }

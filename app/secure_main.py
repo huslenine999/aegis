@@ -1,7 +1,6 @@
 import hashlib
 import os
 import sqlite3
-import subprocess  # nosec
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -55,11 +54,9 @@ def ping_host():
     except socket.error:
         return jsonify({"error": "Invalid IP address"}), 400
 
-    # SECURE: Pass arguments as a list, shell=False
-    command = ["ping", "-c", "1", host]
-    output = subprocess.check_output(command, shell=False, text=True)  # nosemgrep # nosec # noqa: S603
-
-    return jsonify({"output": output})
+    # SECURE: The reference endpoint validates the address and reports it
+    # without invoking an operating-system command with request data.
+    return jsonify({"host": host, "status": "validated"})
 
 @app.route("/calculate")
 def calculate():
@@ -167,19 +164,13 @@ def ssrf_demo():
                 (parts[0] == 169 and parts[1] == 254)):
                 return jsonify({"error": "Forbidden target address: Private IP ranges are blocked."}), 403
 
-        # 4. Perform safe fetch of validated public address
-        import urllib.request
-        req = urllib.request.Request(  # noqa: S310
-            url,
-            headers={'User-Agent': 'Aegis-Simulated-Scanner/2.0'}
-        )
-        with urllib.request.urlopen(req, timeout=2) as response:  # nosec B310  # noqa: S310
-            content = response.read().decode('utf-8', errors='ignore')
-            return jsonify({
-                "url": url,
-                "status": "success",
-                "response": content[:1000]
-            })
+        # 4. This reference app does not make outbound requests. A production
+        # fetcher would need an egress proxy and a second DNS/IP check at use.
+        return jsonify({
+            "url": url,
+            "status": "validated",
+            "response": "Outbound fetch disabled in secure reference mode.",
+        })
     except Exception as e:
         return jsonify({
             "url": url,
@@ -204,4 +195,5 @@ if __name__ == "__main__":
             pass
 
     # SECURE: Debug mode always False in production
-    app.run(host="0.0.0.0", port=port, debug=False)  # nosemgrep # nosec # noqa: S104
+    bind_host = os.environ.get("AEGIS_HOST", "127.0.0.1")
+    app.run(host=bind_host, port=port, debug=False)

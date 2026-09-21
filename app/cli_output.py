@@ -92,7 +92,7 @@ def print_ascii_report(results: list, final_status: str, reason: str, exploitabi
     else:
         gauge_color = green
 
-    visible_gauge = f"  EXPLOITABILITY RISK: [{gauge_str}] {exploitability_score}%"
+    visible_gauge = f"  HEURISTIC RISK INDEX: [{gauge_str}] {exploitability_score}/100"
     padded_gauge = visible_gauge.ljust(74)
     color_gauge = padded_gauge.replace(gauge_str, gauge_color + gauge_str + reset)
     print(f"  {cyan}║{reset}{color_gauge}{cyan}║{reset}")
