@@ -1,4 +1,5 @@
 import hashlib
+import itertools
 import logging
 import os
 import tempfile
@@ -31,6 +32,7 @@ from policy_engine import analyze_report_set, evaluate_policy_results, get_ruff_
 
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
+REPORT_VIEW_STYLE = b"<style>.reveal{opacity:1!important;transform:none!important}</style>"
 
 
 def _file_sha256(path: Path, *, max_bytes: int) -> str:
@@ -107,19 +109,28 @@ def _stream_file_response(
     media_type: str,
     filename: str,
     cleanup: bool = False,
+    inline: bool = False,
 ):
     response_limit = resource_budgets().max_response_bytes
     try:
         size = path.stat().st_size
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Artifact not found.") from exc
-    if size > response_limit:
+    if size + (len(REPORT_VIEW_STYLE) if inline else 0) > response_limit:
         raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
     background = BackgroundTask(path.unlink, missing_ok=True) if cleanup else None
+    body = iter_file_bytes(path, max_bytes=response_limit)
+    if inline:
+        # The signed report remains unchanged; the browser view stays readable
+        # when its untrusted inline scripts are blocked by the report CSP.
+        body = itertools.chain(body, (REPORT_VIEW_STYLE,))
     return StreamingResponse(
-        iter_file_bytes(path, max_bytes=response_limit),
+        body,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{filename}"',
+            **({"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:"} if inline else {}),
+        },
         background=background,
     )
 
@@ -206,7 +217,7 @@ def project_scan_artifacts(
                 "integrity": "verified" if integrity else "failed",
             }
         )
-    if artifacts:
+    if any(item["name"] == "report.html" for item in artifacts):
         artifacts.append(
             {
                 "name": "report-bundle.zip",
@@ -344,6 +355,7 @@ def project_scan_artifact(
             media_type=media_type,
             filename=artifact_name,
             cleanup=True,
+            inline=artifact_name == "report.html",
         )
     if not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
@@ -354,6 +366,7 @@ def project_scan_artifact(
         artifact_path,
         media_type=media_type,
         filename=artifact_name,
+        inline=artifact_name == "report.html",
     )
 
 

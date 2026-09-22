@@ -258,11 +258,11 @@
         <article class="scan">
           <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state)}</span></div>
           <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
-          <small class="muted">${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${Number(scan.progress || 0)}% complete</small>
+          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${Number(scan.progress || 0)}% complete`}</small>
           <div class="row">
             ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
             ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
-            ${["completed","failed"].includes(scan.state) ? `<a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download evidence</a>` : ""}
+            ${scan.has_report ? `<a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download evidence</a>` : ""}
           </div>
         </article>`).join("") : '<div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div>';
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
@@ -539,6 +539,23 @@
         if (payload.type === "result") await Promise.all([loadScans(), loadFindings(), loadPolicies()]);
       };
       await loadScans();
+      const projectId = selected.id;
+      const poll = async () => {
+        if (selected?.id !== projectId) { socket.close(); return; }
+        try {
+          await loadScans();
+          const current = cachedScans.find((item) => item.job_id === scan.job_id);
+          if (current && ["completed", "failed", "cancelled"].includes(current.state)) {
+            await Promise.all([loadFindings(), loadPolicies()]);
+            socket.close();
+            return;
+          }
+        } catch (error) {
+          console.warn("Scan status refresh failed", error);
+        }
+        setTimeout(poll, 3000);
+      };
+      setTimeout(poll, 3000);
     };
     byId("onboarding-scan").onclick = async () => {
       if (!selected) return;

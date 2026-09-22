@@ -7,6 +7,7 @@ from app import worker
 from cryptography.fernet import Fernet
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import asyncio
 import hashlib
 
 import fastapi
@@ -144,6 +145,7 @@ def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeyp
         progress=100,
         result={"ruff": [{"code": "S307", "filename": "a.py", "location": {"row": 1}}]},
     )
+    projects.record_scan_artifacts(first, [{"name": "report.html", "size": 1, "sha256": "0" * 64}])
     assert projects.get_scan_run(first)["new_findings"] == 1
 
     second = projects.create_scan_run(
@@ -167,7 +169,28 @@ def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeyp
 
     latest = projects.get_scan_run(second)
     assert latest["new_findings"] == 1
-    assert [run["id"] for run in projects.list_scan_runs(project_id)] == [second, first]
+    history = projects.list_scan_runs(project_id)
+    assert [run["id"] for run in history] == [second, first]
+    assert [run["has_report"] for run in history] == [False, True]
+
+
+def test_failed_scan_history_includes_safe_error_without_artifact_link(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="API", repository_url="", github_full_name="", default_branch="main",
+        scan_preset="quick", user_id=10,
+    )
+    run_id = projects.create_scan_run(
+        job_id="failed-job", project_id=project_id, requested_by=10,
+        target="project", preset="quick",
+    )
+    projects.update_scan_run(
+        run_id, state="failed", progress=100,
+        result={"error": "Repository access is unavailable."},
+    )
+    scan = projects.list_scan_runs(project_id)[0]
+    assert scan["failure_reason"] == "Repository access is unavailable."
+    assert scan["has_report"] is False
 
 
 def test_fingerprints_cover_every_scanner_family_and_ignore_line_moves():
@@ -303,6 +326,11 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
         7, 3, "report.html", principal=object()
     )
     assert isinstance(response, StreamingResponse)
+    assert response.headers["content-disposition"].startswith("inline;")
+    async def read_report():
+        return b"".join([chunk async for chunk in response.body_iterator])
+    assert b".reveal{opacity:1!important" in asyncio.run(read_report())
+    assert (run_dir / "report.html").read_text() == "<h1>Project report</h1>"
 
     (run_dir / "report.html").write_text("tampered")
     with pytest.raises(fastapi.HTTPException, match="integrity verification failed"):

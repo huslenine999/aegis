@@ -114,6 +114,38 @@ def test_duplicate_legacy_repository_names_fail_closed_across_tenants(
         )
 
 
+def test_public_repository_scan_without_github_connection_is_claimable(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    with database.get_connection() as connection:
+        tenant_id = int(connection.execute("SELECT id FROM tenants").fetchone()[0])
+        user_id = add_user(connection, "public-repo-owner", tenant_id)
+    project_id = projects.create_project(
+        name="Public API",
+        repository_url="https://github.com/example/api.git",
+        github_full_name=None,
+        default_branch="main",
+        scan_preset="quick",
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
+    run_id = projects.create_scan_run(
+        job_id="queued-public",
+        project_id=project_id,
+        requested_by=user_id,
+        target="project",
+        preset="quick",
+    )
+    github_lifecycle.authorize_queued_scan(
+        job_id="queued-public",
+        scan_run_id=run_id,
+        project_id=project_id,
+        requested_by=user_id,
+        preset="quick",
+        source_revision=None,
+        github_installation_id=None,
+    )
+
+
 def test_capability_revocation_invalidates_oauth_and_app_queued_access(
     tmp_path, monkeypatch
 ):

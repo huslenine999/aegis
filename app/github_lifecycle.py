@@ -563,12 +563,14 @@ def authorize_queued_scan(
                     raise GitHubLifecycleError("Queued scan GitHub installation is revoked or unbound.")
             else:
                 row = connection.execute(
-                    """SELECT 1 FROM github_connections c
-                       WHERE c.user_id = ? AND c.revoked_at IS NULL
-                         AND c.token_encrypted <> ''""",
+                    """SELECT c.revoked_at, c.token_encrypted
+                       FROM github_connections c WHERE c.user_id = ?""",
                     (int(requested_by),),
                 ).fetchone()
-                if not row:
+                # No connection means the worker may clone a public repository
+                # anonymously. A previously connected, revoked credential must
+                # not be silently reused.
+                if row and (row[0] is not None or not row[1]):
                     raise GitHubLifecycleError("Queued scan GitHub credential is revoked or unavailable.")
 
         return {

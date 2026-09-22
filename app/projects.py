@@ -503,13 +503,18 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
     with get_connection() as connection:
         rows = connection.execute(
             """SELECT id, job_id, project_id, requested_by, target, preset,
-                      state, progress, new_findings, created_at, completed_at
+                      state, progress, new_findings, created_at, completed_at,
+                      CASE WHEN state = 'failed' THEN result_json ELSE NULL END,
+                      EXISTS(SELECT 1 FROM scan_artifacts a
+                             WHERE a.scan_run_id = scan_runs.id AND a.name = 'report.html')
                FROM scan_runs WHERE project_id = ?
                ORDER BY id DESC LIMIT ?""",
             (project_id, max(1, min(limit, 100))),
         ).fetchall()
-    return [
-        {
+    scans = []
+    for row in rows:
+        result = json.loads(row[11]) if row[11] else {}
+        scans.append({
             "id": int(row[0]),
             "job_id": row[1],
             "project_id": int(row[2]),
@@ -521,9 +526,10 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
             "new_findings": int(row[8]),
             "created_at": row[9],
             "completed_at": row[10],
-        }
-        for row in rows
-    ]
+            "failure_reason": result.get("error") or (result.get("policy") or {}).get("reason"),
+            "has_report": bool(row[12]),
+        })
+    return scans
 
 
 def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:

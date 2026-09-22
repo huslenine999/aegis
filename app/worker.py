@@ -1491,7 +1491,15 @@ def async_scan_task(
     except Exception as e:
         record_worker_failure()
         if scan_run_id:
-            update_scan_run(scan_run_id, state="failed", progress=100)
+            public_error = (
+                str(e.__cause__)
+                if isinstance(e.__cause__, GitHubLifecycleError)
+                else "Scan failed. Check worker logs for details."
+            )
+            update_scan_run(
+                scan_run_id, state="failed", progress=100,
+                result={"error": public_error},
+            )
         _complete_github_scan_check(scan_run_id, project, "failure", f"Scan execution failed: {str(e)[:500]}")
         runner.transition("failed", 100)
         publish_job_event(job_id, "log", {"text": f"[FATAL] Scan job execution failed: {e}", "color": "var(--danger)"})
