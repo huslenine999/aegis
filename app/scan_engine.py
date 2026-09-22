@@ -14,6 +14,11 @@ from .scanners import DEFAULT_IGNORED_DIRS
 from .scan_status import ToolStatusTracker
 
 
+# Profile semantics changed when the Deep scanner set switched to CodeQL.
+# Persist this alongside run results so historical Deep runs remain distinct.
+SCAN_PROFILE_VERSION = 2
+
+
 def exclude_files_pattern(
     ignored_dirs: Iterable[str] | None = None,
 ) -> str:

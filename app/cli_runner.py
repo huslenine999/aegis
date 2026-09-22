@@ -2,12 +2,9 @@ import contextlib
 import hashlib
 import os
 import re
-import shutil
-import socket
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 
 from policy_engine import run_policy_engine, query_osv_vulnerabilities
@@ -34,7 +31,6 @@ from .cli_reports import read_json, utc_timestamp, write_json, write_sarif_repor
 from .config import config_bool, load_advisory_config, load_config
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from .evidence import canonical_json, sign_manifest
-from .iac_scanner import empty_iac_report, run_iac_scan
 from .resource_budgets import (
     ResourceLimitError,
     iter_file_bytes,
@@ -44,15 +40,7 @@ from .resource_budgets import (
 )
 from .safe_output import SafeOutputRoot
 from .sandbox import (
-    build_sandbox_image,
-    create_sandbox_network,
-    is_docker_available,
-    run_sandbox_container,
-    run_trivy_scan,
-    scaffold_sandbox_context,
-    stop_and_cleanup_sandbox,
     validate_untrusted_tree,
-    wait_for_container,
 )
 from .scan_engine import (
     CliEventSink,
@@ -65,10 +53,7 @@ from .scan_status import ToolStatusTracker
 from .scanners import (
     configure_semgrep_environment,
     find_runtime_executable,
-    run_clamav_scan as shared_run_clamav_scan,
-    run_dast_scan as shared_run_dast_scan,
     run_yara_scan as shared_run_yara_scan,
-    safety_report_is_complete,
     write_semgrep_rules,
 )
 from .source_attestation import (
@@ -107,13 +92,10 @@ def set_fail_on_env(severities: str):
         os.environ["FAIL_ON"] = normalized
         os.environ["FAIL_ON_RUFF"] = normalized
         os.environ["FAIL_ON_SEMGREP"] = normalized
-        os.environ["FAIL_ON_TRIVY"] = normalized
         import policy_engine
         policy_engine.FAIL_ON_SEVERITIES = severity_set
         policy_engine.FAIL_ON_RUFF_SEVERITIES = severity_set
         policy_engine.FAIL_ON_SEMGREP_SEVERITIES = severity_set
-        policy_engine.FAIL_ON_TRIVY_SEVERITIES = severity_set
-        policy_engine.FAIL_ON_IAC_SEVERITIES = severity_set
 
 
 def build_scan_summary(target_path: Path, scan_dir: Path, exit_code: int, policy_summary: dict, timings: list[dict] | None = None) -> dict:
@@ -144,15 +126,11 @@ def _cli_evidence_artifacts(scan_dir: Path) -> list[dict]:
         "suppressions-report.json",
         "ruff-report.json",
         "semgrep-report.json",
-        "safety-report.json",
         "osv-report.json",
-        "trivy-report.json",
         "secrets-report.json",
         "yara-report.json",
-        "clamav-report.json",
-        "iac-report.json",
-        "zap-report.json",
-        "sandbox-status.json",
+        "codeql.sarif",
+        "codeql-report.json",
         "source-descriptor.json",
     }
     artifacts = []
@@ -174,12 +152,6 @@ def _cli_evidence_artifacts(scan_dir: Path) -> list[dict]:
             }
         )
     return artifacts
-
-
-def find_free_host_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
 
 
 def run_scanner_command(
@@ -247,16 +219,12 @@ def _emit_cli_event(event: ScanEvent) -> None:
         log_scanner_event(text, level if isinstance(level, str) else "info")
 
 
-def run_dast_scan(target_url: str | None = None, *, internal_port: int = 5001):
-    return shared_run_dast_scan(
-        target_url, internal_port=internal_port, log=log_scanner_event
-    )
-
-
 def execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
+    preset: str = "standard",
+    enable_yara: bool = False,
     tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
     output_dir: str | None = None,
     json_output: bool = False,
@@ -274,6 +242,8 @@ def execute_scan(
         return _execute_scan(
             target_path_str,
             use_docker=use_docker,
+            preset=preset,
+            enable_yara=enable_yara,
             tool_timeout=tool_timeout,
             output_dir=output_dir,
             json_output=json_output,
@@ -289,6 +259,8 @@ def execute_scan(
         return _execute_scan(
             target_path_str,
             use_docker=use_docker,
+            preset=preset,
+            enable_yara=enable_yara,
             tool_timeout=tool_timeout,
             output_dir=output_dir,
             json_output=json_output,
@@ -313,6 +285,8 @@ def execute_scan(
         return _execute_scan(
             target_path_str,
             use_docker=use_docker,
+            preset=preset,
+            enable_yara=enable_yara,
             tool_timeout=tool_timeout,
             output_dir=output_dir,
             json_output=json_output,
@@ -340,6 +314,8 @@ def _execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
+    preset: str = "standard",
+    enable_yara: bool = False,
     tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
     output_dir: str | None = None,
     json_output: bool = False,
@@ -393,23 +369,28 @@ def _execute_scan(
         if strict is None:
             strict = config_bool(get_config_section(config), "strict", config_bool(config, "strict", False))
         fast = fast or config_bool(get_config_section(config), "fast", config_bool(config, "fast", False))
-        use_docker = use_docker and not config_bool(get_config_section(config), "no_docker", config_bool(config, "no_docker", False))
+        if "no_docker" in config or "no_docker" in get_config_section(config):
+            raise ValueError("The no_docker option was removed; use scan.preset: quick or --preset quick.")
 
     if tool_timeout is None:
         tool_timeout = DEFAULT_TOOL_TIMEOUT
     if tool_timeout <= 0:
         raise ValueError("--timeout must be greater than zero.")
     strict = bool(strict)
-    safety_enabled = config_bool(
-        get_config_section(config),
-        "safety",
-        config_bool(config, "safety", os.environ.get("AEGIS_ENABLE_SAFETY", "").lower() in {"1", "true", "yes", "on"}),
-    )
+    if "safety" in config or "safety" in get_config_section(config):
+        raise ValueError("The Safety option was removed; OSV provides dependency auditing.")
+    if not use_docker:
+        raise ValueError("--no-docker was removed; choose --preset quick for a shorter scan.")
+    if preset not in {"quick", "standard", "deep"}:
+        raise ValueError("--preset must be quick, standard, or deep.")
+    if fast:
+        if preset != "standard":
+            raise ValueError("--fast cannot be combined with --preset; use --preset quick.")
+        preset = "quick"
+    fast = preset == "quick"
     fail_on = validate_fail_on(fail_on)
     if fail_on:
         set_fail_on_env(str(fail_on))
-    if fast:
-        use_docker = False
 
     configured_excluded_paths = resolve_exclude_paths(config, source_path)
     excluded_paths = (
@@ -438,72 +419,22 @@ def _execute_scan(
 
     placeholder_reports = {
         "ruff-report.json": [],
-        "safety-report.json": [],
-        "trivy-report.json": {"Results": []},
         "secrets-report.json": {"results": {}},
-        "yara-report.json": [],
         "semgrep-report.json": {"results": []},
-        "clamav-report.json": [],
-        "zap-report.json": [],
         "osv-report.json": [],
-        "iac-report.json": empty_iac_report(),
     }
     for filename, default_data in placeholder_reports.items():
         write_json(scan_dir / filename, default_data, safe_output=safe_output)
 
-    # 1. Dependency Analysis (Safety / OSV)
+    # 1. Dependency analysis (OSV)
     if fast:
         print(f"ℹ️  [Fast Mode] Skipping slower checks: {FAST_MODE_SKIPPED_SCANNERS}.")
-        record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
-        mark_tool("Safety", "skipped", detail="fast mode")
+        record_timing(timings, "OSV", time.perf_counter(), "skipped")
         mark_tool("OSV", "skipped", detail="fast mode")
     elif dependency_manifests:
-        with timed_step(timings, "Safety/OSV"):
+        with timed_step(timings, "OSV"):
             manifest_names = ", ".join(sorted({manifest.kind for manifest in dependency_manifests}))
-            print(f"🔍 [SCA] Dependency manifest(s) detected: {manifest_names}. Running available Safety and OSV audits...")
-            
-            safety_report_path = safe_output.file("safety-report.json")
-            if req_file and safety_enabled:
-                safety_target = target_path if target_path.is_dir() else target_path.parent
-                safety_cmd = [
-                    sys.executable,
-                    "-m",
-                    "safety",
-                    "scan",
-                    "--target",
-                    str(safety_target),
-                    "--output",
-                    "json",
-                ]
-                safety_report_path.unlink(missing_ok=True)
-                safety_return_code = _cli_func("run_scanner_command", run_scanner_command)(
-                    safety_cmd,
-                    stdout_output_path=safety_report_path,
-                    accepted_return_codes={0, 1},
-                    timeout=tool_timeout,
-                    label="Safety",
-                )
-                safety_report = read_json(safety_report_path)
-                if (
-                    safety_return_code in {0, 1}
-                    and safety_report_is_complete(safety_report)
-                ):
-                    mark_tool("Safety", "completed", return_code=safety_return_code)
-                else:
-                    write_json(safety_report_path, [], safe_output=safe_output)
-                    mark_tool(
-                        "Safety",
-                        "failed",
-                        detail="scanner did not produce a valid JSON report",
-                        return_code=safety_return_code,
-                    )
-            elif not safety_enabled:
-                write_json(safety_report_path, [], safe_output=safe_output)
-                mark_tool("Safety", "skipped", detail="optional licensed scanner disabled")
-            else:
-                write_json(safety_report_path, [], safe_output=safe_output)
-                mark_tool("Safety", "skipped", detail="no requirements.txt manifest")
-            
+            print(f"🔍 [SCA] Dependency manifest(s) detected: {manifest_names}. Running OSV audit...")
             osv_report_path = safe_output.file("osv-report.json")
             try:
                 osv_findings = _cli_func("query_osv_vulnerabilities", query_osv_vulnerabilities)(dependency_manifests, raise_on_error=strict)
@@ -515,8 +446,7 @@ def _execute_scan(
                 mark_tool("OSV", "failed", detail=str(e))
     else:
         print("ℹ️  [SCA] No supported dependency manifest found, skipping dependency scan.")
-        record_timing(timings, "Safety/OSV", time.perf_counter(), "skipped")
-        mark_tool("Safety", "skipped", detail="dependency manifest not found")
+        record_timing(timings, "OSV", time.perf_counter(), "skipped")
         mark_tool("OSV", "skipped", detail="dependency manifest not found")
 
     # 2. Python SAST (Ruff)
@@ -652,176 +582,21 @@ def _execute_scan(
         finally:
             secrets_raw_path.unlink(missing_ok=True)
 
-    # 5. YARA Pattern Audits
-    with timed_step(timings, "YARA"):
-        print("🔍 [YARA] Auditing code logic for webshells and suspicious execution patterns...")
-        try:
-            yara_findings = shared_run_yara_scan(
-                target_path,
-                ignored_paths=set(excluded_paths),
-                log=log_scanner_event,
-            )
-            safe_output.write_bounded_json("yara-report.json", yara_findings)
-            mark_tool("YARA", "completed")
-        except Exception as exc:
-            print(f"  [YARA Warn] Report was discarded: {exc}")
-            safe_output.write_json("yara-report.json", [])
-            mark_tool("YARA", "failed", detail=str(exc))
-
-    # 6. ClamAV Malware Scan
-    if fast:
-        print("ℹ️  [ClamAV] Fast mode enabled, skipping ClamAV malware check.")
-        record_timing(timings, "ClamAV", time.perf_counter(), "skipped")
-        mark_tool("ClamAV", "skipped", detail="fast mode")
-    else:
-        with timed_step(timings, "ClamAV"):
-            print("🔍 [ClamAV] Searching files for virus signatures...")
+    # Optional signature analysis is enabled only by the CLI operator.
+    if enable_yara:
+        with timed_step(timings, "YARA"):
+            print("🔍 [YARA] Running optional signature analysis...")
             try:
-                clamav_findings = _cli_func("shared_run_clamav_scan", shared_run_clamav_scan)(
+                yara_findings = shared_run_yara_scan(
                     target_path,
                     ignored_paths=set(excluded_paths),
-                    timeout=tool_timeout,
                     log=log_scanner_event,
                 )
-                safe_output.write_bounded_json("clamav-report.json", clamav_findings)
-                mark_tool("ClamAV", "completed")
+                safe_output.write_bounded_json("yara-report.json", yara_findings)
+                mark_tool("YARA", "completed")
             except Exception as exc:
-                print(f"  [ClamAV Warn] Report was discarded: {exc}")
-                safe_output.write_json("clamav-report.json", [])
-                mark_tool("ClamAV", "failed", detail=str(exc))
-
-    # 7. Infrastructure-as-code configuration auditing (Checkov)
-    iac_report_path = safe_output.file("iac-report.json")
-    if fast:
-        print("ℹ️  [IaC] Fast mode enabled, skipping IaC configuration checks.")
-        write_json(
-            iac_report_path,
-            empty_iac_report(status="skipped", detail="fast mode"),
-            safe_output=safe_output,
-        )
-        record_timing(timings, "IaC", time.perf_counter(), "skipped")
-        mark_tool("IaC", "skipped", detail="fast mode")
-    else:
-        with timed_step(timings, "IaC"):
-            print("🔍 [IaC] Scanning Terraform, CloudFormation, Kubernetes, and Dockerfiles with Checkov...")
-            iac_execution = run_iac_scan(
-                target_path,
-                report_path=iac_report_path,
-                ignored_paths=excluded_paths,
-                timeout=tool_timeout,
-                log=log_scanner_event,
-            )
-            if iac_execution.status == "completed":
-                mark_tool("IaC", "completed", return_code=iac_execution.return_code)
-            else:
-                mark_tool(
-                    "IaC",
-                    "failed",
-                    detail=iac_execution.detail or "scanner did not produce a valid report",
-                    return_code=iac_execution.return_code,
-                )
-
-    # 8. Sandbox Execution (Trivy & DAST) via Docker
-    has_python = False
-    if target_path.is_dir():
-        for root, dirs, files in os.walk(target_path):
-            if should_skip_path(Path(root)):
-                continue
-            if any(file.endswith(".py") for file in files):
-                has_python = True
-                break
-    else:
-        if target_path.suffix.lower() == ".py":
-            has_python = True
-
-    if fast:
-        print("ℹ️  [Docker Sandbox] Fast mode enabled, skipping Docker, Trivy, and DAST checks.")
-        record_timing(timings, "Docker/Trivy/DAST", time.perf_counter(), "skipped")
-        mark_tool("Docker Sandbox", "skipped", detail="fast mode")
-        mark_tool("Trivy", "skipped", detail="fast mode")
-        mark_tool("DAST", "skipped", detail="fast mode")
-    elif use_docker and _cli_func("is_docker_available", is_docker_available)() and has_python:
-        with timed_step(timings, "Docker/Trivy/DAST"):
-            print("🔍 [Docker Sandbox] Docker daemon detected. Building sandbox server and executing Trivy and DAST scans...")
-            sandbox_uuid = uuid.uuid4().hex
-            sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
-            sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
-            sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
-            sandbox_temp_dir = safe_output.directory(Path("sandbox") / sandbox_uuid)
-            
-            try:
-                host_port = _cli_func("find_free_host_port", find_free_host_port)()
-                    
-                container_port = _cli_func("scaffold_sandbox_context", scaffold_sandbox_context)(target_path, sandbox_temp_dir)
-                target_url = f"http://127.0.0.1:{host_port}"
-                waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
-
-                if not _cli_func("build_sandbox_image", build_sandbox_image)(sandbox_temp_dir, sandbox_image):
-                    raise RuntimeError("failed to build sandbox image")
-
-                if not _cli_func("create_sandbox_network", create_sandbox_network)(sandbox_network):
-                    raise RuntimeError("failed to create isolated sandbox network")
-
-                if not _cli_func("run_sandbox_container", run_sandbox_container)(
-                    sandbox_image,
-                    sandbox_container,
-                    host_port,
-                    container_port,
-                    waf_enabled,
-                    sandbox_network,
-                ):
-                    raise RuntimeError("failed to start sandbox container")
-
-                if not _cli_func("wait_for_container", wait_for_container)(target_url, timeout=6.0):
-                    raise RuntimeError("sandbox container did not become healthy")
-                mark_tool("Docker Sandbox", "completed")
-
-                trivy_report_path = safe_output.file("trivy-report.json")
-                print("  [Trivy] Inspecting image layer packages for CVEs...")
-                try:
-                    _cli_func("run_trivy_scan", run_trivy_scan)(sandbox_image, trivy_report_path)
-                    mark_tool("Trivy", "completed")
-                except Exception as e:
-                    print(f"  [Trivy Error] Image scan failed: {e}")
-                    mark_tool("Trivy", "failed", detail=str(e))
-
-                zap_report_path = safe_output.file("zap-report.json")
-                print("  [DAST] Running active crawler against endpoints...")
-                zap_findings = _cli_func("run_dast_scan", run_dast_scan)(
-                    target_url, internal_port=container_port
-                )
-                write_json(zap_report_path, zap_findings, safe_output=safe_output)
-                mark_tool("DAST", "completed")
-
-            except Exception as e:
-                print(f"  \033[91m[Sandbox Error] Docker execution pipeline encountered an error: {e}\033[0m")
-                mark_tool("Docker Sandbox", "failed", detail=str(e))
-                if not tool_statuses.has("Trivy"):
-                    mark_tool("Trivy", "skipped", detail="sandbox unavailable")
-                if not tool_statuses.has("DAST"):
-                    mark_tool("DAST", "skipped", detail="sandbox unavailable")
-            finally:
-                print("  [Docker Sandbox] Cleaning up sandbox containers...")
-                try:
-                    _cli_func("stop_and_cleanup_sandbox", stop_and_cleanup_sandbox)(
-                        sandbox_container, sandbox_image, sandbox_network
-                    )
-                except Exception:
-                    pass
-                if sandbox_temp_dir.exists():
-                    shutil.rmtree(sandbox_temp_dir, ignore_errors=True)
-    else:
-        print("ℹ️  [Docker Sandbox] Docker is disabled, unavailable, or no Python target found. Skipping Trivy & DAST scans.")
-        record_timing(timings, "Docker/Trivy/DAST", time.perf_counter(), "skipped")
-        if use_docker and has_python:
-            mark_tool("Docker Sandbox", "failed", detail="Docker is unavailable")
-            mark_tool("Trivy", "skipped", detail="Docker is unavailable")
-            mark_tool("DAST", "skipped", detail="Docker is unavailable")
-        else:
-            reason = "disabled" if not use_docker else "no Python target found"
-            mark_tool("Docker Sandbox", "skipped", detail=reason)
-            mark_tool("Trivy", "skipped", detail=reason)
-            mark_tool("DAST", "skipped", detail=reason)
+                print(f"  [YARA Warn] Report was discarded: {exc}")
+                mark_tool("YARA", "failed", detail=str(exc))
 
     # 8. Run Policy Engine
     print("\nEvaluating all reports against Aegis Security Gate rules...")

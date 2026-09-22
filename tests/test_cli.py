@@ -474,29 +474,16 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     dast_scan.assert_not_called()
     clamav_scan.assert_not_called()
 
-def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch):
+def test_standard_scan_has_no_retired_scanner_artifacts(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
     output_dir = tmp_path / "reports"
     target_file.write_text("def add(a, b):\n    return a + b\n")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("WAF_ENABLED", raising=False)
-
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
-         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command), \
-         patch("app.cli.is_docker_available", return_value=True), \
-         patch("app.cli.find_free_host_port", return_value=5678), \
-         patch("app.cli.scaffold_sandbox_context", return_value=5001) as scaffold, \
-         patch("app.cli.build_sandbox_image", return_value=True) as build_image, \
-         patch("app.cli.create_sandbox_network", return_value=True) as create_network, \
-         patch("app.cli.run_sandbox_container", return_value=True) as run_container, \
-         patch("app.cli.wait_for_container", return_value=True) as wait_container, \
-         patch("app.cli.run_trivy_scan", return_value=[]), \
-         patch("app.cli.run_dast_scan", return_value=[]) as dast_scan, \
-         patch("app.cli.stop_and_cleanup_sandbox") as cleanup:
+         patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
         summary = execute_scan(
             str(target_file),
-            use_docker=True,
             tool_timeout=5,
             output_dir=str(output_dir),
             quiet=True,
@@ -504,23 +491,13 @@ def test_execute_scan_docker_uses_sandbox_helper_contract(tmp_path, monkeypatch)
         )
 
     assert summary["exit_code"] == 0
-    scaffold.assert_called_once()
-    build_image.assert_called_once()
-    create_network.assert_called_once()
-    run_container.assert_called_once()
-    cleanup.assert_called_once()
-
-    image_tag, container_name, host_port, container_port, waf_enabled, network_name = run_container.call_args.args
-    assert image_tag.startswith("aegis-sandbox-")
-    assert container_name.startswith("aegis-sandbox-container-")
-    assert host_port == 5678
-    assert container_port == 5001
-    assert waf_enabled is False
-    assert network_name.startswith("aegis-sandbox-network-")
-
-    target_url = f"http://127.0.0.1:{host_port}"
-    wait_container.assert_called_once_with(target_url, timeout=6.0)
-    dast_scan.assert_called_once_with(target_url, internal_port=5001)
+    retired = {"safety-report.json", "trivy-report.json", "clamav-report.json", "zap-report.json", "iac-report.json"}
+    assert not retired.intersection(path.name for path in output_dir.iterdir())
+    manifest = json.loads((output_dir / "scan-manifest.json").read_text())
+    assert not retired.intersection(item["name"] for item in manifest["artifacts"])
+    assert not {"Safety", "Trivy", "ClamAV", "DAST", "IaC"}.intersection(
+        item["name"] for item in manifest["tools"]
+    )
 
 def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, capsys):
     target_file = tmp_path / "safe.py"

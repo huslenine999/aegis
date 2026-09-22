@@ -6,6 +6,8 @@ import pytest
 import policy_engine
 from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import (
+    analyze_codeql,
+    analyze_report_set,
     analyze_iac,
     analyze_ruff,
     analyze_safety,
@@ -14,6 +16,37 @@ from policy_engine import (
     generate_reports,
     run_policy_engine,
 )
+
+
+def test_active_report_set_ignores_retired_scanners_and_keeps_codeql_full_findings():
+    codeql = {
+        "status": "completed",
+        "coverage": {"complete": True, "languages": ["python"], "source_scope": "repository"},
+        "findings": [
+            {"rule_id": "py/sql-injection", "severity": "HIGH", "filename": f"src/{index}.py", "line_number": index, "issue_text": "SQL injection", "code_flows": []}
+            for index in range(7)
+        ],
+    }
+    results = analyze_report_set({
+        "ruff": [], "semgrep": {"results": []}, "osv": [],
+        "secrets": {"results": {}}, "codeql": codeql,
+        "safety": [{"package": "old"}], "iac": {"status": "failed"},
+    })
+    assert {result["tool"] for result in results} == {
+        "Ruff (SAST)", "Semgrep", "OSV Dependency Audit",
+        "Secrets Scanner", "CodeQL",
+    }
+    analyzed = next(item for item in results if item["tool"] == "CodeQL")
+    assert analyzed["status"] == "FAIL"
+    assert analyzed["total_issues"] == 7
+    assert len(analyzed["findings"]) == 7
+    assert len(analyzed["examples"]) == 5
+
+
+def test_codeql_incomplete_or_malformed_report_is_error():
+    assert analyze_codeql(None)["status"] == "ERROR"
+    assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": False}})["status"] == "ERROR"
+    assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": True, "languages": []}})["status"] == "ERROR"
 
 
 def test_analyze_iac_enforces_findings_and_unmanaged_suppressions():

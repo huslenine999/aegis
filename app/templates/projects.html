@@ -132,7 +132,7 @@
               <div id="panel-settings" class="workspace-section" role="tabpanel" data-workspace-panel="settings" hidden>
                 <section class="panel section-card">
                   <div class="section-heading"><div><h2>Project settings</h2><p>Choose the default scan depth for this repository.</p></div></div>
-                  <div class="form-grid"><label>Scan preset<select id="scan-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard">Standard — PR gate</option><option value="deep">Deep — isolated worker required</option></select></label><div><span id="preset-note" class="muted">Standard checks are recommended for pull requests.</span></div><div class="full row"><button id="save-project" type="button">Save settings</button><button id="delete-project" class="danger" type="button">Delete project</button></div></div>
+                  <div class="form-grid"><label>Scan preset<select id="scan-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard">Standard — PR gate</option><option value="deep">Deep — CodeQL runtime required</option></select></label><div><span id="preset-note" class="muted">Standard checks are recommended for pull requests.</span></div><div class="full row"><button id="save-project" type="button">Save settings</button><button id="delete-project" class="danger" type="button">Delete project</button></div></div>
                 </section>
               </div>
             </div>
@@ -148,7 +148,7 @@
       <label>Project name<input id="create-name" maxlength="128" required></label>
       <label>GitHub HTTPS URL<input id="create-repository" type="url" placeholder="https://github.com/org/repository.git"></label>
       <label>Default branch<input id="create-branch" value="main" required></label>
-      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — isolated worker required</option></select></label>
+      <label>Scan preset<select id="create-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard" selected>Standard — PR gate</option><option value="deep">Deep — CodeQL runtime required</option></select></label>
       <div class="row"><button class="primary" type="submit">Create</button><button id="close-dialog" type="button">Cancel</button></div>
     </form>
   </dialog>
@@ -161,10 +161,11 @@
     let cachedFindings = [];
     let cachedScans = [];
     let currentMembers = [];
+    let scanRefreshTimer = null;
     const presetNotes = {
-      quick: "Quick is for local/dev feedback: fastest checks while coding.",
-      standard: "Standard is for PR gates: static, dependency, secret, and signature checks.",
-      deep: "Deep requires a separately provisioned isolated Docker/Trivy worker and fails closed when it is unavailable."
+      quick: "Quick runs Ruff security rules for Python and checks for possible secrets.",
+      standard: "Standard adds Semgrep source checks and OSV dependency checks where applicable.",
+      deep: "Deep adds CodeQL for Python and JavaScript/TypeScript. An isolated, separately provisioned CodeQL runtime is required."
     };
     const byId = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[char]));
@@ -192,6 +193,33 @@
       return new Intl.DateTimeFormat(undefined, compact
         ? {month:"short", day:"numeric"}
         : {dateStyle:"medium", timeStyle:"short"}).format(date);
+    }
+    function scanElapsed(scan) {
+      const started = new Date(scan.created_at).getTime();
+      if (!Number.isFinite(started)) return "";
+      const ended = scan.completed_at ? new Date(scan.completed_at).getTime() : Date.now();
+      const seconds = Math.max(0, Math.floor((ended - started) / 1000));
+      return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+    }
+    function scanStage(scan) {
+      const stages = {queued:"Queued", running:"Preparing source", analyzing:"Analyzing source", correlating:"Evaluating findings", reporting:"Finalizing report"};
+      return stages[scan.state] || scan.state;
+    }
+    function scheduleScanRefresh() {
+      clearTimeout(scanRefreshTimer);
+      scanRefreshTimer = null;
+      const projectId = selected?.id;
+      if (!projectId || !cachedScans.length || ["completed", "failed", "cancelled"].includes(cachedScans[0].state)) return;
+      scanRefreshTimer = setTimeout(async () => {
+        if (selected?.id !== projectId) return;
+        try {
+          await loadScans();
+          if (["completed", "failed", "cancelled"].includes(cachedScans[0]?.state)) await Promise.all([loadFindings(), loadPolicies()]);
+        } catch (error) {
+          console.warn("Scan status refresh failed", error);
+          if (selected?.id === projectId) scheduleScanRefresh();
+        }
+      }, 3000);
     }
     function updatePresetNote() {
       byId("preset-note").textContent = presetNotes[byId("scan-preset").value] || presetNotes.standard;
@@ -258,7 +286,7 @@
         <article class="scan">
           <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state)}</span></div>
           <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
-          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${Number(scan.progress || 0)}% complete`}</small>
+          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : ["completed", "cancelled"].includes(scan.state) ? `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${escapeHtml(scanElapsed(scan))}` : `${escapeHtml(scanStage(scan))} · ${escapeHtml(scanElapsed(scan))} elapsed · refreshing every 3s`}</small>
           <div class="row">
             ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
             ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
@@ -268,6 +296,7 @@
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
       document.querySelectorAll("[data-retry]").forEach((button) => button.onclick = () => scanAction(button.dataset.retry, "retry"));
       await updateProjectSummary();
+      scheduleScanRefresh();
     }
     async function updateProjectSummary() {
       if (!selected) return;
@@ -286,7 +315,7 @@
       }
       if (!["completed", "failed", "cancelled"].includes(latest.state)) {
         byId("release-decision").textContent = "Scan in progress";
-        byId("release-reason").textContent = `${latest.progress}% complete. The decision remains pending until all required evidence arrives.`;
+        byId("release-reason").textContent = `${scanStage(latest)} · ${scanElapsed(latest)} elapsed. The decision remains pending until required evidence arrives.`;
         return;
       }
       if (latest.state !== "completed") {
@@ -539,23 +568,6 @@
         if (payload.type === "result") await Promise.all([loadScans(), loadFindings(), loadPolicies()]);
       };
       await loadScans();
-      const projectId = selected.id;
-      const poll = async () => {
-        if (selected?.id !== projectId) { socket.close(); return; }
-        try {
-          await loadScans();
-          const current = cachedScans.find((item) => item.job_id === scan.job_id);
-          if (current && ["completed", "failed", "cancelled"].includes(current.state)) {
-            await Promise.all([loadFindings(), loadPolicies()]);
-            socket.close();
-            return;
-          }
-        } catch (error) {
-          console.warn("Scan status refresh failed", error);
-        }
-        setTimeout(poll, 3000);
-      };
-      setTimeout(poll, 3000);
     };
     byId("onboarding-scan").onclick = async () => {
       if (!selected) return;

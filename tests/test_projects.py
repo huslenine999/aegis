@@ -470,6 +470,19 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     assert scanner_commands and "--no-cache" in scanner_commands[0]
 
 
+def test_new_worker_artifact_inventory_excludes_retired_scanner_reports():
+    retired = {
+        "safety-report.json",
+        "trivy-report.json",
+        "clamav-report.json",
+        "zap-report.json",
+        "iac-report.json",
+        "sandbox-status.json",
+    }
+    assert worker.RECORDED_ARTIFACT_NAMES.isdisjoint(retired)
+    assert {"codeql.sarif", "codeql-report.json"} <= worker.RECORDED_ARTIFACT_NAMES
+
+
 def test_github_oauth_uses_pkce_and_encrypts_token(tmp_path, monkeypatch):
     configure_project_database(tmp_path, monkeypatch)
     monkeypatch.setattr(

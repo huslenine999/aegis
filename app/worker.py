@@ -1,10 +1,8 @@
 import os
 import sys
-import uuid
 import json
 import logging
 import shutil
-import socket
 import subprocess
 import time
 import re
@@ -18,19 +16,16 @@ from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
-from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner
+from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner, SCAN_PROFILE_VERSION
 from .scan_engine import add_semgrep_excludes, build_ruff_command, exclude_files_pattern
 from .scan_status import ToolStatusTracker
-from .scanners import run_clamav_scan as shared_run_clamav_scan
-from .scanners import run_dast_scan as shared_run_dast_scan
 from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import DEFAULT_IGNORED_DIRS
 from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
-from .scanners import safety_report_is_complete
 from .scanners import write_semgrep_rules
-from .iac_scanner import empty_iac_report, run_iac_scan
+from .codeql_scanner import CodeQLScanError, run_codeql_scan
 from .projects import (
     get_project,
     get_scan_run,
@@ -62,11 +57,6 @@ from .resource_budgets import (
     run_bounded_subprocess_to_file,
     run_bounded_subprocess_stdout_to_file,
 )
-from .sandbox import (
-    is_docker_available, scaffold_sandbox_context, build_sandbox_image,
-    create_sandbox_network, run_sandbox_container, wait_for_container,
-    run_trivy_scan, stop_and_cleanup_sandbox
-)
 
 EXCLUDE_FILES_PATTERN = exclude_files_pattern()
 JOB_LOG_LIMIT = environment_positive_int("AEGIS_JOB_LOG_LIMIT", 2000)
@@ -81,15 +71,11 @@ RECORDED_ARTIFACT_NAMES = {
     "sbom.json",
     "ruff-report.json",
     "semgrep-report.json",
-    "safety-report.json",
     "osv-report.json",
-    "trivy-report.json",
     "secrets-report.json",
     "yara-report.json",
-    "clamav-report.json",
-    "zap-report.json",
-    "iac-report.json",
-    "sandbox-status.json",
+    "codeql.sarif",
+    "codeql-report.json",
     "source-descriptor.json",
     "scan-manifest.json",
 }
@@ -189,35 +175,6 @@ def publish_job_event(job_id: str, event_type: str, data: dict):
                 redis_client.expire(key, JOB_RETENTION_SECONDS)
 
 
-def _set_job_sandbox_container(job_id: str, container_name: str) -> None:
-    """Bind the ephemeral sandbox to the job that owns its telemetry."""
-    redis_client.hset(
-        f"job:{job_id}",
-        "sandbox_container_id",
-        container_name,
-    )
-
-
-def _clear_job_sandbox_container(job_id: str) -> None:
-    hdel = getattr(redis_client, "hdel", None)
-    if callable(hdel):
-        hdel(f"job:{job_id}", "sandbox_container_id")
-    else:
-        # Keep compatibility with the minimal test Redis adapter.
-        redis_client.hset(f"job:{job_id}", "sandbox_container_id", "")
-
-
-def _cleanup_job_sandbox(
-    job_id: str,
-    container_name: str,
-    image_tag: str,
-    network_name: str,
-) -> None:
-    try:
-        stop_and_cleanup_sandbox(container_name, image_tag, network_name)
-    finally:
-        _clear_job_sandbox_container(job_id)
-
 def job_log_callback(job_id: str):
     color_by_level = {
         "error": "var(--danger)",
@@ -238,23 +195,6 @@ def job_log_callback(job_id: str):
 
 def run_yara_scan(target_path: str, job_id: str):
     return shared_run_yara_scan(target_path, log=job_log_callback(job_id))
-
-def run_clamav_scan(target_path: str, job_id: str):
-    return shared_run_clamav_scan(target_path, log=job_log_callback(job_id))
-
-def run_dast_scan(
-    target_url: str | None = None,
-    job_id: str | None = None,
-    waf_enabled: bool | None = None,
-    *,
-    internal_port: int = 5001,
-):
-    del waf_enabled
-    return shared_run_dast_scan(
-        target_url,
-        internal_port=internal_port,
-        log=job_log_callback(job_id) if job_id else None,
-    )
 
 def execute_subprocess_log(
     cmd,
@@ -729,22 +669,7 @@ def async_scan_task(
         target_path = custom_file_path if is_custom_scan else None
         skip_external_scanners = os.environ.get(
             "AEGIS_SKIP_EXTERNAL_SCANNERS", ""
-        ).lower() in {"1", "true", "yes", "on"} or preset == "quick"
-        # The explicit scanner skip is used by tests and lightweight smoke
-        # environments where Docker may exist but must not be invoked. Deep
-        # project scans still fail closed when isolation is unavailable.
-        enable_dynamic_scanners = preset == "deep" or (
-            scan_run_id is None and not skip_external_scanners
-        )
-        if (
-            preset == "deep"
-            and os.environ.get("AEGIS_ENV", "development").lower() == "production"
-            and os.environ.get("AEGIS_ALLOW_DEEP_SCANS", "").lower()
-            not in {"1", "true", "yes", "on"}
-        ):
-            raise RuntimeError(
-                "Deep scans are disabled in production until an isolated worker is explicitly configured."
-            )
+        ).lower() in {"1", "true", "yes", "on"}
 
         if project_id:
             if not project:
@@ -783,14 +708,6 @@ def async_scan_task(
                 "bytes": source_snapshot.total_bytes,
             }
             dependency_manifests = discover_dependency_manifests(target_path)
-            # Empty placeholders for custom scans
-            with safe_output.file("safety-report.json").open("w") as f:
-                json.dump([], f)
-            with safe_output.file("osv-report.json").open("w") as f:
-                json.dump([], f)
-            with safe_output.file("trivy-report.json").open("w") as f:
-                json.dump({"Results": []}, f)
-            mark_tool("Safety", "skipped", detail="single-file scan")
             mark_tool("OSV", "skipped", detail="single-file scan")
         else:
             if target == "secure":
@@ -814,64 +731,9 @@ def async_scan_task(
             }
             dependency_manifests = discover_dependency_manifests(target_path)
                 
-            # Run Safety SCA
-            safety_enabled = os.environ.get("AEGIS_ENABLE_SAFETY", "").lower() in {
-                "1", "true", "yes", "on"
-            }
-            if skip_external_scanners or not safety_enabled:
-                write_json(report_dir / "safety-report.json", [])
-                detail = "scanner configuration" if skip_external_scanners else "optional licensed scanner disabled"
-                mark_tool("Safety", "skipped", detail=detail)
-                publish_job_event(job_id, "log", {"text": f"[SCA] Safety skipped: {detail}.", "color": "var(--text-muted)"})
-            else:
-                publish_job_event(job_id, "log", {"text": "[SCA] Auditing dependencies via Safety...", "color": "var(--text-muted)"})
-                requirements_manifest = first_requirements_manifest(dependency_manifests)
-                if requirements_manifest:
-                    requirements_file = requirements_manifest.path
-                    safety_cmd = [
-                        python_bin,
-                        "-m",
-                        "safety",
-                        "scan",
-                        "--target",
-                        str(requirements_file.parent),
-                        "--output",
-                        "json",
-                    ]
-                    safety_environment = scanner_subprocess_environment()
-                    if os.environ.get("SAFETY_API_KEY"):
-                        safety_environment["SAFETY_API_KEY"] = os.environ["SAFETY_API_KEY"]
-                    completed = run_bounded_subprocess_stdout_to_file(
-                        safety_cmd,
-                        safe_output.file("safety-report.json"),
-                        cwd=requirements_file.parent,
-                        env=safety_environment,
-                        timeout=120,
-                        accepted_return_codes={0, 1},
-                    )
-                    safety_report = load_json_report(safe_output.file("safety-report.json"))
-                    if (
-                        completed.returncode in {0, 1}
-                        and safety_report_is_complete(safety_report)
-                    ):
-                        mark_tool("Safety", "completed", return_code=completed.returncode)
-                        publish_job_event(job_id, "log", {"text": "[SCA] Safety scan complete.", "color": "var(--primary)"})
-                    else:
-                        write_json(report_dir / "safety-report.json", [])
-                        mark_tool(
-                            "Safety",
-                            "failed",
-                            detail="scanner did not produce a valid JSON report",
-                            return_code=completed.returncode,
-                        )
-                else:
-                    write_json(report_dir / "safety-report.json", [])
-                    mark_tool("Safety", "skipped", detail="requirements.txt not found")
-                    publish_job_event(job_id, "log", {"text": "[SCA] requirements.txt not found in target. Safety skipped.", "color": "var(--text-muted)"})
-
-            if skip_external_scanners:
+            if preset == "quick" or skip_external_scanners:
                 write_json(report_dir / "osv-report.json", [])
-                mark_tool("OSV", "skipped", detail="scanner configuration")
+                mark_tool("OSV", "skipped", detail="scan preset" if preset == "quick" else "scanner configuration")
             elif dependency_manifests:
                 try:
                     osv_findings = query_osv_vulnerabilities(
@@ -887,12 +749,6 @@ def async_scan_task(
                 write_json(report_dir / "osv-report.json", [])
                 mark_tool("OSV", "skipped", detail="dependency manifest not found")
             
-            # Ensure trivy-report.json exists
-            trivy_path = safe_output.file("trivy-report.json")
-            if not trivy_path.exists():
-                with trivy_path.open("w") as f:
-                    json.dump({"Results": []}, f)
-
         if target_path is None:
             raise RuntimeError("Unable to resolve the scan target path.")
         if source_snapshot is None or attested_source_path is None:
