@@ -6,6 +6,15 @@ PostgreSQL stores identity, project, scan and audit metadata. Redis transports
 jobs. Scanner workers process hostile source and write signed evidence. A
 separate notifier worker owns outbound delivery credentials.
 
+Quick runs Ruff security rules and detect-secrets. Standard adds Semgrep and
+OSV. YARA is optional. CodeQL is the opt-in Deep source analyzer for Python and
+JavaScript/TypeScript. A dedicated Compose worker streams admitted source into
+an offline, unprivileged CodeQL child container; the child receives no host
+filesystem mount or application credentials. Removed
+Checkov, Safety, ClamAV, Trivy, and DAST results remain readable as historical
+evidence. New scan decisions do not claim infrastructure, container, malware,
+or runtime testing from CodeQL.
+
 ```mermaid
 flowchart LR
   U["Customer browser or API"] --> P["Caddy TLS proxy"]

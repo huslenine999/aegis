@@ -81,6 +81,13 @@ def docker_compose_command(project_root: Path, env_file: Path, *arguments: str) 
     ]
 
 
+def _profile_arguments(values: dict[str, str]) -> list[str]:
+    enabled = values.get("AEGIS_ALLOW_DEEP_SCANS", "false").lower() in {
+        "1", "true", "yes", "on",
+    }
+    return ["--profile", "deep"] if enabled else []
+
+
 def port_is_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
@@ -184,7 +191,9 @@ def run_start(
             )
             return EXIT_OPERATIONAL_ERROR
 
-    command = docker_compose_command(project_root, local_env_file, "up", "--build")
+    command = docker_compose_command(
+        project_root, local_env_file, *_profile_arguments(values), "up", "--build"
+    )
     if not foreground:
         command.append("-d")
     print("Starting PostgreSQL, Redis, worker, dashboard, and reverse proxy...")
@@ -229,7 +238,12 @@ def run_stop(*, project_root: Path, local_env_file: Path, subprocess_module, shu
     if not require_local_stack(local_env_file=local_env_file, shutil_module=shutil_module):
         return EXIT_OPERATIONAL_ERROR
     return subprocess_module.run(
-        docker_compose_command(project_root, local_env_file, "down"),
+        docker_compose_command(
+            project_root,
+            local_env_file,
+            *_profile_arguments(read_environment_file(local_env_file)),
+            "down",
+        ),
         cwd=project_root,
         check=False,
     ).returncode
@@ -238,7 +252,14 @@ def run_stop(*, project_root: Path, local_env_file: Path, subprocess_module, shu
 def run_stack_logs(*, project_root: Path, local_env_file: Path, subprocess_module, shutil_module, follow: bool = False) -> int:
     if not require_local_stack(local_env_file=local_env_file, shutil_module=shutil_module):
         return EXIT_OPERATIONAL_ERROR
-    command = docker_compose_command(project_root, local_env_file, "logs", "--tail", "200")
+    command = docker_compose_command(
+        project_root,
+        local_env_file,
+        *_profile_arguments(read_environment_file(local_env_file)),
+        "logs",
+        "--tail",
+        "200",
+    )
     if follow:
         command.append("--follow")
     return subprocess_module.run(command, cwd=project_root, check=False).returncode

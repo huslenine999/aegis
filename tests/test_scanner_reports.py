@@ -1,3 +1,4 @@
+import io
 import json
 import zipfile
 from policy_engine import (
@@ -7,6 +8,7 @@ from policy_engine import (
 )
 from app.main import app
 from app.worker import run_yara_scan
+from app.reporting import build_report_bundle
 
 def test_analyze_secrets_pass():
     report = {"results": {}}
@@ -157,3 +159,30 @@ def test_download_report_bundle_route(tmp_path, monkeypatch):
     assert "scan-manifest.json" in names
     assert "raw/ruff-report.json" in names
     assert "bundle-manifest.json" in names
+
+
+def test_export_dossier_uses_completed_markdown_report(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.routes import artifact_routes
+
+    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
+    client = TestClient(app)
+    assert client.get("/export-dossier").status_code == 404
+
+    (tmp_path / "report.md").write_text("# CodeQL and OSV results\n")
+    response = client.get("/export-dossier")
+    assert response.status_code == 200
+    assert response.text == "# CodeQL and OSV results\n"
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in response.headers["content-disposition"]
+
+
+def test_local_bundle_preserves_raw_and_normalized_codeql_evidence(tmp_path):
+    raw = b'{"version":"2.1.0","runs":[]}'
+    normalized = b'{"status":"completed","findings":[]}'
+    (tmp_path / "codeql.sarif").write_bytes(raw)
+    (tmp_path / "codeql-report.json").write_bytes(normalized)
+
+    with zipfile.ZipFile(io.BytesIO(build_report_bundle(tmp_path))) as bundle:
+        assert bundle.read("raw/codeql.sarif") == raw
+        assert bundle.read("raw/codeql-report.json") == normalized

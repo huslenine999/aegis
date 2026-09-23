@@ -8,10 +8,7 @@ from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import (
     analyze_codeql,
     analyze_report_set,
-    analyze_iac,
     analyze_ruff,
-    analyze_safety,
-    analyze_trivy,
     evaluate_policy_results,
     generate_reports,
     run_policy_engine,
@@ -21,7 +18,7 @@ from policy_engine import (
 def test_active_report_set_ignores_retired_scanners_and_keeps_codeql_full_findings():
     codeql = {
         "status": "completed",
-        "coverage": {"complete": True, "languages": ["python"], "source_scope": "repository"},
+        "coverage": {"complete": True, "languages": ["python"], "source_scope": "repository", "isolation": "verified"},
         "findings": [
             {"rule_id": "py/sql-injection", "severity": "HIGH", "filename": f"src/{index}.py", "line_number": index, "issue_text": "SQL injection", "code_flows": []}
             for index in range(7)
@@ -47,39 +44,27 @@ def test_codeql_incomplete_or_malformed_report_is_error():
     assert analyze_codeql(None)["status"] == "ERROR"
     assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": False}})["status"] == "ERROR"
     assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": True, "languages": []}})["status"] == "ERROR"
+    assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": True, "languages": ["python"], "isolation": "unverified"}})["status"] == "ERROR"
+    assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": True, "languages": ["python"]}})["status"] == "ERROR"
 
 
-def test_analyze_iac_enforces_findings_and_unmanaged_suppressions():
-    result = analyze_iac({
-        "frameworks": ["terraform", "dockerfile"],
-        "summary": {"candidate": 2, "passed": 0, "failed": 1, "skipped": 1},
-        "findings": [{
-            "rule_id": "CKV_DOCKER_2",
-            "title": "Add a healthcheck",
-            "framework": "dockerfile",
-            "severity": "unknown",
-            "resource": "Dockerfile",
-            "path": "Dockerfile",
-            "start_line": 2,
-            "end_line": 3,
-            "remediation": "Add a healthcheck.",
-        }],
-        "unmanaged_suppressions": [{
-            "rule_id": "CKV_TF_1",
-            "title": "Inline skip",
-            "framework": "terraform",
-            "path": "main.tf",
-            "start_line": 1,
-            "end_line": 1,
-            "source": "repository-inline-checkov",
-        }],
-        "status": "completed",
-    })
+def test_missing_required_codeql_report_fails_closed(tmp_path):
+    for filename, payload in {
+        "ruff-report.json": [],
+        "semgrep-report.json": {"results": []},
+        "secrets-report.json": {"results": {}},
+        "osv-report.json": [],
+    }.items():
+        (tmp_path / filename).write_text(json.dumps(payload))
+    exit_code = run_policy_engine(
+        tmp_path, html_path=tmp_path / "report.html", md_path=tmp_path / "report.md",
+        tool_states={"CodeQL": "completed"},
+    )
+    assert exit_code == 2
 
-    assert result["status"] == "FAIL"
-    assert result["total_issues"] == 2
-    assert result["blocking_issues"] == 2
-    assert {item["severity"] for item in result["findings"]} == {"MEDIUM"}
+
+def test_codeql_error_cannot_be_ignored_by_legacy_error_toggle():
+    assert evaluate_policy_results([analyze_codeql(None)], fail_on_errors=False)["status"] == "ERROR"
 
 
 def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
@@ -225,56 +210,6 @@ def test_analyze_ruff_fail():
     assert "exec" in finding["why_it_matters"].lower()
     assert "suppression_example" in finding
 
-def test_analyze_safety_fail():
-    # Mocking safety report format
-    report = [
-        {"package": "flask", "advisory": "VULN-123", "version": "1.0.0", "fixed": "2.0.0", "reason": "Remote Code Execution"}
-    ]
-    result = analyze_safety(report)
-    assert result["status"] == "FAIL"
-    assert result["total_issues"] == 1
-
-def test_analyze_trivy_pass():
-    report = {"Results": []}
-    result = analyze_trivy(report)
-    assert result["status"] == "PASS"
-
-def test_analyze_trivy_fail():
-    report = {
-        "Results": [
-            {
-                "Target": "aegis-demo:latest",
-                "Vulnerabilities": [
-                    {"VulnerabilityID": "CVE-2024-0001", "Severity": "CRITICAL", "PkgName": "openssl", "InstalledVersion": "1.1.1", "FixedVersion": "1.1.1t", "Title": "Buffer overflow"}
-                ]
-            }
-        ]
-    }
-    result = analyze_trivy(report)
-    assert result["status"] == "FAIL"
-    assert result["blocking_issues"] == 1
-
-
-def test_global_fail_on_applies_to_every_scanner_family(monkeypatch):
-    monkeypatch.setattr(policy_engine, "FAIL_ON_SEVERITIES", {"CRITICAL"})
-    monkeypatch.setattr(policy_engine, "FAIL_ON_RUFF_SEVERITIES", {"CRITICAL"})
-    monkeypatch.setattr(policy_engine, "FAIL_ON_SEMGREP_SEVERITIES", {"CRITICAL"})
-    monkeypatch.setattr(policy_engine, "FAIL_ON_TRIVY_SEVERITIES", {"CRITICAL"})
-
-    safety = policy_engine.analyze_safety([{"package": "flask"}])
-    osv = policy_engine.analyze_osv([{"id": "OSV-1", "package": "flask", "cvss": 5.0}])
-    secrets = policy_engine.analyze_secrets(
-        {"results": {"app.py": [{"type": "API key"}]}}
-    )
-    yara = policy_engine.analyze_yara([{"rule": "Webshell", "filename": "app.py"}])
-    clamav = policy_engine.analyze_clamav([{"virus": "EICAR", "filename": "eicar"}])
-    dast = policy_engine.analyze_zap(
-        [{"status": "EXPOSED", "vuln_type": "XSS", "route": "/xss"}]
-    )
-
-    assert {item["status"] for item in (safety, osv, secrets, yara, clamav, dast)} == {"PASS"}
-
-
 def test_policy_engine_reports_operational_error(tmp_path):
     reports = {
         "ruff-report.json": [],
@@ -351,30 +286,6 @@ def test_policy_decision_treats_scanner_error_as_operational_failure():
     assert decision["status"] == "ERROR"
     assert decision["error_tools"] == ["IaC"]
     assert "IaC" in decision["reason"]
-
-
-def test_failed_iac_report_forces_policy_engine_error(tmp_path):
-    reports = {
-        "ruff-report.json": [],
-        "safety-report.json": [],
-        "trivy-report.json": {"Results": []},
-        "secrets-report.json": {"results": {}},
-        "yara-report.json": [],
-        "semgrep-report.json": {"results": []},
-        "clamav-report.json": [],
-        "zap-report.json": [],
-        "osv-report.json": [],
-        "iac-report.json": {"status": "failed", "findings": []},
-    }
-    for filename, payload in reports.items():
-        (tmp_path / filename).write_text(json.dumps(payload))
-
-    markdown_report = tmp_path / "report.md"
-    exit_code = run_policy_engine(tmp_path, md_path=markdown_report)
-
-    assert exit_code == 2
-    assert "DEPLOYMENT ERROR" in markdown_report.read_text()
-    assert "IaC" in markdown_report.read_text()
 
 
 def test_html_report_escapes_untrusted_finding_content(tmp_path):

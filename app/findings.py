@@ -17,6 +17,7 @@ FINDING_STATUSES = {
 }
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 PRESET_RANK = {"quick": 0, "standard": 1, "deep": 2}
+ACTIVE_TOOLS = {"Ruff", "Semgrep", "OSV", "Secrets", "YARA", "CodeQL"}
 ALLOWED_TRANSITIONS = {
     "open": {"acknowledged", "accepted", "false_positive", "resolved"},
     "acknowledged": {"open", "accepted", "false_positive", "resolved"},
@@ -149,6 +150,25 @@ def extract_findings(result: dict | None) -> list[dict]:
             severity,
             path=item.get("path"),
             line_number=(item.get("start") or {}).get("line"),
+            raw=item,
+        )
+
+    for item in (result.get("codeql") or {}).get("findings", []):
+        if not isinstance(item, dict):
+            continue
+        path = _stable_path(item.get("filename"))
+        add(
+            "CodeQL",
+            item.get("rule_id"),
+            item.get("issue_text") or item.get("rule_id"),
+            item.get("severity"),
+            path=path,
+            line_number=item.get("line_number"),
+            fingerprint_parts=(
+                "CodeQL", item.get("rule_id"), path,
+                item.get("fingerprint") or item.get("partial_fingerprint")
+                or (item.get("line_number"), item.get("issue_text")),
+            ),
             raw=item,
         )
 
@@ -394,11 +414,13 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
         for item in observed:
             seen.add(item["fingerprint"])
             existing = connection.execute(
-                """SELECT id, status, occurrence_count FROM security_findings
+                """SELECT id, status, occurrence_count, last_seen_run_id FROM security_findings
                    WHERE project_id = ? AND fingerprint = ?""",
                 (project_id, item["fingerprint"]),
             ).fetchone()
             if existing:
+                if existing[3] is not None and int(existing[3]) > scan_run_id:
+                    continue
                 finding_id = int(existing[0])
                 old_status = existing[1]
                 next_status = "open" if old_status == "resolved" else old_status
@@ -476,16 +498,42 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
         resolved = 0
         if completed_tools and not result.get("operational_failures"):
             candidates = connection.execute(
-                """SELECT f.id, f.fingerprint, f.status, f.tool, previous_run.preset
+                """SELECT f.id, f.fingerprint, f.status, f.tool, previous_run.preset,
+                          f.last_seen_run_id, previous_run.result_json
                    FROM security_findings f
                    LEFT JOIN scan_runs previous_run ON previous_run.id = f.last_seen_run_id
                    WHERE f.project_id = ? AND f.status != 'resolved'""",
                 (project_id,),
             ).fetchall()
-            for finding_id, fingerprint, old_status, tool, previous_preset in candidates:
+            for finding_id, fingerprint, old_status, tool, previous_preset, last_seen_run_id, previous_result_json in candidates:
                 if fingerprint in seen:
                     continue
+                if last_seen_run_id is not None and int(last_seen_run_id) >= scan_run_id:
+                    continue
                 if tool not in completed_tools:
+                    continue
+                current_version = result.get("profile_version")
+                if current_version == 2:
+                    if tool not in ACTIVE_TOOLS or not previous_result_json:
+                        continue
+                    try:
+                        previous_result = json.loads(previous_result_json)
+                    except (TypeError, ValueError):
+                        continue
+                    current_coverage = (result.get("detector_coverage") or {}).get(tool)
+                    previous_coverage = (previous_result.get("detector_coverage") or {}).get(tool)
+                    if (
+                        previous_result.get("profile_version") != current_version
+                        or not result.get("source_scope")
+                        or previous_result.get("source_scope") != result["source_scope"]
+                        or not isinstance(current_coverage, dict)
+                        or current_coverage.get("complete") is not True
+                        or not current_coverage.get("source_scope")
+                        or not (current_coverage.get("config_digest") or current_coverage.get("query_digest"))
+                        or current_coverage != previous_coverage
+                    ):
+                        continue
+                elif current_version is not None:
                     continue
                 highest_observed_rank = PRESET_RANK.get(str(previous_preset), -1)
                 occurrence_presets = connection.execute(

@@ -10,9 +10,11 @@ and prevent one project from reading another project's results.
 
 1. Browsers and API clients are untrusted. Authentication, CSRF validation,
    project RBAC, rate limits, and request-size limits apply at the dashboard.
-2. Imported repositories and uploaded files are hostile. Static scanners run in
-   the worker; dynamic execution belongs on an isolated Docker/Trivy runtime
-   without production credentials or unrestricted internal-network access.
+2. Imported repositories and uploaded files are hostile. Standard static
+   scanners run in the standard worker. The opt-in Deep worker streams the
+   admitted source snapshot into a disposable CodeQL child container. That
+   child is unprivileged, read-only, offline, resource-bounded, and receives no
+   application credentials or host filesystem mounts.
 3. Redis carries transient job state and logs. PostgreSQL is the durable source
    for identities, authorization, projects, scan summaries, and audit events.
 4. Run artifacts are immutable evidence addressed by project and scan run.
@@ -30,7 +32,7 @@ and prevent one project from reading another project's results.
 | Disabled user keeps an old session | Opaque server-side sessions join the current active user and role and can be revoked. |
 | Oversized body exhausts WAF memory | A body-size middleware runs before WAF request buffering. |
 | Webhook targets an internal service | HTTPS, strict global-address validation, redirect denial, bounded timeout, and bounded retries. |
-| Deep scan runs on the dashboard host | Deep evidence fails closed unless an isolated Docker and Trivy runtime is available. |
+| Deep scan lacks a pinned CodeQL image, trusted suites, or registered Deep worker | Startup/readiness and request admission fail; incomplete CodeQL evidence produces `ERROR`, never `ALLOWED`. |
 | Malicious regex blocks the service | WAF rules are administrator-only, length-bounded, and syntax validated; deployment monitoring remains required. |
 | Tenant administrator accesses another company | Tenant IDs are carried by principals and enforced in project, user, token, scan, artifact, membership, and audit queries; cross-tenant tests exercise denial paths. |
 | Database token hashes are cracked offline | Current-format API tokens use server-keyed HMAC, explicit scopes, expiry, revocation, and last-used tracking; Migration 20 disables unclassifiable legacy rows and no legacy fallback remains. |
@@ -62,8 +64,15 @@ and prevent one project from reading another project's results.
   a production scanner fleet should obtain clone tokens from a broker instead.
 - TOTP MFA is implemented. Self-service password recovery, WebAuthn, and
   enterprise identity federation still require a reviewed identity workflow.
-- The bundled DAST probes are intentionally narrow and Python-oriented; they do
-  not replace a general web application scanner or penetration test.
+- The active scanner set does not test infrastructure configuration, container
+  images, live endpoints, or malware signatures. CodeQL cannot substitute for
+  these removed categories. Optional YARA matches indicate a signature match,
+  not confirmed malware.
+- The trusted Deep-worker supervisor has database, evidence-signing, and local
+  Docker-daemon access so it can launch disposable CodeQL children. The hostile
+  source and CodeQL process do not receive those capabilities, but compromise
+  of the Python supervisor would cross this boundary. A production design
+  should replace the socket with a narrow job broker and a separate signer.
 - A database superuser can disable triggers or replace both audit data and the
   application-held audit key. Export chain heads and structured events to an
   independently administered SIEM before relying on them for regulated

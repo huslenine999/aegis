@@ -26,7 +26,6 @@ from app import (
 )
 from app.routes import artifact_routes
 from app.cli import run_scanner_command
-from app.scanners import safety_report_is_complete
 from app.resource_budgets import BoundedFindingList, ResourceLimitError
 from app.safe_output import SafeOutputRoot
 
@@ -155,6 +154,22 @@ def test_scanner_stdout_file_transport_uses_windows_safe_pipe_path(
     assert report.read_bytes() == b"{}"
 
 
+def test_scanner_stdout_file_transport_can_stream_stdin(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"admitted source")
+    report = tmp_path / "report.txt"
+
+    with source.open("rb") as stdin:
+        result = resource_budgets.run_bounded_subprocess_stdout_to_file(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            report,
+            stdin=stdin,
+        )
+
+    assert result.returncode == 0
+    assert report.read_bytes() == b"admitted source"
+
+
 def test_scanner_findings_and_json_reports_are_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -176,13 +191,6 @@ def test_scanner_findings_and_json_reports_are_bounded(
         {"rule": "one"}
     ]
 
-
-def test_safety_report_validation_rejects_incomplete_json():
-    assert safety_report_is_complete([])
-    assert safety_report_is_complete({"vulnerabilities": []})
-    assert safety_report_is_complete({"affected_packages": {}})
-    assert not safety_report_is_complete({"status": "error"})
-    assert not safety_report_is_complete({"vulnerabilities": ["truncated"]})
 
 
 def test_s3_artifact_stream_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

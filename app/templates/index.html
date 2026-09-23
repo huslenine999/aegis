@@ -951,7 +951,7 @@
                 <div class="sidebar-footer">
                     <a href="/health" class="sidebar-health">
                         <span class="health-orbit" aria-hidden="true"><i></i></span>
-                        <span><strong>All systems nominal</strong><small>7 services online</small></span>
+                        <span><strong>Service status</strong><small>View health</small></span>
                     </a>
                     <button id="uxThreatLabBtn" class="sidebar-lab-button" type="button">
                         <span aria-hidden="true">↗</span> Open threat lab
@@ -991,7 +991,7 @@
                     <div class="overview-stat-grid" aria-label="Current security summary">
                         <div><span>Findings</span><strong id="uxOverviewFindings">0</strong></div>
                         <div><span>Blockers</span><strong id="uxOverviewBlockers">0</strong></div>
-                        <div><span>Coverage</span><strong><span id="uxOverviewScanners">0</span><small>/7</small></strong></div>
+                        <div><span>Reporting scanners</span><strong id="uxOverviewScanners">0</strong></div>
                     </div>
                     <p id="uxOverviewNextStep" class="overview-next-step">Run an audit to generate a release decision.</p>
                     <div class="modern-actions overview-actions">
@@ -1066,8 +1066,8 @@
                         <small>Requires immediate action</small>
                     </article>
                     <article class="posture-metric">
-                        <span>Scanner coverage</span>
-                        <strong><span id="uxScannerTotal">0</span><small>/7</small></strong>
+                        <span>Reporting scanners</span>
+                        <strong id="uxScannerTotal">0</strong>
                         <small>Evidence sources reporting</small>
                     </article>
                     <article class="posture-metric">
@@ -1680,39 +1680,6 @@
                 </div>
             </div>
 
-            <!-- ClamAV Antivirus Panel -->
-            <div class="card reveal" id="clamav-card" style="transition-delay: 200ms;">
-                <div class="card-title" data-i18n="clamav_panel_title">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                    CLAMAV_ANTIVIRUS
-                </div>
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;" data-i18n="clamav_panel_desc">
-                    Malware & threat signature database scanner.
-                </div>
-                <div id="clamav-summary" class="mono" style="margin-bottom: 0.5rem; font-weight: bold;">
-                    STATUS: NO_SCAN_DATA
-                </div>
-                <div class="endpoint-list" id="clamav-findings-list">
-                    <!-- Dynamic findings -->
-                </div>
-            </div>
-
-            <!-- Aegis DAST Probe Panel -->
-            <div class="card reveal" id="zap-card" style="transition-delay: 250ms;">
-                <div class="card-title" data-i18n="zap_panel_title">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                    Aegis_DAST_Probe
-                </div>
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;" data-i18n="zap_panel_desc">
-                    Dynamic Application Security Testing (DAST) crawler.
-                </div>
-                <div id="zap-summary" class="mono" style="margin-bottom: 0.5rem; font-weight: bold;">
-                    STATUS: NO_SCAN_DATA
-                </div>
-                <div class="endpoint-list" id="zap-findings-list">
-                    <!-- Dynamic findings -->
-                </div>
-            </div>
         </div>
 
         <h2 class="section-title reveal mono" data-i18n="gate_decision">> STEP 5: AUTOMATED CI/CD DEPLOYMENT GATE</h2>
@@ -1970,10 +1937,6 @@
                 legend_secure: "Secure Library",
                 legend_vulnerable: "Vulnerable Package",
                 legend_exposure: "Path of Exposure",
-                clamav_panel_title: "CLAMAV_ANTIVIRUS",
-                clamav_panel_desc: "Malware & threat signature database scanner.",
-                zap_panel_title: "Aegis_DAST_Probe",
-                zap_panel_desc: "Dynamic Application Security Testing (DAST) crawler."
             },
             ko: {
                 brand: "[ 이지스_보안_콘솔_v2.0 ]",
@@ -2066,14 +2029,10 @@
                 sim_alert_title_success: "💥 공격 성공 - 보안 취약점 노출됨",
                 sim_alert_desc_success: "웹 방화벽이 꺼져 있어 서버가 해커의 명령을 그대로 실행했습니다! 해커가 인증을 우회하거나, 서버 내 명령어를 실행하거나, 개인 파일을 탈취하는 데 성공했습니다.",
                 dependency_graph_title: "> STEP 3: 전술적 의존성 네트워크 그래프",
-                exp_dependency_graph: "🎓 전술적 의존성 네트워크: 현대 프로그램들은 수많은 오픈소스 라이브러리를 가져와 사용합니다. 만약 의존성 라이브러리에 취약점이 존재하면, 해당 경로가 해커의 침투 경로가 됩니다. 본 캔버스 노드 그래프는 패키지 간의 링크 관계를 보여주며, Safety로 분석한 취약 패키지를 황색/적색 경고광으로 나타냅니다.",
+                exp_dependency_graph: "🎓 전술적 의존성 네트워크: 현대 프로그램들은 많은 오픈소스 라이브러리를 사용합니다. 이 그래프는 의존성 관계와 OSV에서 보고한 취약 패키지를 보여줍니다.",
                 legend_secure: "안전한 라이브러리",
                 legend_vulnerable: "취약한 패키지",
                 legend_exposure: "노출 경로",
-                clamav_panel_title: "CLAMAV_백신_스캐너",
-                clamav_panel_desc: "파일 시스템의 악성코드 및 위협 서명 데이터베이스 검사기.",
-                zap_panel_title: "Aegis_DAST_동적_프로브",
-                zap_panel_desc: "모의 해킹 공격 패킷을 주입하는 동적 웹 애플리케이션 보안 테스트(DAST) 크롤러."
             }
         };
 
@@ -2281,75 +2240,6 @@
                     window.AegisUX.updateResults(data);
                 }
                 
-                const clamavSummary = document.getElementById('clamav-summary');
-                const clamavList = document.getElementById('clamav-findings-list');
-                
-                if (data.clamav) {
-                    const count = data.clamav.length;
-                    if (count > 0) {
-                        clamavSummary.innerHTML = `<span class="badge badge-danger">INFECTED</span> - ${count} threat(s) found`;
-                        clamavSummary.style.color = 'var(--danger)';
-                        
-                        clamavList.innerHTML = data.clamav.map(f => `
-                            <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
-                                <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                                    <span class="mono" style="color: var(--danger); font-weight: bold;">[MALWARE]</span>
-                                    <span class="link" style="word-break: break-all;">${escapeHtml(String(f.filename || '').split('/').pop())}</span>
-                                    <span class="badge badge-danger">${escapeHtml(f.virus)}</span>
-                                </div>
-                                <div class="explainer-subtext mono" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                                    ${escapeHtml(f.description)}
-                                </div>
-                            </div>
-                        `).join('');
-                    } else {
-                        clamavSummary.innerHTML = `<span class="badge badge-success">CLEAN</span> - No threats found`;
-                        clamavSummary.style.color = 'var(--primary)';
-                        clamavList.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">Codebase analyzed. No malware signatures matched.</div>`;
-                    }
-                } else {
-                    clamavSummary.innerText = 'STATUS: NO_SCAN_DATA';
-                    clamavList.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">Run policy scan to collect antivirus metrics.</div>`;
-                }
-                
-                const zapSummary = document.getElementById('zap-summary');
-                const zapList = document.getElementById('zap-findings-list');
-                const zapCard = document.getElementById('zap-card');
-                
-                if (data.zap) {
-                    const exposedCount = data.zap.filter(f => f.status === 'EXPOSED').length;
-                    const mitigatedCount = data.zap.filter(f => f.status === 'MITIGATED').length;
-                    
-                    if (exposedCount > 0) {
-                        zapSummary.innerHTML = `<span class="badge badge-danger">VULNERABLE</span> - ${exposedCount} exposed routes`;
-                        zapSummary.style.color = 'var(--danger)';
-                        if (zapCard) zapCard.classList.add('shake');
-                    } else {
-                        zapSummary.innerHTML = `<span class="badge badge-success">MITIGATED</span> - All routes shielded`;
-                        zapSummary.style.color = 'var(--primary)';
-                        if (zapCard) zapCard.classList.remove('shake');
-                    }
-                    
-                    zapList.innerHTML = data.zap.map(f => {
-                        const isExposed = f.status === 'EXPOSED';
-                        const badgeClass = isExposed ? 'badge-danger' : 'badge-success';
-                        return `
-                            <div class="endpoint-item" style="flex-direction: column; align-items: stretch;">
-                                <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                                    <span class="method">GET</span>
-                                    <span class="link">${escapeHtml(f.route)}</span>
-                                    <span class="badge ${badgeClass}">${escapeHtml(f.status)}</span>
-                                </div>
-                                <div class="explainer-subtext mono" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                                    ${escapeHtml(f.vuln_type)}: ${escapeHtml(f.description)}
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                } else {
-                    zapSummary.innerText = 'STATUS: NO_SCAN_DATA';
-                    zapList.innerHTML = `<div style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">Run policy scan to initiate Aegis DAST Probe crawler.</div>`;
-                }
             } catch (e) {
                 console.error("Error loading scan results: ", e);
             }

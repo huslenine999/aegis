@@ -9,7 +9,6 @@ from ..audit import list_audit_events, verify_audit_chain
 from ..database import REDIS_AVAILABLE, SCANS_DIR, get_connection, redis_client
 from ..github_integration import github_enabled
 from ..observability import recent_requests
-from ..sandbox import is_docker_available
 from ..web_common import DEMO_LAB_ENABLED, require_access, templates
 
 router = APIRouter()
@@ -56,9 +55,7 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
         "demo_lab_enabled": DEMO_LAB_ENABLED,
         "scanner_quick": "ready",
         "scanner_standard": "ready" if shutil.which("semgrep") else "semgrep unavailable",
-        "scanner_deep": "ready"
-        if shutil.which("trivy") and is_docker_available()
-        else "requires isolated Docker and Trivy",
+        "scanner_deep": "requires an isolated CodeQL runtime",
     }
 
 

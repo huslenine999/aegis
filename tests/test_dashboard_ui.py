@@ -2,6 +2,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "app" / "templates" / "index.html"
@@ -72,8 +74,9 @@ def test_scan_controlled_values_are_not_written_to_html_sinks():
     assert "msg.innerHTML = text" not in html
     assert "content.innerHTML += text.charAt(i)" not in html
     assert "<span>${text}</span>" not in html
-    for field in ("f.route", "f.status", "f.vuln_type", "f.description", "f.virus"):
-        assert f"escapeHtml({field})" in html
+    assert "f.virus" not in html
+    assert "clamav-card" not in html
+    assert "zap-card" not in html
 
 
 def test_report_matches_workbench_design_contract():
@@ -104,6 +107,26 @@ def test_report_distinguishes_incomplete_scans_from_allowed_decisions():
     assert "final_status == 'ALLOWED'" in html
     assert "status === 'ERROR' || status !== 'ALLOWED'" in html
     assert "Relative severity signal; not a probability." in html
+
+
+def test_report_displays_escaped_codeql_data_flow_without_javascript():
+    env = Environment(loader=FileSystemLoader(REPORT_TEMPLATE.parent), autoescape=select_autoescape(["html"]))
+    html = env.get_template(REPORT_TEMPLATE.name).render(
+        results=[{
+            "tool": "CodeQL", "status": "FAIL", "total_issues": 1, "blocking_issues": 1,
+            "examples": [{
+                "severity": "HIGH", "issue_text": "SQL injection <script>alert(1)</script>",
+                "test_id": "py/sql-injection", "filename": "app.py", "line_number": 42,
+                "code_flows": [[{"filename": "input.py", "line_number": 5, "message": "Untrusted input"},
+                                {"filename": "app.py", "line_number": 42, "message": "Query sink"}]],
+            }],
+        }],
+        final_status="BLOCKED", reason="CodeQL finding", exploitability_score=80,
+    )
+    assert "SQL injection &lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "input.py" in html and "Query sink" in html
+    assert "Source-to-sink path" in html
+    assert "<script>alert(1)</script>" not in html
 
 
 def test_operations_and_project_pages_have_accessible_status_regions():

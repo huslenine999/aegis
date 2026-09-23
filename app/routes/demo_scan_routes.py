@@ -2,9 +2,7 @@ import asyncio
 import json
 import logging
 import os
-import random
 import re
-import sys
 import time
 import uuid
 
@@ -16,7 +14,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.datastructures import UploadFile
 from werkzeug.utils import secure_filename
 
@@ -34,11 +32,6 @@ from ..reporting import (
     calculate_exploitability_score,
     load_dependency_tree,
     load_json_report,
-)
-from ..sandbox import (
-    get_active_sandbox_container,
-    get_sandbox_logs,
-    get_sandbox_stats,
 )
 from ..scan_engine import ScanJobPayload
 from ..version import get_package_version
@@ -148,31 +141,23 @@ async def save_waf_rules(request: Request):
     dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
 )
 def get_scan_results():
-    clamav = load_json_report(SCANS_DIR / "clamav-report.json")
-    zap = load_json_report(SCANS_DIR / "zap-report.json")
     osv = load_json_report(SCANS_DIR / "osv-report.json")
     ruff = load_json_report(SCANS_DIR / "ruff-report.json")
     semgrep = load_json_report(SCANS_DIR / "semgrep-report.json")
-    safety = load_json_report(SCANS_DIR / "safety-report.json")
-    trivy = load_json_report(SCANS_DIR / "trivy-report.json")
+    codeql = load_json_report(SCANS_DIR / "codeql-report.json")
     secrets = load_json_report(SCANS_DIR / "secrets-report.json")
     yara = load_json_report(SCANS_DIR / "yara-report.json")
-    iac = load_json_report(SCANS_DIR / "iac-report.json")
     
     score = calculate_exploitability_score(SCANS_DIR, web_common.WAF_ENABLED)
     
-    has_run = any(report is not None for report in [ruff, semgrep, osv, safety, trivy, secrets, yara, clamav, zap, iac])
+    has_run = any(report is not None for report in [ruff, semgrep, osv, codeql, secrets, yara])
     results = analyze_report_set({
         "ruff": ruff,
         "semgrep": semgrep,
-        "safety": safety,
         "osv": osv,
-        "trivy": trivy,
+        "codeql": codeql,
         "secrets": secrets,
         "yara": yara,
-        "clamav": clamav,
-        "zap": zap,
-        "iac": iac,
     })
     decision = evaluate_policy_results(results)
     is_blocked = has_run and decision["status"] != "ALLOWED"
@@ -194,16 +179,12 @@ def get_scan_results():
         sandbox_status = sandbox_report.get("status", "simulated_fallback")
 
     return {
-        "clamav": clamav,
-        "zap": zap,
         "osv": osv,
         "ruff": ruff,
         "semgrep": semgrep,
-        "safety": safety,
-        "trivy": trivy,
+        "codeql": codeql,
         "secrets": secrets,
         "yara": yara,
-        "iac": iac,
         "exploitability_score": score,
         "risk_index": score,
         "waf_enabled": web_common.WAF_ENABLED,
@@ -226,23 +207,6 @@ def get_scan_results():
     dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
 )
 def get_dependency_graph():
-    vulnerable_packages = set()
-    report = load_json_report(SCANS_DIR / "safety-report.json")
-    if isinstance(report, dict) and "vulnerabilities" in report:
-        for vulnerability in report["vulnerabilities"]:
-            package = vulnerability.get("package_name") or vulnerability.get("package")
-            if package:
-                vulnerable_packages.add(package.lower())
-    elif isinstance(report, list):
-        for vulnerability in report:
-            package = vulnerability.get("package_name") or vulnerability.get("package")
-            if package:
-                vulnerable_packages.add(package.lower())
-    elif isinstance(report, dict) and "affected_packages" in report:
-        vulnerable_packages.update(
-            package.lower() for package in report["affected_packages"]
-        )
-
     osv_vulnerabilities: dict[str, list[dict]] = {}
     osv_findings = load_json_report(SCANS_DIR / "osv-report.json")
     if isinstance(osv_findings, list):
@@ -280,9 +244,7 @@ def get_dependency_graph():
             link_key = (parent_id, pkg_key)
             
             pkg_lower = pkg_key.lower().replace("_", "-")
-            is_vuln = (pkg_lower in vulnerable_packages or 
-                       pkg_key.lower() in vulnerable_packages or 
-                       pkg_lower in osv_vulnerabilities or 
+            is_vuln = (pkg_lower in osv_vulnerabilities or
                        pkg_key.lower() in osv_vulnerabilities)
             
             vuln_details = osv_vulnerabilities.get(pkg_lower) or osv_vulnerabilities.get(pkg_key.lower()) or []
@@ -482,8 +444,6 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
         })
         
     # 3. Stream updates
-    metrics_task = asyncio.create_task(stream_telemetry_metrics_ws(websocket, job_id))
-    
     try:
         while True:
             # Non-blocking poll for pubsub messages
@@ -497,186 +457,5 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        metrics_task.cancel()
         pubsub.unsubscribe(f"job_channel:{job_id}")
         pubsub.close()
-
-def _job_sandbox_container(job_id: str) -> str | None:
-    value = redis_client.hget(f"job:{job_id}", "sandbox_container_id")
-    if isinstance(value, bytes):
-        value = value.decode("utf-8", errors="ignore")
-    if not isinstance(value, str) or not value:
-        return None
-    if not value.startswith("aegis-sandbox-container-"):
-        return None
-    return value
-
-
-async def stream_telemetry_metrics_ws(websocket: WebSocket, job_id: str):
-    sent_logs = set()
-    import random
-    
-    while True:
-        try:
-            container_name = _job_sandbox_container(job_id)
-            if container_name:
-                stats = get_sandbox_stats(container_name)
-                cpu = stats.get("cpu", 0.0)
-                memory = stats.get("memory", 0.0)
-                
-                cpu = max(0.0, min(100.0, cpu + random.uniform(-0.5, 0.5)))
-                memory = max(0.0, min(100.0, memory + random.uniform(-0.2, 0.2)))
-                latency = random.uniform(2.0, 5.0)
-                
-                logs = get_sandbox_logs(container_name, tail=5)
-                log_entries = []
-                for line in logs:
-                    if line not in sent_logs:
-                        sent_logs.add(line)
-                        if "GET " in line or "POST " in line:
-                            match = re.search(r'"(GET|POST|PUT|DELETE)\s+([^\s?]+)(\?[^\s"]*)?\s+HTTP', line)
-                            if match:
-                                method = match.group(1)
-                                route = match.group(2)
-                                params = match.group(3) or ""
-                                ip_match = re.match(r'^([0-9.]+)', line)
-                                src_ip = ip_match.group(1) if ip_match else "172.17.0.1"
-                                status_match = re.search(r'HTTP/[0-9.]+"\s+(\d+)', line)
-                                status = status_match.group(1) if status_match else "200"
-                                
-                                log_entries.append({
-                                    "text": f"[PACKET] INBOUND TCP: Src={src_ip} Dst=127.0.0.1:5001 | {method} {route}{params} [Status={status}]",
-                                    "color": "var(--primary)" if status != "403" else "var(--secondary)"
-                                })
-                            else:
-                                log_entries.append({
-                                    "text": f"[INFO] container: {line}",
-                                    "color": "var(--text-muted)"
-                                })
-                        else:
-                            log_entries.append({
-                                "text": f"[INFO] container: {line}",
-                                "color": "var(--text-muted)"
-                            })
-                
-
-                await websocket.send_json({
-                    "type": "telemetry",
-                    "cpu": round(cpu, 1),
-                    "memory": round(memory, 1),
-                    "latency": round(latency, 1),
-                    "logs": log_entries
-                })
-            else:
-                cpu = max(5.0, min(95.0, 12.5 + random.uniform(-2.0, 2.0)))
-                memory = max(5.0, min(95.0, 34.2 + random.uniform(-0.5, 0.5)))
-                latency = max(1.0, min(5000.0, 15.0 + random.uniform(-1.0, 1.0)))
-                
-                log_entries = []
-                if random.random() < 0.2:
-                    syslog_templates = [
-                        { "type": "INFO", "msg": "kernel: CPU temperature nominal (39C)", "color": "var(--text-muted)" },
-                        { "type": "OK", "msg": "cron: PID 4519 - ran job: clean_tmp_downloads", "color": "var(--text-muted)" },
-                        { "type": "INFO", "msg": "net_daemon: Interface eth0 link up - 1000mbps", "color": "var(--text-muted)" },
-                        { "type": "WARN", "msg": "auth_daemon: SSH login failed for invalid user root from 185.220.101.4", "color": "var(--secondary)" },
-                        { "type": "INFO", "msg": "sqlite3: connection pool initialized (8 threads)", "color": "var(--text-muted)" },
-                    ]
-                    tpl = random.choice(syslog_templates)
-                    log_entries.append({
-                        "text": f"[{tpl['type']}] {tpl['msg']}",
-                        "color": tpl['color']
-                    })
-                    
-                await websocket.send_json({
-                    "type": "telemetry",
-                    "cpu": round(cpu, 1),
-                    "memory": round(memory, 1),
-                    "latency": round(latency, 1),
-                    "logs": log_entries
-                })
-            await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            logger.debug("Legacy telemetry sample failed: %s", exc)
-            await asyncio.sleep(1.0)
-
-# Legacy /stream-telemetry SSE endpoint
-@router.get("/stream-telemetry", dependencies=[Depends(require_demo_boundary)])
-async def stream_telemetry(principal=Depends(require_access("admin"))):
-    async def generate_stream():
-        sent_logs = set()
-        iterations = 0
-        while True:
-            if "pytest" in sys.modules and iterations >= 2:
-                break
-            iterations += 1
-            
-            container_name = get_active_sandbox_container()
-            if container_name:
-                stats = get_sandbox_stats(container_name)
-                cpu = stats.get("cpu", 0.0)
-                memory = stats.get("memory", 0.0)
-                cpu = max(0.0, min(100.0, cpu + random.uniform(-0.5, 0.5)))
-                memory = max(0.0, min(100.0, memory + random.uniform(-0.2, 0.2)))
-                latency = random.uniform(2.0, 5.0)
-                
-                logs = get_sandbox_logs(container_name, tail=15)
-                log_entries = []
-                for line in logs:
-                    if line not in sent_logs:
-                        sent_logs.add(line)
-                        if "GET " in line or "POST " in line:
-                            match = re.search(r'"(GET|POST|PUT|DELETE)\s+([^\s?]+)(\?[^\s"]*)?\s+HTTP', line)
-                            if match:
-                                method = match.group(1)
-                                route = match.group(2)
-                                params = match.group(3) or ""
-                                ip_match = re.match(r'^([0-9.]+)', line)
-                                src_ip = ip_match.group(1) if ip_match else "172.17.0.1"
-                                status_match = re.search(r'HTTP/[0-9.]+"\s+(\d+)', line)
-                                status = status_match.group(1) if status_match else "200"
-                                log_entries.append({
-                                    "text": f"[PACKET] INBOUND TCP: Src={src_ip} Dst=127.0.0.1:5001 | {method} {route}{params} [Status={status}]",
-                                    "color": "var(--primary)" if status != "403" else "var(--secondary)"
-                                })
-                            else:
-                                log_entries.append({
-                                    "text": f"[INFO] container: {line}",
-                                    "color": "var(--text-muted)"
-                                })
-                        else:
-                            log_entries.append({
-                                "text": f"[INFO] container: {line}",
-                                "color": "var(--text-muted)"
-                            })
-
-            else:
-                cpu = max(5.0, min(95.0, 12.5 + random.uniform(-2.0, 2.0)))
-                memory = max(5.0, min(95.0, 34.2 + random.uniform(-0.5, 0.5)))
-                latency = max(1.0, min(5000.0, 15.0 + random.uniform(-1.0, 1.0)))
-                log_entries = []
-                if random.random() < 0.2:
-                    syslog_templates = [
-                        { "type": "INFO", "msg": "kernel: CPU temperature nominal (39C)", "color": "var(--text-muted)" },
-                        { "type": "OK", "msg": "cron: PID 4519 - ran job: clean_tmp_downloads", "color": "var(--text-muted)" },
-                        { "type": "INFO", "msg": "net_daemon: Interface eth0 link up - 1000mbps", "color": "var(--text-muted)" },
-                        { "type": "WARN", "msg": "auth_daemon: SSH login failed for invalid user root from 185.220.101.4", "color": "var(--secondary)" },
-                        { "type": "INFO", "msg": "sqlite3: connection pool initialized (8 threads)", "color": "var(--text-muted)" },
-                    ]
-                    tpl = random.choice(syslog_templates)
-                    log_entries.append({
-                        "text": f"[{tpl['type']}] {tpl['msg']}",
-                        "color": tpl['color']
-                    })
-
-            payload = {
-                "cpu": round(cpu, 1),
-                "memory": round(memory, 1),
-                "latency": round(latency, 1),
-                "logs": log_entries
-            }
-            yield f"data: {json.dumps(payload)}\n\n"
-            await asyncio.sleep(1.0)
-            
-    return StreamingResponse(generate_stream(), media_type="text/event-stream")

@@ -157,13 +157,13 @@ def test_worker_mirrors_latest_reports_without_copying_run_workspace(tmp_path, m
     monkeypatch.setattr(app_worker, "SCANS_DIR", latest_dir)
 
     (source_dir / "ruff-report.json").write_text("[]")
-    (source_dir / "sandbox-status.json").write_text('{"status": "simulated_fallback"}')
+    (source_dir / "codeql-report.json").write_text('{"status": "completed"}')
     (source_dir / "internal.log").write_text("do not copy")
 
     app_worker._mirror_latest_reports(source_dir)
 
     assert (latest_dir / "ruff-report.json").read_text() == "[]"
-    assert (latest_dir / "sandbox-status.json").exists()
+    assert (latest_dir / "codeql-report.json").exists()
     assert not (latest_dir / "internal.log").exists()
 
 
@@ -189,6 +189,7 @@ def test_container_runtime_is_hardened_and_persistent():
     assert "FROM python:3.11.15-slim-bookworm@sha256:" in dockerfile
     assert "uv==0.11.25" in dockerfile
     assert "uv sync --locked" in dockerfile
+    assert "COPY --from=docker-cli /usr/local/bin/docker" in dockerfile
     assert "/usr/local/bin/python -m pip uninstall -y uv" in dockerfile
     assert "USER aegis" in dockerfile
     assert "HEALTHCHECK" in dockerfile
@@ -202,6 +203,11 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["redis"]["read_only"] is True
     assert services["dashboard"]["read_only"] is True
     assert services["worker"]["read_only"] is True
+    assert services["worker"]["environment"]["AEGIS_ISOLATED_WORKER"] == "false"
+    assert services["deep-worker"]["profiles"] == ["deep"]
+    assert services["deep-worker"]["environment"]["AEGIS_ISOLATED_WORKER"] == "true"
+    assert services["deep-worker"]["environment"]["AEGIS_CODEQL_IMAGE"] == "${AEGIS_CODEQL_IMAGE:-}"
+    assert "/var/run/docker.sock:/var/run/docker.sock" in services["deep-worker"]["volumes"]
     assert services["dashboard"]["environment"]["AEGIS_DATA_DIR"] == "/data"
     assert services["dashboard"]["environment"]["AEGIS_ENV"] == "${AEGIS_ENV:-production}"
     assert services["dashboard"]["environment"]["AEGIS_REQUIRE_REDIS"] == "true"

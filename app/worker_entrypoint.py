@@ -1,8 +1,11 @@
 import os
+import shutil
+import subprocess
 import sys
 import socket
 
 from .evidence import evidence_public_key
+from .codeql_scanner import SUPPORTED_LANGUAGES, operator_runtime_configuration
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -28,11 +31,22 @@ def validate_worker_configuration() -> None:
         raise RuntimeError(
             "Deep scans require AEGIS_ISOLATED_WORKER=true on the worker."
         )
-    safety_enabled = os.environ.get("AEGIS_ENABLE_SAFETY", "false").lower() in TRUE_VALUES
-    if safety_enabled and not os.environ.get("SAFETY_API_KEY"):
-        raise RuntimeError(
-            "AEGIS_ENABLE_SAFETY requires a licensed SAFETY_API_KEY on the worker."
-        )
+    if isolated:
+        image, suites = operator_runtime_configuration()
+        if set(suites) != SUPPORTED_LANGUAGES:
+            raise RuntimeError("Deep workers require trusted Python and JavaScript CodeQL suites.")
+        if not shutil.which("docker"):
+            raise RuntimeError("Deep workers require the Docker CLI.")
+        try:
+            subprocess.run(
+                ["docker", "image", "inspect", image],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError("The pinned CodeQL image is unavailable to the Deep worker.") from exc
     if os.environ.get("AEGIS_ENV", "development").lower() == "production":
         exposed = sorted(
             name for name in FORBIDDEN_PRODUCTION_SECRETS if os.environ.get(name)
@@ -47,10 +61,11 @@ def validate_worker_configuration() -> None:
 def main() -> None:
     validate_worker_configuration()
     isolated = os.environ.get("AEGIS_ISOLATED_WORKER", "false").lower() in TRUE_VALUES
-    queues = ["default", "deep"] if isolated else ["default"]
+    queues = ["deep"] if isolated else ["default"]
     arguments = [
         "rq", "worker", "--name",
         f"aegis-{'isolated' if isolated else 'standard'}-{socket.gethostname()}",
+        "--worker-ttl", "900", "--maintenance-interval", "60",
         *sys.argv[1:], *queues,
     ]
     os.execvp(arguments[0], arguments)

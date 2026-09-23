@@ -20,6 +20,7 @@ from app import (
     github_lifecycle,
     projects,
     worker,
+    worker_entrypoint,
 )
 from app.artifact_storage import run_directory
 from app.evidence import sign_manifest, verify_manifest
@@ -398,6 +399,33 @@ def test_worker_fails_startup_for_invalid_signing_or_isolation_configuration(
     with pytest.raises(RuntimeError, match="AEGIS_EVIDENCE_SIGNING_KEY"):
         validate_worker_configuration()
 
+
+def test_isolated_worker_preflights_pinned_codeql_runtime(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "development")
+    monkeypatch.setenv(
+        "AEGIS_EVIDENCE_SIGNING_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
+    monkeypatch.setenv("AEGIS_ALLOW_DEEP_SCANS", "true")
+    monkeypatch.setenv("AEGIS_ISOLATED_WORKER", "true")
+    monkeypatch.setattr(
+        worker_entrypoint,
+        "operator_runtime_configuration",
+        lambda: ("aegis-codeql@sha256:" + "a" * 64, {
+            "python": "python-suite", "javascript-typescript": "javascript-suite"
+        }),
+    )
+    monkeypatch.setattr(worker_entrypoint.shutil, "which", lambda _: "/usr/bin/docker")
+    inspected = []
+    monkeypatch.setattr(
+        worker_entrypoint.subprocess,
+        "run",
+        lambda command, **kwargs: inspected.append(command),
+    )
+
+    validate_worker_configuration()
+
+    assert inspected[0][:3] == ["docker", "image", "inspect"]
+
     monkeypatch.setenv(
         "AEGIS_EVIDENCE_SIGNING_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     )
@@ -406,11 +434,6 @@ def test_worker_fails_startup_for_invalid_signing_or_isolation_configuration(
     with pytest.raises(RuntimeError, match="AEGIS_ISOLATED_WORKER"):
         validate_worker_configuration()
 
-    monkeypatch.setenv("AEGIS_ALLOW_DEEP_SCANS", "false")
-    monkeypatch.setenv("AEGIS_ENABLE_SAFETY", "true")
-    monkeypatch.delenv("SAFETY_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="SAFETY_API_KEY"):
-        validate_worker_configuration()
 
 
 def test_production_workers_reject_cross_boundary_secrets(monkeypatch):
@@ -617,20 +640,12 @@ def test_github_annotations_are_repository_relative_and_line_addressable(tmp_pat
             "start": {"line": 8},
             "extra": {"message": "Unsafe command", "severity": "ERROR"},
         }]},
-        "iac": {"findings": [{
-            "path": "app/main.py",
-            "start_line": 9,
-            "end_line": 11,
-            "rule_id": "CKV_TF_1",
-            "title": "IaC configuration issue",
+        "codeql": {"findings": [{
+            "filename": "app/main.py",
+            "line_number": 9,
+            "rule_id": "py/command-injection",
+            "issue_text": "Unsafe data flow",
             "severity": "HIGH",
-        }], "unmanaged_suppressions": [{
-            "path": "app/main.py",
-            "start_line": 12,
-            "end_line": 12,
-            "rule_id": "CKV_TF_2",
-            "title": "Inline Checkov suppression",
-            "source": "repository-inline-checkov",
         }]},
         "secrets": {"results": {"../outside.txt": [{
             "type": "Secret Keyword",
@@ -638,11 +653,10 @@ def test_github_annotations_are_repository_relative_and_line_addressable(tmp_pat
         }]}},
     }, repository)
 
-    assert [item["path"] for item in annotations] == ["app/main.py"] * 4
-    assert [item["start_line"] for item in annotations] == [7, 8, 9, 12]
-    assert annotations[2]["end_line"] == 11
+    assert [item["path"] for item in annotations] == ["app/main.py"] * 3
+    assert [item["start_line"] for item in annotations] == [7, 8, 9]
     assert annotations[1]["annotation_level"] == "failure"
-    assert annotations[3]["annotation_level"] == "warning"
+    assert annotations[2]["annotation_level"] == "failure"
 
 
 def test_scan_run_persists_github_pull_request_context(tmp_path, monkeypatch):

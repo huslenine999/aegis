@@ -8,21 +8,9 @@ import sys
 import webbrowser
 from pathlib import Path
 
-# Re-export scanner & sandbox primitives for backward compatibility and test patching
+# Re-export scanner primitives for existing CLI integrations.
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
-from .sandbox import (
-    build_sandbox_image,
-    create_sandbox_network,
-    is_docker_available,
-    run_sandbox_container,
-    run_trivy_scan,
-    scaffold_sandbox_context,
-    stop_and_cleanup_sandbox,
-    wait_for_container,
-)
 from .scanners import (
-    run_clamav_scan as shared_run_clamav_scan,
-    run_dast_scan as shared_run_dast_scan,
     run_yara_scan as shared_run_yara_scan,
 )
 
@@ -84,11 +72,9 @@ from .cli_runner import (
     _execute_scan,
     build_scan_summary,
     execute_scan,
-    find_free_host_port,
     install_hook,
     log_scanner_event,
     record_timing,
-    run_dast_scan,
     run_scanner_command,
     set_fail_on_env,
     timed_step,
@@ -122,13 +108,10 @@ __all__ = [
     "_wait_for_dashboard",
     "_write_environment_file",
     "apply_suppressions",
-    "build_sandbox_image",
     "build_scan_summary",
     "config_value",
     "create_demo_target",
-    "create_sandbox_network",
     "execute_scan",
-    "find_free_host_port",
     "find_report_file",
     "format_cell",
     "format_duration",
@@ -136,7 +119,6 @@ __all__ = [
     "get_config_section",
     "hmac_compare_digest",
     "install_hook",
-    "is_docker_available",
     "is_excluded_path",
     "log_scanner_event",
     "main",
@@ -149,33 +131,25 @@ __all__ = [
     "record_timing",
     "resolve_exclude_paths",
     "run_backup",
-    "run_dast_scan",
     "run_demo",
     "run_doctor",
     "run_policy_engine",
     "run_report",
     "run_restore",
-    "run_sandbox_container",
     "run_scanner_command",
     "run_stack_logs",
     "run_start",
     "run_stop",
-    "run_trivy_scan",
     "run_upgrade",
     "run_verify_evidence",
-    "scaffold_sandbox_context",
     "set_fail_on_env",
-    "shared_run_clamav_scan",
-    "shared_run_dast_scan",
     "shared_run_yara_scan",
     "should_skip_path",
-    "stop_and_cleanup_sandbox",
     "suppression_matches",
     "timed_step",
     "uninstall_hook",
     "utc_timestamp",
     "validate_fail_on",
-    "wait_for_container",
     "write_json",
     "write_sarif_report",
 ]
@@ -291,7 +265,9 @@ def main():
 
     scan_parser = subparsers.add_parser("scan", help="Run in-process security audit scan")
     scan_parser.add_argument("path", nargs="?", default=".", help="Target path to scan (defaults to current directory)")
-    scan_parser.add_argument("--no-docker", action="store_true", help="Skip Docker sandbox, Trivy, and DAST scans")
+    scan_parser.add_argument("--no-docker", action="store_true", help="Removed option; use --preset quick")
+    scan_parser.add_argument("--preset", choices=("quick", "standard", "deep"), help="Scan profile (default: standard)")
+    scan_parser.add_argument("--yara", action="store_true", help="Run optional YARA signature analysis")
     scan_parser.add_argument("--timeout", type=int, default=None, help="Per-tool timeout in seconds")
     scan_parser.add_argument("--output", help="Directory for generated scan reports")
     scan_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON summary to stdout")
@@ -370,6 +346,8 @@ def main():
                         summary = execute_scan(
                             args.path,
                             use_docker=not args.no_docker,
+                            preset=args.preset,
+                            enable_yara=args.yara,
                             tool_timeout=args.timeout,
                             output_dir=args.output,
                             json_output=args.json,
@@ -390,6 +368,8 @@ def main():
             return execute_scan(
                 args.path,
                 use_docker=not args.no_docker,
+                preset=args.preset,
+                enable_yara=args.yara,
                 tool_timeout=args.timeout,
                 output_dir=args.output,
                 fail_on=args.fail_on,

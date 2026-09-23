@@ -1,20 +1,11 @@
-import json
 import os
-import re
 import shutil
 import sys
 import tempfile
-from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-from .resource_budgets import (
-    BoundedFindingList,
-    ResourceLimitError,
-    read_bounded_text,
-    resource_budgets,
-    run_bounded_subprocess,
-)
+from .resource_budgets import BoundedFindingList
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -145,31 +136,6 @@ def configure_semgrep_environment(environment: dict[str, str] | None = None):
         pass
 
 
-def safety_report_is_complete(report: Any) -> bool:
-    """Accept only Safety schemas that policy_engine can fully interpret."""
-    if isinstance(report, list):
-        return all(isinstance(item, dict) for item in report)
-    if not isinstance(report, dict):
-        return False
-    vulnerabilities = report.get("vulnerabilities")
-    if vulnerabilities is not None:
-        return isinstance(vulnerabilities, list) and all(
-            isinstance(item, dict) for item in vulnerabilities
-        )
-    affected_packages = report.get("affected_packages")
-    if not isinstance(affected_packages, dict):
-        return False
-    for package_data in affected_packages.values():
-        if not isinstance(package_data, dict):
-            return False
-        package_vulnerabilities = package_data.get("vulnerabilities")
-        if not isinstance(package_vulnerabilities, list) or not all(
-            isinstance(item, dict) for item in package_vulnerabilities
-        ):
-            return False
-    return True
-
-
 def write_semgrep_rules(path: Path):
     path.parent.mkdir(exist_ok=True, parents=True)
     path.write_text(SEMGREP_RULES)
@@ -182,220 +148,6 @@ def should_skip_path(path: Path, ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS) 
 def _emit(log: LogCallback | None, message: str, level: str = "info"):
     if log:
         log(message, level)
-
-
-def _bounded_response_text(response) -> str:
-    """Read an HTTP response without buffering attacker-controlled bytes."""
-
-    budgets = resource_budgets()
-    iterator = getattr(response, "iter_content", None)
-    if callable(iterator):
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in iterator(chunk_size=budgets.stream_chunk_bytes):
-            if not chunk:
-                continue
-            chunk_bytes = chunk.encode() if isinstance(chunk, str) else bytes(chunk)
-            total += len(chunk_bytes)
-            if total > budgets.max_response_bytes:
-                raise ResourceLimitError(
-                    "DAST response exceeds the configured byte limit."
-                )
-            chunks.append(chunk_bytes)
-        return b"".join(chunks).decode("utf-8", errors="replace")
-
-    raw = getattr(response, "content", None)
-    if raw is None:
-        raw = str(getattr(response, "text", "") or "").encode("utf-8")
-    raw_bytes = raw.encode() if isinstance(raw, str) else bytes(raw)
-    if len(raw_bytes) > budgets.max_response_bytes:
-        raise ResourceLimitError("DAST response exceeds the configured byte limit.")
-    return raw_bytes.decode("utf-8", errors="replace")
-
-
-def _response_json(response, body: str | None = None) -> dict[str, Any]:
-    try:
-        value = json.loads(body) if body and body.strip() else response.json()
-    except Exception:
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _dast_exploit_observed(
-    probe_id: str,
-    response,
-    payload: str,
-    body: str | None = None,
-    baseline_data: dict[str, Any] | None = None,
-) -> bool:
-    body = body if body is not None else str(getattr(response, "text", "") or "")
-    data = _response_json(response, body)
-    if probe_id == "sql_injection":
-        result_rows = data.get("results")
-        baseline_rows = (baseline_data or {}).get("results")
-        return (
-            isinstance(result_rows, list)
-            and isinstance(baseline_rows, list)
-            and result_rows != baseline_rows
-        )
-    if probe_id == "command_injection":
-        output = str(data.get("output", body))
-        return "root:" in output or "uid=" in output
-    if probe_id == "unsafe_eval":
-        return "AEGIS_RCE_PROBE" in body or "AEGIS_RCE_PROBE" in str(data)
-    if probe_id == "path_traversal":
-        return "Flask==" in body or "fastapi==" in body
-    if probe_id == "reflected_xss":
-        return payload in body
-    if probe_id == "ssrf":
-        return data.get("status") == "success" and bool(data.get("response"))
-    return False
-
-
-def run_dast_scan(
-    target_url: str | None,
-    *,
-    internal_port: int = 5001,
-    timeout: int = 3,
-    log: LogCallback | None = None,
-) -> list[dict[str, Any]]:
-    """Run narrow probes and report exposure only when exploit effects are observed."""
-    if not target_url:
-        _emit(log, "[DAST] Skipped: no isolated target URL was available.", "muted")
-        return []
-
-    marker = "<script>window.AEGIS_XSS_PROBE=1</script>"
-    probes: list[dict[str, Any]] = [
-        {
-            "id": "sql_injection",
-            "vuln_type": "SQL Injection",
-            "route": "/user",
-            "params": {"name": "admin' OR '1'='1"},
-            "payload": "admin' OR '1'='1",
-            "description": "Injected SQL changed the returned row set.",
-        },
-        {
-            "id": "command_injection",
-            "vuln_type": "Remote Code Execution",
-            "route": "/ping",
-            "params": {"host": "127.0.0.1; cat /etc/passwd"},
-            "payload": "127.0.0.1; cat /etc/passwd",
-            "description": "Command output contained operating-system account data.",
-        },
-        {
-            "id": "unsafe_eval",
-            "vuln_type": "Unsafe Eval Injection",
-            "route": "/calculate",
-            "params": {
-                "expr": "__import__('os').popen('printf AEGIS_RCE_PROBE').read()"
-            },
-            "payload": "__import__('os').popen('printf AEGIS_RCE_PROBE').read()",
-            "description": "The response contained a marker produced by injected Python.",
-        },
-        {
-            "id": "path_traversal",
-            "vuln_type": "Path Traversal (LFI)",
-            "route": "/download",
-            "params": {"file": "../../../app/requirements.txt"},
-            "payload": "../../../app/requirements.txt",
-            "description": "The response exposed a file outside the download directory.",
-        },
-        {
-            "id": "reflected_xss",
-            "vuln_type": "Cross-Site Scripting (XSS)",
-            "route": "/xss",
-            "params": {"msg": marker},
-            "payload": marker,
-            "description": "The response reflected an executable script without escaping.",
-        },
-        {
-            "id": "ssrf",
-            "vuln_type": "Server-Side Request Forgery (SSRF)",
-            "route": "/ssrf",
-            "params": {"url": f"http://127.0.0.1:{internal_port}/health"},
-            "payload": f"http://127.0.0.1:{internal_port}/health",
-            "description": "The application fetched a loopback-only service and returned it.",
-        },
-    ]
-
-    import requests
-
-    findings = BoundedFindingList()
-    for probe in probes:
-        _emit(
-            log,
-            f"[DAST] Scanning route: {probe['route']} with a {probe['id']} probe.",
-            "muted",
-        )
-        status_code = 0
-        response = None
-        try:
-            baseline_data = None
-            if probe["id"] == "sql_injection":
-                baseline_response = requests.get(
-                    f"{target_url}{probe['route']}",
-                    params={"name": "__aegis_baseline_no_match__"},
-                    timeout=timeout,
-                    allow_redirects=False,
-                    stream=True,
-                )
-                try:
-                    baseline_body = _bounded_response_text(baseline_response)
-                    baseline_data = _response_json(baseline_response, baseline_body)
-                finally:
-                    close = getattr(baseline_response, "close", None)
-                    if callable(close):
-                        close()
-            response = requests.get(
-                f"{target_url}{probe['route']}",
-                params=probe["params"],
-                timeout=timeout,
-                allow_redirects=False,
-                stream=True,
-            )
-            status_code = int(response.status_code)
-            response_body = _bounded_response_text(response)
-            if status_code in {404, 405}:
-                status = "NOT_APPLICABLE"
-            elif status_code in {400, 401, 403, 422}:
-                status = "MITIGATED"
-            elif 200 <= status_code < 300:
-                status = (
-                    "EXPOSED"
-                    if _dast_exploit_observed(
-                        probe["id"],
-                        response,
-                        probe["payload"],
-                        response_body,
-                        baseline_data,
-                    )
-                    else "MITIGATED"
-                )
-            else:
-                status = "ERROR"
-        except requests.RequestException:
-            status = "ERROR"
-        finally:
-            close = getattr(response, "close", None)
-            if callable(close):
-                close()
-
-        _emit(
-            log,
-            f"[DAST] Result for {probe['vuln_type']}: {status} (HTTP {status_code or 'error'})",
-            "match" if status == "EXPOSED" else "info",
-        )
-        findings.append(
-            {
-                "vuln_type": probe["vuln_type"],
-                "route": probe["route"],
-                "payload": probe["payload"],
-                "description": probe["description"],
-                "status": status,
-                "response_code": status_code or None,
-            }
-        )
-    return findings
 
 
 def _is_ignored_path(path: Path, ignored_paths: set[str]) -> bool:
@@ -452,138 +204,18 @@ def run_yara_scan(
     target = Path(target_path)
     yara_rules_path = Path(rules_path) if rules_path else Path(__file__).resolve().parent.parent / "rules" / "aegis_rules.yar"
 
-    try:
-        import yara
-
-        if yara_rules_path.exists():
-            rules = yara.compile(filepath=str(yara_rules_path))
-
-            for file_path in _iter_scan_files(target, (".py",), ignored_dirs, ignored_paths):
-                try:
-                    matches = rules.match(filepath=str(file_path))
-                    for match in matches:
-                        finding = {
-                            "rule": match.rule,
-                            "filename": str(file_path),
-                            "description": match.meta.get("description", "YARA rule match"),
-                            "author": match.meta.get("author", "Aegis"),
-                        }
-                        findings.append(finding)
-                        _emit(log, f"[YARA] MATCH: {match.rule} in {file_path}", "match")
-                except Exception as exc:
-                    _emit(log, f"[YARA Error] {file_path}: {exc}", "error")
-            return findings
-    except ImportError:
-        _emit(log, "[YARA] yara-python missing. Falling back to signature scan.", "muted")
-
+    import yara
+    if not yara_rules_path.is_file():
+        raise FileNotFoundError(f"YARA rules not found: {yara_rules_path}")
+    rules = yara.compile(filepath=str(yara_rules_path))
     for file_path in _iter_scan_files(target, (".py",), ignored_dirs, ignored_paths):
-        try:
-            content = read_bounded_text(file_path, errors="ignore")
-
-            if (
-                re.search(r"eval\(\s*request\.(args|form|values)", content)
-                or re.search(r"exec\(\s*request\.(args|form|values)", content)
-                or re.search(r"subprocess\.Popen\(\s*request\.args", content)
-                or re.search(r"subprocess\.check_output\(\s*request\.args", content)
-            ):
-                findings.append({
-                    "rule": "Backdoor_Webshell",
-                    "filename": str(file_path),
-                    "description": "Detects Python webshell or remote command execution patterns",
-                    "author": "Aegis (Fallback)",
-                })
-                _emit(log, f"[YARA Fallback] MATCH: Backdoor_Webshell in {file_path}", "match")
-
-            if "base64.b64decode" in content and ("exec(" in content or "eval(" in content):
-                findings.append({
-                    "rule": "Obfuscated_Payload",
-                    "filename": str(file_path),
-                    "description": "Detects base64 obfuscation combined with execution",
-                    "author": "Aegis (Fallback)",
-                })
-                _emit(log, f"[YARA Fallback] MATCH: Obfuscated_Payload in {file_path}", "match")
-
-            has_sh = ("/bin/sh" in content) or ("/bin/bash" in content)
-            has_pty = "pty.spawn" in content
-            has_socket = "socket.socket" in content
-            has_sub = ("subprocess.Popen" in content) or ("subprocess.call" in content)
-            if (has_sh and has_pty) or (has_socket and has_sub and has_sh):
-                findings.append({
-                    "rule": "Suspicious_Shell_Spawn",
-                    "filename": str(file_path),
-                    "description": "Detects shell spawning commands, likely for reverse shells",
-                    "author": "Aegis (Fallback)",
-                })
-                _emit(log, f"[YARA Fallback] MATCH: Suspicious_Shell_Spawn in {file_path}", "match")
-        except Exception as exc:
-            _emit(log, f"[Fallback Scan Error] {file_path}: {exc}", "error")
-
-    return findings
-
-
-def run_clamav_scan(
-    target_path: str | Path,
-    *,
-    ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS,
-    ignored_paths: set[str] | None = None,
-    timeout: int = 120,
-    log: LogCallback | None = None,
-):
-    findings = []
-    target = Path(target_path)
-    clamscan_bin = shutil.which("clamscan")
-
-    if clamscan_bin and not ignored_paths:
-        try:
-            _emit(log, "[ClamAV] Starting ClamAV scanning CLI...", "muted")
-            output = BytesIO()
-            result = run_bounded_subprocess(
-                [clamscan_bin, "-r", "--infected", str(target)],
-                stdout_sink=output,
-                timeout=timeout,
-                env=scanner_subprocess_environment(),
-            )
-            if result.returncode not in {0, 1}:
-                raise RuntimeError(f"clamscan exited with code {result.returncode}.")
-            for line in output.getvalue().decode("utf-8", errors="replace").splitlines():
-                if "FOUND" not in line:
-                    continue
-                parts = line.split(":")
-                if len(parts) >= 2:
-                    filename = parts[0].strip()
-                    virus_part = parts[1].replace("FOUND", "").strip()
-                    findings.append({
-                        "filename": filename,
-                        "virus": virus_part,
-                        "description": f"ClamAV detected malware signature: {virus_part}",
-                    })
-                    _emit(log, f"[ClamAV] MATCH: {virus_part} in {filename}", "match")
-            return findings
-        except Exception as exc:
-            _emit(log, f"[ClamAV Error] {exc}", "error")
-            raise
-
-    eicar_sig = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-
-    for file_path in _iter_scan_files(target, (".py", ".txt"), ignored_dirs, ignored_paths):
-        try:
-            content = read_bounded_text(file_path, errors="ignore")
-            if eicar_sig in content:
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "EICAR-Test-Signature",
-                    "description": "Matched EICAR standard antivirus test signature",
-                })
-                _emit(log, f"[ClamAV Fallback] MATCH: EICAR-Test-Signature in {file_path}", "match")
-
-            if re.search(r"(eval|exec)\(\s*base64\.b64decode", content):
-                findings.append({
-                    "filename": str(file_path),
-                    "virus": "Python.Backdoor.Base64Decoder",
-                    "description": "Detected base64-encoded Python execution pattern, indicating potential backdoor/webshell",
-                })
-                _emit(log, f"[ClamAV Fallback] MATCH: Python.Backdoor.Base64Decoder in {file_path}", "match")
-        except (OSError, UnicodeError) as exc:
-            _emit(log, f"[ClamAV Fallback] Unable to inspect {file_path}: {exc}", "muted")
-
+        matches = rules.match(filepath=str(file_path))
+        for match in matches:
+            findings.append({
+                "rule": match.rule,
+                "filename": str(file_path),
+                "description": match.meta.get("description", "YARA rule match"),
+                "author": match.meta.get("author", "Aegis"),
+            })
+            _emit(log, f"[YARA] MATCH: {match.rule} in {file_path}", "match")
     return findings

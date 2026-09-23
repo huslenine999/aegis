@@ -98,6 +98,13 @@ def test_start_generates_private_config_and_launches_complete_stack(tmp_path, mo
     assert env_file.stat().st_mode & 0o777 == 0o600
     assert opened == [f"http://localhost/setup#{values['AEGIS_SETUP_TOKEN']}"]
 
+
+def test_deep_runtime_enables_compose_profile():
+    assert cli.cli_stack._profile_arguments({"AEGIS_ALLOW_DEEP_SCANS": "true"}) == [
+        "--profile", "deep"
+    ]
+    assert cli.cli_stack._profile_arguments({"AEGIS_ALLOW_DEEP_SCANS": "false"}) == []
+
 def test_execute_scan_safe_target(tmp_path, monkeypatch):
     # Setup a safe python target file
     target_file = tmp_path / "safe.py"
@@ -110,7 +117,7 @@ def test_execute_scan_safe_target(tmp_path, monkeypatch):
     # We mock query_osv_vulnerabilities and other docker checks to be fast and deterministic
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
-        assert execute_scan(str(target_file), use_docker=False, tool_timeout=5) == 0
+        assert execute_scan(str(target_file), tool_timeout=5) == 0
 
 def test_execute_scan_unsafe_target(tmp_path, monkeypatch):
     # Setup an unsafe python target file with eval payload (which Semgrep/Bandit/YARA/ClamAV fallbacks will flag)
@@ -123,7 +130,7 @@ def test_execute_scan_unsafe_target(tmp_path, monkeypatch):
     # Since there are vulnerabilities in unsafe.py, it should exit with 1 (BLOCKED)
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
-        assert execute_scan(str(target_file), use_docker=False, tool_timeout=5) == 1
+        assert execute_scan(str(target_file), tool_timeout=5) == 1
 
 def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
@@ -136,7 +143,6 @@ def test_execute_scan_custom_output_summary(tmp_path, monkeypatch):
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
         summary = execute_scan(
             str(target_file),
-            use_docker=False,
             tool_timeout=5,
             output_dir=str(output_dir),
             quiet=True,
@@ -193,7 +199,6 @@ def test_execute_scan_ignores_target_local_execution_and_output_config(tmp_path,
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
         summary = execute_scan(
             str(target_file),
-            use_docker=False,
             tool_timeout=5,
             quiet=True,
             return_summary=True,
@@ -212,7 +217,7 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
     config_path.write_text(
         "scan:\n"
         "  output_dir: configured-reports\n"
-        "  no_docker: true\n"
+        "  preset: standard\n"
         "  sarif: results.sarif\n"
         "  exclude_paths:\n"
         "    - ignored_lab.py\n"
@@ -243,8 +248,7 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
         )
 
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
-         patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
-         patch("app.cli.is_docker_available", return_value=True):
+         patch("app.cli.run_scanner_command", side_effect=record_scanner_command):
         summary = execute_scan(
             str(target_file),
             tool_timeout=None,
@@ -312,7 +316,6 @@ def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
         summary = execute_scan(
             str(target_file),
-            use_docker=False,
             tool_timeout=5,
             output_dir=str(output_dir),
             config_path=str(config_path),
@@ -454,13 +457,9 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
         )
 
     with patch("app.cli.query_osv_vulnerabilities") as osv_query, \
-         patch("app.cli.run_scanner_command", side_effect=record_scanner_command), \
-         patch("app.cli.is_docker_available", return_value=True), \
-         patch("app.cli.run_dast_scan") as dast_scan, \
-         patch("app.cli.shared_run_clamav_scan") as clamav_scan:
+         patch("app.cli.run_scanner_command", side_effect=record_scanner_command):
         summary = execute_scan(
             str(target_file),
-            use_docker=True,
             tool_timeout=5,
             output_dir=str(output_dir),
             fast=True,
@@ -471,13 +470,14 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
     assert summary["exit_code"] == 0
     assert labels == ["Ruff", "Secrets"]
     osv_query.assert_not_called()
-    dast_scan.assert_not_called()
-    clamav_scan.assert_not_called()
 
 def test_standard_scan_has_no_retired_scanner_artifacts(tmp_path, monkeypatch):
     target_file = tmp_path / "safe.py"
     output_dir = tmp_path / "reports"
     target_file.write_text("def add(a, b):\n    return a + b\n")
+    output_dir.mkdir()
+    for name in ("codeql.sarif", "codeql-report.json", "yara-report.json"):
+        (output_dir / name).write_text("stale")
 
     monkeypatch.chdir(tmp_path)
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
@@ -491,6 +491,9 @@ def test_standard_scan_has_no_retired_scanner_artifacts(tmp_path, monkeypatch):
         )
 
     assert summary["exit_code"] == 0
+    assert not {"codeql.sarif", "codeql-report.json", "yara-report.json"}.intersection(
+        path.name for path in output_dir.iterdir()
+    )
     retired = {"safety-report.json", "trivy-report.json", "clamav-report.json", "zap-report.json", "iac-report.json"}
     assert not retired.intersection(path.name for path in output_dir.iterdir())
     manifest = json.loads((output_dir / "scan-manifest.json").read_text())
@@ -504,7 +507,7 @@ def test_main_json_scan_outputs_machine_readable_summary(tmp_path, monkeypatch, 
     target_file.write_text("def add(a, b):\n    return a + b\n")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["aegis", "scan", str(target_file), "--no-docker", "--json"])
+    monkeypatch.setattr(sys, "argv", ["aegis", "scan", str(target_file), "--preset", "quick", "--json"])
 
     with patch("app.cli.query_osv_vulnerabilities", return_value=[]), \
          patch("app.cli.run_scanner_command", side_effect=fake_scanner_command):
@@ -540,7 +543,6 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
     with patch("app.cli.run_scanner_command", side_effect=failing_ruff):
         summary = execute_scan(
             str(target_file),
-            use_docker=False,
             tool_timeout=5,
             output_dir=str(output_dir),
             fast=True,
@@ -588,7 +590,6 @@ def test_non_strict_scan_surfaces_operational_failures(tmp_path, monkeypatch):
          patch("app.cli.run_scanner_command", side_effect=invalid_ruff):
         summary = execute_scan(
             str(target_file),
-            use_docker=False,
             tool_timeout=5,
             output_dir=str(output_dir),
             quiet=True,
@@ -673,8 +674,7 @@ def test_doctor_and_version_commands(monkeypatch, capsys):
     assert main() == 0
     assert capsys.readouterr().out.strip()
 
-    with patch("app.cli.is_docker_available", return_value=False):
-        assert run_doctor(json_output=True) == 0
+    assert run_doctor(json_output=True) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] in {"ok", "degraded"}
     assert any(check["name"] == "python" for check in payload["checks"])

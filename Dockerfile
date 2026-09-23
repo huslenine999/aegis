@@ -1,3 +1,5 @@
+FROM docker:29.0-cli@sha256:858bb1e05af16840f5a55143c3e5e14073891fbc92f2c1f6f38dd9c5f2cca03c AS docker-cli
+
 FROM python:3.11.15-slim-bookworm@sha256:721dc13fd1be0a771e54b72097634291d628d0007dee9da777e2ce676a9c998f
 
 WORKDIR /app
@@ -18,6 +20,7 @@ ENV AEGIS_DATA_DIR=/data \
     PYTHONUNBUFFERED=1
 
 COPY pyproject.toml uv.lock ./
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

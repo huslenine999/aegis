@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TOOL_TIMEOUT = int(os.environ.get("AEGIS_CLI_TOOL_TIMEOUT", "120"))
 IGNORED_DIRS = DEFAULT_IGNORED_DIRS
 EXCLUDE_FILES_PATTERN = exclude_files_pattern()
-FAST_MODE_SKIPPED_SCANNERS = "Safety/OSV, Semgrep, ClamAV, IaC, Docker sandbox, Trivy, and DAST"
+FAST_MODE_SKIPPED_SCANNERS = "OSV and Semgrep"
 DEFAULT_SCAN_DIR = Path(".aegis") / "scans"
 EXIT_ALLOWED = 0
 EXIT_BLOCKED = 1
@@ -264,16 +264,6 @@ def apply_suppressions(
             ]
             write_json_fn(yara_path, yara, safe_output=safe_output)
 
-    clamav_path = scan_dir / "clamav-report.json"
-    if clamav_path.exists() and read_json_fn and write_json_fn:
-        clamav = read_json_fn(clamav_path)
-        if isinstance(clamav, list):
-            clamav = [
-                item for item in clamav
-                if not suppress_item("ClamAV", item, rule_keys=("virus",), path_keys=("filename",))
-            ]
-            write_json_fn(clamav_path, clamav, safe_output=safe_output)
-
     secrets_path = scan_dir / "secrets-report.json"
     if secrets_path.exists() and read_json_fn and write_json_fn:
         secrets = read_json_fn(secrets_path)
@@ -302,36 +292,6 @@ def apply_suppressions(
                 )
             ]
             write_json_fn(osv_path, osv, safe_output=safe_output)
-
-    iac_path = scan_dir / "iac-report.json"
-    if iac_path.exists() and read_json_fn and write_json_fn:
-        iac = read_json_fn(iac_path)
-        if isinstance(iac, dict):
-            findings = iac.get("findings", [])
-            if isinstance(findings, list):
-                iac["findings"] = [
-                    item for item in findings
-                    if not suppress_item(
-                        "IaC",
-                        item,
-                        rule_keys=("rule_id", "check_id"),
-                        path_keys=("path",),
-                    )
-                ]
-            unmanaged = iac.get("unmanaged_suppressions", [])
-            if isinstance(unmanaged, list):
-                governed = []
-                for item in unmanaged:
-                    if suppress_item(
-                        "IaC",
-                        item,
-                        rule_keys=("rule_id", "check_id"),
-                        path_keys=("path",),
-                    ):
-                        continue
-                    governed.append(item)
-                iac["unmanaged_suppressions"] = governed
-            write_json_fn(iac_path, iac, safe_output=safe_output)
 
     if write_json_fn:
         write_json_fn(

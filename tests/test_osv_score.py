@@ -49,18 +49,14 @@ def test_app_exploitability_score_calculation(tmp_path):
     # Write blank reports
     (scans_dir / "ruff-report.json").write_text(json.dumps([]))
     (scans_dir / "semgrep-report.json").write_text(json.dumps({"results": []}))
-    (scans_dir / "safety-report.json").write_text(json.dumps([]))
-    (scans_dir / "trivy-report.json").write_text(json.dumps({"Results": []}))
     (scans_dir / "secrets-report.json").write_text(json.dumps({"results": {}}))
     (scans_dir / "yara-report.json").write_text(json.dumps([]))
-    (scans_dir / "clamav-report.json").write_text(json.dumps([]))
-    (scans_dir / "zap-report.json").write_text(json.dumps([]))
     (scans_dir / "osv-report.json").write_text(json.dumps([]))
 
     # Assert base score is 0.0 when no issues
     assert calculate_exploitability_score(scans_dir, False) == 0.0
 
-    # Add a Ruff issue (HIGH = 8.5) and a ZAP exposed route issue (exposed multiplier = 1.5)
+    # A retired DAST artifact cannot affect a new score.
     (scans_dir / "ruff-report.json").write_text(json.dumps([
         {"code": "S608", "filename": "app.py", "location": {"row": 10}, "message": "SQL Injection"}
     ]))
@@ -68,10 +64,10 @@ def test_app_exploitability_score_calculation(tmp_path):
         {"status": "EXPOSED", "vuln_type": "SQL Injection", "route": "/user", "payload": "' OR 1=1", "description": "SQL Injection"}
     ]))
 
-    # Two high-severity findings produce a high score without saturating at 100.
+    # Only the active Ruff finding contributes.
     score_waf_off = calculate_exploitability_score(scans_dir, False)
-    assert score_waf_off == 89.0
+    assert score_waf_off == 87.5
 
     # The WAF does not discount the independent static finding.
     score_waf_on = calculate_exploitability_score(scans_dir, True)
-    assert score_waf_on == 89.0
+    assert score_waf_on == 87.5

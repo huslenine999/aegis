@@ -8,6 +8,7 @@ import time
 import re
 import base64
 import hashlib
+import importlib.metadata
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,11 @@ from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
 from .scanners import write_semgrep_rules
-from .codeql_scanner import CodeQLScanError, run_codeql_scan
+from .codeql_scanner import (
+    CodeQLScanError,
+    operator_runtime_configuration,
+    run_codeql_scan_isolated,
+)
 from .projects import (
     get_project,
     get_scan_run,
@@ -479,28 +484,17 @@ def _github_check_annotations(
             f"Semgrep {item.get('check_id') or 'security finding'}",
             "failure" if severity == "ERROR" else "warning" if severity == "WARNING" else "notice",
         )
-    iac_result = result.get("iac") or {}
-    if isinstance(iac_result, dict):
-        for collection in ("findings", "unmanaged_suppressions"):
-            unmanaged = collection == "unmanaged_suppressions"
-            for item in iac_result.get(collection, []) or []:
-                if not isinstance(item, dict):
-                    continue
-                severity = "MEDIUM" if unmanaged else str(item.get("severity") or "MEDIUM").upper()
-                rule_id = item.get("rule_id") or "configuration finding"
-                title = item.get("title") or (
-                    f"Unmanaged inline Checkov suppression for {rule_id}"
-                    if unmanaged
-                    else item.get("remediation")
-                )
-                add(
-                    item.get("path"),
-                    item.get("start_line"),
-                    title,
-                    f"IaC {rule_id}",
-                    "failure" if severity in {"HIGH", "CRITICAL"} else "warning" if severity == "MEDIUM" else "notice",
-                    item.get("end_line"),
-                )
+    for item in (result.get("codeql") or {}).get("findings", []) or []:
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity") or "MEDIUM").upper()
+        add(
+            item.get("filename"),
+            item.get("line_number"),
+            item.get("issue_text"),
+            f"CodeQL {item.get('rule_id') or 'security finding'}",
+            "failure" if severity in {"HIGH", "CRITICAL"} else "warning" if severity == "MEDIUM" else "notice",
+        )
     for filename, items in (result.get("secrets") or {}).get("results", {}).items():
         for item in items or []:
             add(
@@ -530,7 +524,8 @@ def _mirror_latest_reports(source_dir: Path) -> None:
             path.name.endswith("-report.json")
             or path.name in {
                 "osv-report.json",
-                "sandbox-status.json",
+                "codeql-report.json",
+                "codeql.sarif",
                 "source-descriptor.json",
                 "report.html",
                 "report.md",
@@ -766,121 +761,14 @@ def async_scan_task(
             },
         )
 
-        # IaC is a static configuration audit. It intentionally runs before
-        # Docker/DAST and does not depend on the sandbox being available.
-        iac_report_path = safe_output.file("iac-report.json")
-        if skip_external_scanners or is_custom_scan:
-            detail = "scan preset" if skip_external_scanners else "standalone upload scope"
-            write_json(iac_report_path, empty_iac_report(status="skipped", detail=detail))
-            mark_tool("IaC", "skipped", detail=detail)
-            publish_job_event(
-                job_id,
-                "log",
-                {"text": f"[IaC] Skipped ({detail}).", "color": "var(--text-muted)"},
-            )
-        else:
-            _check_cancelled(job_id)
-            publish_job_event(
-                job_id,
-                "log",
-                {"text": "[IaC] Scanning supported infrastructure configuration with Checkov...", "color": "var(--text-muted)"},
-            )
-            iac_execution = run_iac_scan(
-                target_path,
-                report_path=iac_report_path,
-                timeout=SCANNER_TIMEOUT_SECONDS,
-                log=job_log_callback(job_id),
-            )
-            if iac_execution.status == "completed":
-                mark_tool("IaC", "completed", return_code=iac_execution.return_code)
-            else:
-                mark_tool(
-                    "IaC",
-                    "failed",
-                    detail=iac_execution.detail or "scanner did not produce a valid report",
-                    return_code=iac_execution.return_code,
-                )
-
-        # Check Python targets and Docker daemon sandbox
+        # Only static source analysis runs in this worker. A Deep CodeQL job
+        # needs a separate runtime without the worker's database/signing keys.
         target_ext = Path(target_path).suffix.lower()
         is_dir = Path(target_path).is_dir()
-        has_python = False
-        if is_dir:
-            for root, dirs, files in os.walk(target_path):
-                if any(file.endswith(".py") for file in files):
-                    has_python = True
-                    break
-        else:
-            if target_ext == ".py":
-                has_python = True
-
-        sandbox_active = False
-        sandbox_uuid = uuid.uuid4().hex
-        sandbox_image = f"aegis-sandbox-{sandbox_uuid}"
-        sandbox_container = f"aegis-sandbox-container-{sandbox_uuid}"
-        sandbox_network = f"aegis-sandbox-network-{sandbox_uuid}"
-        sandbox_temp_dir = safe_output.directory(Path("sandbox") / sandbox_uuid)
-        host_port = None
-        sandbox_started = False
-        sandbox_cleanup_required = False
-
-        def find_free_port() -> int:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
-                return s.getsockname()[1]
-
-        docker_available = is_docker_available()
-        if enable_dynamic_scanners and docker_available and has_python:
-            publish_job_event(job_id, "log", {"text": "[SANDBOX] Docker available. Scaffold target sandbox...", "color": "var(--text-muted)"})
-            try:
-                host_port = find_free_port()
-                container_port = scaffold_sandbox_context(Path(target_path), sandbox_temp_dir)
-                publish_job_event(job_id, "log", {"text": f"[SANDBOX] Scaffolding sandbox on port {container_port}", "color": "var(--text-main)"})
-                
-                if build_sandbox_image(sandbox_temp_dir, sandbox_image):
-                    sandbox_cleanup_required = True
-                    publish_job_event(job_id, "log", {"text": f"[SANDBOX] Built image {sandbox_image}", "color": "var(--primary)"})
-
-                    if not create_sandbox_network(sandbox_network):
-                        raise RuntimeError("failed to create isolated sandbox network")
-                    sandbox_cleanup_required = True
-
-                    if run_sandbox_container(
-                        sandbox_image,
-                        sandbox_container,
-                        host_port,
-                        container_port,
-                        waf_enabled,
-                        sandbox_network,
-                    ):
-                        sandbox_started = True
-                        _set_job_sandbox_container(job_id, sandbox_container)
-                        publish_job_event(job_id, "log", {"text": f"[SANDBOX] Running container at 127.0.0.1:{host_port}", "color": "var(--primary)"})
-                        
-                        target_url = f"http://127.0.0.1:{host_port}"
-                        if wait_for_container(target_url, timeout=6.0):
-                            sandbox_active = True
-                            mark_tool("Docker Sandbox", "completed")
-                            publish_job_event(job_id, "log", {"text": "[SANDBOX] Container healthy and ready.", "color": "var(--primary)"})
-            except Exception as ex:
-                mark_tool("Docker Sandbox", "failed", detail=str(ex))
-                publish_job_event(job_id, "log", {"text": f"[SANDBOX Error] Failed to launch sandbox: {ex}", "color": "var(--danger)"})
-            if not sandbox_active and not tool_statuses.has("Docker Sandbox"):
-                mark_tool("Docker Sandbox", "failed", detail="sandbox did not become healthy")
-        elif enable_dynamic_scanners:
-            reason = "Docker is unavailable" if not docker_available else "no Python target found"
-            mark_tool(
-                "Docker Sandbox",
-                "failed" if scan_run_id else "skipped",
-                detail=reason,
-            )
-        else:
-            mark_tool("Docker Sandbox", "skipped", detail="scan preset")
-
-        sandbox_status_file = safe_output.file("sandbox-status.json")
-        write_json(
-            sandbox_status_file,
-            {"status": "active" if sandbox_active else "simulated_fallback"},
+        has_python = target_ext == ".py" if not is_dir else any(
+            file.endswith(".py")
+            for _, _, files in os.walk(target_path)
+            for file in files
         )
 
         # 2. State: RUNNING -> ANALYZING
@@ -993,85 +881,37 @@ def async_scan_task(
             write_json(secrets_report_path, {"results": {}})
             mark_tool("Secrets", "failed", detail=str(exc))
 
-        # YARA Scanner
-        yara_report_path = safe_output.file("yara-report.json")
-        try:
-            publish_job_event(job_id, "log", {"text": "[YARA] Triggering YARA signature engine...", "color": "var(--text-muted)"})
-            yara_findings = run_yara_scan(target_path, job_id)
-            safe_output.write_bounded_json("yara-report.json", yara_findings)
-            mark_tool("YARA", "completed")
-            publish_job_event(job_id, "log", {"text": "[YARA] Scan complete.", "color": "var(--primary)"})
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[YARA Error] {e}", "color": "var(--danger)"})
-            with yara_report_path.open("w") as f:
-                json.dump([], f)
-            mark_tool("YARA", "failed", detail=str(e))
-
-        # ClamAV Scanner
-        clamav_report_path = safe_output.file("clamav-report.json")
-        try:
-            publish_job_event(job_id, "log", {"text": "[ClamAV] Triggering ClamAV antivirus scanner...", "color": "var(--text-muted)"})
-            clamav_findings = run_clamav_scan(target_path, job_id)
-            safe_output.write_bounded_json("clamav-report.json", clamav_findings)
-            mark_tool("ClamAV", "completed")
-            publish_job_event(job_id, "log", {"text": "[ClamAV] Scan complete.", "color": "var(--primary)"})
-        except Exception as e:
-            publish_job_event(job_id, "log", {"text": f"[ClamAV Error] {e}", "color": "var(--danger)"})
-            with clamav_report_path.open("w") as f:
-                json.dump([], f)
-            mark_tool("ClamAV", "failed", detail=str(e))
-
-        # Aegis DAST Probe Scanner
-        zap_report_path = safe_output.file("zap-report.json")
-        try:
-            if not enable_dynamic_scanners:
-                zap_findings = []
-                mark_tool("DAST", "skipped", detail="scan preset")
-            elif sandbox_active:
-                publish_job_event(job_id, "log", {"text": "[DAST] Running active probes against the isolated target...", "color": "var(--text-muted)"})
-                zap_findings = run_dast_scan(
-                    f"http://127.0.0.1:{host_port}",
-                    job_id,
-                    internal_port=container_port,
-                )
-                mark_tool("DAST", "completed")
-            elif scan_run_id is None:
-                zap_findings = []
-                mark_tool("DAST", "skipped", detail="isolated target unavailable")
-            else:
-                zap_findings = []
-                mark_tool("DAST", "failed", detail="isolated target was unavailable")
-            write_json(zap_report_path, zap_findings)
-            publish_job_event(job_id, "log", {"text": "[DAST] DAST scanning complete.", "color": "var(--primary)"})
-        except Exception as exc:
-            publish_job_event(job_id, "log", {"text": f"[DAST Error] {exc}", "color": "var(--danger)"})
-            write_json(zap_report_path, [])
-            mark_tool("DAST", "failed", detail=str(exc))
-
-        # Trivy Container Scan
-        if sandbox_active:
-            publish_job_event(job_id, "log", {"text": "[Trivy] Auditing built image layers for CVEs...", "color": "var(--text-muted)"})
+        # Signature matching is an explicit optional profile capability.
+        if os.environ.get("AEGIS_ENABLE_YARA", "false").lower() in {"1", "true", "yes", "on"}:
             try:
-                trivy_path = safe_output.file("trivy-report.json")
-                run_trivy_scan(sandbox_image, trivy_path)
-                trivy_report = load_json_report(trivy_path)
-                if not isinstance(trivy_report, dict):
-                    raise RuntimeError("Trivy did not produce a valid JSON report")
-                mark_tool("Trivy", "completed")
-                publish_job_event(job_id, "log", {"text": "[Trivy] Image layer audit complete.", "color": "var(--primary)"})
-            except Exception as e:
-                mark_tool("Trivy", "failed", detail=str(e))
-                publish_job_event(job_id, "log", {"text": f"[Trivy Error] {e}", "color": "var(--danger)"})
-        elif enable_dynamic_scanners:
-            write_json(report_dir / "trivy-report.json", {"Results": []})
-            mark_tool(
-                "Trivy",
-                "failed" if scan_run_id else "skipped",
-                detail="isolated container image was unavailable",
-            )
+                publish_job_event(job_id, "log", {"text": "[YARA] Matching configured signatures...", "color": "var(--text-muted)"})
+                safe_output.write_bounded_json("yara-report.json", run_yara_scan(target_path, job_id))
+                mark_tool("YARA", "completed")
+            except Exception as exc:
+                mark_tool("YARA", "failed", detail=str(exc))
         else:
-            write_json(report_dir / "trivy-report.json", {"Results": []})
-            mark_tool("Trivy", "skipped", detail="scan preset")
+            mark_tool("YARA", "skipped", detail="optional signature analysis disabled")
+
+        if preset == "deep":
+            try:
+                image, suites = operator_runtime_configuration()
+                publish_job_event(job_id, "log", {
+                    "text": "[CodeQL] Creating isolated database and analyzing trusted query suites...",
+                    "color": "var(--text-muted)",
+                })
+                codeql_report = run_codeql_scan_isolated(
+                    Path(target_path), report_dir, image=image, query_suites=suites
+                )
+                if codeql_report.get("coverage", {}).get("isolation") != "verified":
+                    raise CodeQLScanError("CodeQL isolation could not be verified.")
+                mark_tool("CodeQL", "completed")
+            except (CodeQLScanError, OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
+                mark_tool("CodeQL", "failed", detail=str(exc))
+                publish_job_event(job_id, "log", {
+                    "text": f"[CodeQL Error] {exc}", "color": "var(--danger)",
+                })
+        else:
+            mark_tool("CodeQL", "skipped", detail="scan preset")
 
         safe_output.write_json("source-descriptor.json", source_snapshot.descriptor)
         normalize_scan_report_paths(report_dir, source_snapshot, safe_output)
@@ -1158,30 +998,13 @@ def async_scan_task(
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Exporting static dossier reports and CycloneDX SBOM...", "color": "var(--text-muted)"})
         time.sleep(1.0) # Visual transition pause
 
-        # Clean up Sandbox Container & Context
-        if sandbox_cleanup_required:
-            try:
-                publish_job_event(job_id, "log", {"text": "[SANDBOX] Cleaning up ephemeral Docker sandbox...", "color": "var(--text-muted)"})
-                _cleanup_job_sandbox(
-                    job_id,
-                    sandbox_container, sandbox_image, sandbox_network
-                )
-            except Exception as e:
-                publish_job_event(job_id, "log", {"text": f"[SANDBOX Cleanup Error] {e}", "color": "var(--danger)"})
-            finally:
-                sandbox_started = False
-                sandbox_cleanup_required = False
         raw_results = {
             "ruff": load_json_report(report_dir / "ruff-report.json"),
             "semgrep": load_json_report(report_dir / "semgrep-report.json"),
-            "safety": load_json_report(report_dir / "safety-report.json"),
             "osv": load_json_report(report_dir / "osv-report.json"),
-            "trivy": load_json_report(report_dir / "trivy-report.json"),
             "secrets": load_json_report(report_dir / "secrets-report.json"),
             "yara": load_json_report(report_dir / "yara-report.json"),
-            "clamav": load_json_report(report_dir / "clamav-report.json"),
-            "zap": load_json_report(report_dir / "zap-report.json"),
-            "iac": load_json_report(report_dir / "iac-report.json"),
+            "codeql": load_json_report(report_dir / "codeql-report.json"),
         }
         final_status = policy_summary.get("status", "ERROR")
         blocking_tools = list(dict.fromkeys([
@@ -1203,7 +1026,6 @@ def async_scan_task(
             "has_run": True,
             "is_blocked": final_status != "ALLOWED",
             "blocked_by": blocking_tools,
-            "sandbox_status": "active" if sandbox_active else "unavailable",
             "artifact_base": f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts" if project_id and scan_run_id else None,
             "policy_version": (
                 {
@@ -1237,6 +1059,42 @@ def async_scan_task(
             if project
             else "uploaded-file" if is_custom_scan else str(target)
         )
+        source_scope = source_snapshot.descriptor["root_kind"]
+        detector_coverage = {}
+        if tool_statuses.states().get("Ruff") == "completed":
+            # Ruff ignores target-owned config and inline suppressions. The
+            # other detectors still need equivalent suppression/scope proofs.
+            ruff_config = {
+                "version": importlib.metadata.version("ruff"),
+                "rules": "S",
+                "ignored_names": sorted(DEFAULT_IGNORED_DIRS),
+                "ignore_noqa": True,
+            }
+            detector_coverage["Ruff"] = {
+                "complete": True,
+                "source_scope": source_scope,
+                "source_identity": target_identity,
+                "config_digest": hashlib.sha256(canonical_json(ruff_config)).hexdigest(),
+            }
+        codeql = raw_results.get("codeql")
+        if (
+            tool_statuses.states().get("CodeQL") == "completed"
+            and isinstance(codeql, dict)
+            and (codeql.get("coverage") or {}).get("isolation") == "verified"
+        ):
+            detector_coverage["CodeQL"] = {
+                "complete": True,
+                "source_scope": source_scope,
+                "source_identity": target_identity,
+                "languages": codeql["coverage"]["languages"],
+                "query_digest": hashlib.sha256(canonical_json({
+                    "image": codeql.get("tool", {}).get("image"),
+                    "suites": codeql.get("query_suites"),
+                })).hexdigest(),
+            }
+        result_payload["profile_version"] = SCAN_PROFILE_VERSION
+        result_payload["source_scope"] = source_scope
+        result_payload["detector_coverage"] = detector_coverage
         source_record = source_snapshot.manifest_source(
             identity=target_identity,
             revision=source_revision or _source_revision(attested_source_path),
@@ -1253,6 +1111,9 @@ def async_scan_task(
                 "tenant_id": project["tenant_id"] if project else None,
                 "source": source_record,
                 "preset": preset,
+                "profile_version": SCAN_PROFILE_VERSION,
+                "source_scope": source_scope,
+                "detector_coverage": detector_coverage,
                 "policy_status": final_status,
                 "policy_exit_code": policy_exit_code,
                 "risk_index": result_payload["risk_index"],
@@ -1369,16 +1230,6 @@ def async_scan_task(
             })
         raise e
     finally:
-        if locals().get("sandbox_cleanup_required"):
-            _cleanup_job_sandbox(
-                job_id,
-                locals().get("sandbox_container", ""),
-                locals().get("sandbox_image", ""),
-                locals().get("sandbox_network", ""),
-            )
-        cleanup_temp_dir = locals().get("sandbox_temp_dir")
-        if isinstance(cleanup_temp_dir, Path) and cleanup_temp_dir.exists():
-            shutil.rmtree(cleanup_temp_dir, ignore_errors=True)
         if external_project_dir:
             shutil.rmtree(external_project_dir, ignore_errors=True)
         if source_snapshot:

@@ -2,8 +2,7 @@
 
 Private, explainable security gates for small engineering teams.
 
-Aegis scans source code, dependencies, secrets, containers, and running test
-targets; turns the results into an allow, block, or operational-error decision;
+Aegis scans source code, dependencies, and secrets; turns the results into an allow, block, or operational-error decision;
 and keeps the evidence in a self-hosted project workspace.
 
 Use it as:
@@ -15,8 +14,8 @@ Use it as:
 > [!IMPORTANT]
 > Aegis is ready for local evaluation and controlled single-customer pilots.
 > Production deployment still requires an operator to provision secrets,
-> backups, monitoring, and—if Deep scans are enabled—an isolated Docker-capable
-> worker. This release is not presented as a public shared multi-tenant service.
+> backups and monitoring. Deep scans require a separately provisioned, isolated
+> CodeQL runtime. This release is not presented as a public shared multi-tenant service.
 
 ## Why Aegis?
 
@@ -101,7 +100,8 @@ Exit codes are stable and intended for automation:
 Other useful commands:
 
 ```bash
-aegis scan . --no-docker        # Skip Docker, Trivy, and DAST
+aegis scan . --preset quick     # Ruff security rules and detect-secrets
+aegis scan . --yara            # Optional YARA signature analysis
 aegis scan . --json --quiet     # Machine-readable result
 aegis report --open             # Open the latest HTML report
 aegis install-hook              # Add a Git pre-push gate
@@ -144,6 +144,22 @@ After signing in:
    issues;
 6. download the report bundle and signed evidence manifest.
 
+### Enable Deep CodeQL scans
+
+CodeQL is optional because its bundle is large and its license depends on the
+repository being scanned. Review the [GitHub CodeQL availability and terms](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/scan-from-the-command-line/set-up-codeql-cli), then provision the pinned local runtime:
+
+```bash
+make codeql-setup
+aegis start --no-open
+```
+
+The setup command verifies the official CodeQL 2.27.0 bundle checksum, builds a
+pinned local image, and enables the dedicated `deep` worker profile. In the
+website, open **Projects**, select a project, choose **Deep** under **Project
+settings**, save, and run the scan. Deep supports Python and
+JavaScript/TypeScript; a repository with neither language fails explicitly.
+
 Stop the stack without deleting its data:
 
 ```bash
@@ -171,15 +187,13 @@ The web application turns one-off scanner output into an operational workflow:
 
 | Preset | Intended use | Runtime expectation |
 | --- | --- | --- |
-| **Quick** | Developer feedback | Fast local checks; expensive and external scanners are skipped |
-| **Standard** | Pull requests and branch gates | Static analysis, dependencies, secrets, and signature checks |
-| **Deep** | Controlled release audit | Standard checks plus sandbox execution, DAST, and container analysis |
+| **Quick** | Developer feedback | Ruff security rules for Python and detect-secrets |
+| **Standard** | Pull requests and branch gates | Quick plus Python Semgrep rules and OSV dependency audit |
+| **Deep** | Controlled release audit | Standard plus CodeQL for Python and JavaScript/TypeScript |
 
-Deep scans are deliberately not enabled by the default local topology. They are
-sent to a dedicated queue and require a worker that advertises the isolated
-capability and has access to a reviewed Docker runtime and Trivy. Provision that
-worker on infrastructure intended for hostile source code; do not mount a
-production host Docker socket into the dashboard.
+Deep scans are unavailable in the default local topology. They require an
+operator-provisioned pinned CodeQL image, trusted query suites, and a tested
+isolated runtime. An unavailable runtime is an operational error, never a pass.
 
 ## Scanner coverage
 
@@ -187,12 +201,14 @@ production host Docker socket into the dashboard.
 | --- | --- |
 | Python security analysis | Ruff security rules |
 | Pattern analysis | Semgrep and Aegis rules |
-| Dependency vulnerabilities | OSV; optional licensed Safety integration |
+| Dependency vulnerabilities | OSV |
 | Secrets | detect-secrets |
-| Malware and signatures | YARA and ClamAV-compatible checks |
-| Containers and filesystems | Trivy when the approved Docker runtime is available |
-| Dynamic behavior | Isolated sandbox and Aegis DAST probes |
+| Deeper source analysis | CodeQL in the isolated Deep profile |
+| Optional signatures | YARA, only when explicitly enabled |
 | Correlation and gating | Versioned severity policy and audited suppressions |
+
+Infrastructure, container-image, and runtime vulnerabilities are outside the
+current scanner coverage. A finding is a lead for review, not proof of exploitation.
 
 Requested scanner failures are recorded as operational failures. Use strict mode
 for any release decision.
@@ -258,7 +274,6 @@ jobs:
         uses: huslenine999/aegis@<reviewed-commit-sha>
         with:
           scan-target: .
-          no-docker: "true"
           fail-on: medium,high,critical
 ```
 
@@ -302,10 +317,10 @@ Before giving a team access, complete all of the following:
 - verify GitHub permissions using known safe and vulnerable pull requests;
 - configure S3/KMS/object lock if local artifact storage is not acceptable;
 - configure and test OIDC and a break-glass administrator procedure if required;
-- provision an isolated deep worker before enabling `AEGIS_ALLOW_DEEP_SCANS`.
+- provision an isolated CodeQL runtime before enabling `AEGIS_ALLOW_DEEP_SCANS`.
 
 S3 and OIDC adapters are included, but Aegis does not provision the provider,
-bucket, KMS policy, DNS, TLS, Docker isolation, or disaster-recovery environment
+bucket, KMS policy, DNS, TLS, CodeQL isolation, or disaster-recovery environment
 for you. Those controls must be configured and reviewed in the deployment where
 Aegis runs.
 
@@ -322,7 +337,7 @@ flowchart LR
     API --> DB["PostgreSQL"]
     API --> Redis["Redis queues and live state"]
     Redis --> Worker["Standard scan worker"]
-    Redis --> Deep["Isolated deep worker"]
+    Redis --> Deep["Worker with isolated CodeQL child runtime"]
     Redis --> Notifier["Notifier worker"]
     Worker --> Evidence["Local or S3 evidence"]
     Deep --> Evidence

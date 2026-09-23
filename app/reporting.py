@@ -64,14 +64,10 @@ def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
         for name, filename in {
             "ruff": "ruff",
             "semgrep": "semgrep",
-            "safety": "safety",
-            "trivy": "trivy",
+            "codeql": "codeql",
             "secrets": "secrets",  # pragma: allowlist secret
             "yara": "yara",
-            "clamav": "clamav",
-            "zap": "zap",
             "osv": "osv",
-            "iac": "iac",
         }.items()
     }
     results = analyze_report_set(reports)
@@ -145,7 +141,7 @@ def _selected_bundle_sources(
         "source-descriptor.json",
         "suppressions-report.json",
     ]
-    raw_patterns = ("*-report.json", "osv-cache.json", "sandbox-status.json")
+    raw_patterns = ("*-report.json", "codeql.sarif", "osv-cache.json", "sandbox-status.json")
     added: set[str] = set()
     selected: list[tuple[str, str, ReportSource]] = []
 

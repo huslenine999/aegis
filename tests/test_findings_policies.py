@@ -120,22 +120,66 @@ def test_skipped_or_narrower_scans_do_not_resolve_findings(
     assert result["resolved"] == 0
     assert findings.list_findings(project_id)[0]["status"] == "open"
 
-    # Re-observing the finding during a Quick scan must not erase the broader
-    # Standard-scan provenance used for later resolution decisions.
+    # A Quick observation must not erase broader Standard-scan provenance.
     observed_quick = create_run(project_id, "quick-observed", preset="quick")
-    findings.sync_findings(observed_quick, semgrep_result | {
-        "tools": [{"name": "Semgrep", "status": "completed"}],
-    })
+    findings.sync_findings(observed_quick, semgrep_result)
     final_quick = create_run(project_id, "quick-final", preset="quick")
     final_result = findings.sync_findings(
         final_quick,
-        {
-            "semgrep": {"results": []},
-            "tools": [{"name": "Semgrep", "status": "completed"}],
-        },
+        {"semgrep": {"results": []}, "tools": [{"name": "Semgrep", "status": "completed"}]},
     )
     assert final_result["resolved"] == 0
     assert findings.list_findings(project_id)[0]["status"] == "open"
+
+
+def test_new_profile_preserves_retired_findings_and_requires_matching_coverage(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    old_run = create_run(project_id, "old-deep", preset="deep")
+    findings.sync_findings(old_run, {
+        "iac": {"findings": [{"rule_id": "CKV_1", "path": "Dockerfile"}]},
+        "tools": [{"name": "IaC", "status": "completed"}],
+    })
+    codeql_report = {
+        "status": "completed",
+        "coverage": {"complete": True, "languages": ["python"]},
+        "findings": [{"rule_id": "py/sql", "severity": "HIGH", "filename": "src/app.py", "line_number": 8, "issue_text": "SQL injection", "fingerprint": "stable-1"}],
+    }
+    coverage = {"CodeQL": {"complete": True, "source_scope": "repository", "languages": ["python"], "query_digest": "queries-v1"}}
+    first = create_run(project_id, "new-deep", preset="deep")
+    first_result = {
+        "codeql": codeql_report, "profile_version": 2, "source_scope": "repository",
+        "detector_coverage": coverage, "tools": [{"name": "CodeQL", "status": "completed"}],
+    }
+    findings.sync_findings(first, first_result)
+    projects.update_scan_run(first, state="completed", progress=100, result=first_result)
+    assert {row["tool"]: row["status"] for row in findings.list_findings(project_id)} == {"IaC": "open", "CodeQL": "open"}
+
+    changed = create_run(project_id, "changed-queries", preset="deep")
+    findings.sync_findings(changed, {
+        "codeql": {**codeql_report, "findings": []}, "profile_version": 2,
+        "source_scope": "repository", "detector_coverage": {"CodeQL": {**coverage["CodeQL"], "query_digest": "queries-v2"}},
+        "tools": [{"name": "CodeQL", "status": "completed"}],
+    })
+    assert {row["tool"]: row["status"] for row in findings.list_findings(project_id)} == {"IaC": "open", "CodeQL": "open"}
+
+    same = create_run(project_id, "same-queries", preset="deep")
+    findings.sync_findings(same, {
+        "codeql": {**codeql_report, "findings": []}, "profile_version": 2,
+        "source_scope": "repository", "detector_coverage": coverage,
+        "tools": [{"name": "CodeQL", "status": "completed"}],
+    })
+    assert {row["tool"]: row["status"] for row in findings.list_findings(project_id)} == {"IaC": "open", "CodeQL": "resolved"}
+
+
+def test_out_of_order_scan_cannot_reopen_newer_finding(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    older = create_run(project_id, "older")
+    newer = create_run(project_id, "newer")
+    findings.sync_findings(newer, ruff_result())
+    finding = findings.list_findings(project_id)[0]
+    findings.sync_findings(older, ruff_result())
+    assert findings.list_findings(project_id)[0]["last_seen_run_id"] == newer
+    assert findings.list_findings(project_id)[0]["occurrence_count"] == finding["occurrence_count"]
 
 
 def test_finding_lifecycle_requires_expiring_accepted_risk(tmp_path, monkeypatch):
@@ -210,6 +254,24 @@ def test_approved_policy_is_bound_to_scan_and_can_be_simulated(tmp_path, monkeyp
     assert approved["state"] == "approved"
     assert policies.get_policy(default["id"])["state"] == "retired"
     assert projects.get_scan_run(run_id)["policy_version_id"] == default["id"]
+
+
+def test_new_policy_rejects_retired_required_tools():
+    with pytest.raises(ValueError, match="unknown required tool"):
+        policies.normalize_definition({"required_tools": ["ClamAV"]})
+    assert policies.normalize_definition({"required_tools": ["CodeQL"]})["required_tools"] == ["CodeQL"]
+
+
+def test_policy_simulation_cannot_pass_incomplete_codeql(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, "incomplete-codeql", preset="deep")
+    projects.update_scan_run(run_id, state="completed", progress=100, result={
+        "profile_version": 2,
+        "codeql": {"status": "completed", "findings": [], "coverage": {"complete": False, "languages": ["python"]}},
+        "tools": [{"name": "CodeQL", "status": "completed"}],
+    })
+    decision = policies.simulate_policy(project_id, run_id, {"required_tools": ["CodeQL"]})
+    assert decision["status"] == "ERROR"
 
 
 def test_s3_artifact_store_uses_encryption_lock_and_integrity_metadata(tmp_path, monkeypatch):

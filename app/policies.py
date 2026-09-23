@@ -9,9 +9,9 @@ from .findings import extract_findings
 
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 KNOWN_TOOLS = {
-    "Ruff", "Semgrep", "Safety", "OSV", "Trivy", "Secrets", "YARA",
-    "ClamAV", "DAST", "IaC",
+    "Ruff", "Semgrep", "OSV", "Secrets", "YARA", "CodeQL",
 }
+LEGACY_TOOLS = {"Safety", "Trivy", "ClamAV", "DAST", "IaC"}
 DEFAULT_DEFINITION = {
     "schema_version": 1,
     "fail_on_severities": ["MEDIUM", "HIGH", "CRITICAL"],
@@ -23,7 +23,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def normalize_definition(value: dict[str, Any]) -> dict[str, Any]:
+def normalize_definition(value: dict[str, Any], *, allow_legacy: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Policy definition must be an object.")
     unknown = set(value) - {"schema_version", "fail_on_severities", "required_tools"}
@@ -41,7 +41,7 @@ def normalize_definition(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(required_tools, list):
         raise ValueError("required_tools must be a list.")
     normalized_tools = sorted({str(item).strip() for item in required_tools if str(item).strip()})
-    if set(normalized_tools) - KNOWN_TOOLS:
+    if set(normalized_tools) - (KNOWN_TOOLS | LEGACY_TOOLS if allow_legacy else KNOWN_TOOLS):
         raise ValueError("Policy contains an unknown required tool.")
     return {
         "schema_version": 1,
@@ -218,16 +218,16 @@ def approve_policy(project_id: int, policy_id: int, actor_id: int) -> dict[str, 
 
 
 def simulate_policy(project_id: int, scan_run_id: int, definition: dict[str, Any]) -> dict[str, Any]:
-    normalized = normalize_definition(definition)
     with get_connection() as connection:
         row = connection.execute(
-            """SELECT result_json FROM scan_runs
+            """SELECT result_json, preset FROM scan_runs
                WHERE id = ? AND project_id = ? AND state = 'completed'""",
             (scan_run_id, project_id),
         ).fetchone()
     if not row or not row[0]:
         raise ValueError("A completed scan with results is required for simulation.")
     result = json.loads(row[0])
+    normalized = normalize_definition(definition, allow_legacy=not result.get("profile_version"))
     findings = extract_findings(result)
     blocking = [
         item for item in findings
@@ -241,6 +241,10 @@ def simulate_policy(project_id: int, scan_run_id: int, definition: dict[str, Any
         tool for tool in normalized["required_tools"]
         if tool_states.get(tool) != "completed"
     ]
+    if "codeql" in result or (result.get("profile_version") == 2 and row[1] == "deep"):
+        from policy_engine import analyze_codeql
+        if analyze_codeql(result.get("codeql"))["status"] == "ERROR" and "CodeQL" not in unavailable:
+            unavailable.append("CodeQL")
     status = "ERROR" if unavailable else "BLOCKED" if blocking else "PASSED"
     return {
         "scan_run_id": scan_run_id,

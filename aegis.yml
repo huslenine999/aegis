@@ -1,5 +1,5 @@
 scan:
-  no_docker: true
+  preset: standard
   fail_on: medium,high,critical
   timeout: 120
   sarif: aegis.sarif

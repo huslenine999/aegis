@@ -32,16 +32,6 @@ SCAN_DIR = Path(os.environ.get("SCANS_DIR", _default_scan_dir))
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = SCRIPT_DIR / "app" / "templates" / "report_template.html"
 
-RUFF_REPORT = SCAN_DIR / "ruff-report.json"
-SAFETY_REPORT = SCAN_DIR / "safety-report.json"
-TRIVY_REPORT = SCAN_DIR / "trivy-report.json"
-SECRETS_REPORT = SCAN_DIR / "secrets-report.json"
-YARA_REPORT = SCAN_DIR / "yara-report.json"
-SEMGREP_REPORT = SCAN_DIR / "semgrep-report.json"
-CLAMAV_REPORT = SCAN_DIR / "clamav-report.json"
-ZAP_REPORT = SCAN_DIR / "zap-report.json"
-IAC_REPORT = SCAN_DIR / "iac-report.json"
-
 HTML_REPORT = SCAN_DIR / "report.html"
 MD_REPORT = SCAN_DIR / "report.md"
 
@@ -55,10 +45,7 @@ def get_env_set(var_name: str, default: set) -> set:
 
 FAIL_ON_SEVERITIES = get_env_set("FAIL_ON", {"MEDIUM", "HIGH", "CRITICAL"})
 FAIL_ON_RUFF_SEVERITIES = get_env_set("FAIL_ON_RUFF", get_env_set("FAIL_ON_BANDIT", FAIL_ON_SEVERITIES))
-FAIL_ON_SAFETY = os.environ.get("FAIL_ON_SAFETY", "true").lower() == "true"
-FAIL_ON_TRIVY_SEVERITIES = get_env_set("FAIL_ON_TRIVY", FAIL_ON_SEVERITIES)
 FAIL_ON_SEMGREP_SEVERITIES = get_env_set("FAIL_ON_SEMGREP", FAIL_ON_SEVERITIES)
-FAIL_ON_IAC_SEVERITIES = get_env_set("FAIL_ON_IAC", FAIL_ON_SEVERITIES)
 SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
@@ -222,18 +209,12 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
                 "fix": "Escape output by default and only allow sanitized HTML from trusted sources.",
                 "suggestion": "{{ user_value | e }}",
             })
-    elif tool in {"Safety", "OSV Dependency Audit"}:
+    elif tool == "OSV Dependency Audit":
         fixed_versions = issue.get("fixed_versions") or issue.get("fixed") or issue.get("version")
         guidance.update({
             "why": "The dependency version is associated with a published vulnerability advisory.",
             "fix": "Upgrade to a fixed version, verify compatibility, and commit the lockfile or requirements change.",
             "suggestion": _format_dependency_fix(package_name, fixed_versions),
-        })
-    elif tool == "Trivy":
-        guidance.update({
-            "why": "The container or OS package has a known vulnerability in the scanned image.",
-            "fix": "Upgrade the base image or package to the fixed version and rebuild the image.",
-            "suggestion": f"# Update {package_name or 'the affected package'} to {issue.get('fixed_version') or 'a fixed version'}\ndocker build --pull -t your-image .",
         })
     elif tool == "Secrets Scanner":
         guidance.update({
@@ -241,26 +222,18 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
             "fix": "Revoke and rotate the credential, move it to a secret manager or environment variable, and remove it from history.",
             "suggestion": "export SERVICE_TOKEN=\"...\"\n# read it with os.environ[\"SERVICE_TOKEN\"]",
         })
-    elif tool in {"YARA Scanner", "ClamAV"}:
+    elif tool == "YARA Scanner":
         guidance.update({
             "why": "A malware or suspicious-code signature matched the target file.",
             "fix": "Quarantine the file, inspect its origin, and replace it from a trusted source.",
             "suggestion": "# Remove the suspicious file and restore from trusted source control\ngit restore path/to/file",
         })
-    elif tool == "Aegis DAST Probe":
+    elif tool == "CodeQL":
         guidance.update({
-            "why": "A dynamic probe reached behavior that appears exposed at runtime.",
-            "fix": "Validate input at the route boundary, enforce authorization, and add regression tests for the payload.",
-            "suggestion": "# Add route validation and rerun a deep scan\naegis scan . --no-docker",
+            "why": "CodeQL identified a potentially unsafe data or control path that requires review.",
+            "fix": "Inspect the reported path and validate input before it reaches the unsafe operation.",
+            "suggestion": "# Review the CodeQL path, apply a targeted fix, then rerun a deep scan",
         })
-    elif tool == "IaC":
-        guidance.update({
-            "why": "An infrastructure or container configuration can weaken the security boundary before application code runs.",
-            "fix": issue.get("remediation") or "Apply the Checkov remediation, verify least privilege, and rerun the IaC scan.",
-            "suggestion": "# Review the IaC finding, apply the least-privilege fix, then rerun\naegis scan .",
-        })
-        if issue.get("remediation_url"):
-            guidance["suggestion"] = f"Review the remediation guide: {issue['remediation_url']}"
 
     enriched.setdefault("finding_status", "Unclassified in this standalone report")
     enriched.pop(BASELINE_FINGERPRINT_KEY, None)
@@ -361,63 +334,6 @@ def analyze_semgrep(
     }
 
 
-def analyze_safety(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
-    """
-    Supports Safety JSON output shapes from both 'check' and 'scan' commands.
-    """
-    vulnerabilities: List[Any] = []
-
-    if report is None:
-        return {
-            "tool": "Safety",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    # Handle 'safety scan' format
-    if isinstance(report, dict) and "vulnerabilities" in report:
-        vulnerabilities = report["vulnerabilities"]
-    # Handle older 'safety check' formats
-    elif isinstance(report, list):
-        vulnerabilities = report
-    elif isinstance(report, dict) and "affected_packages" in report:
-        for package_data in report["affected_packages"].values():
-            vulns = package_data.get("vulnerabilities", [])
-            vulnerabilities.extend(vulns)
-
-    # Normalize examples for reporting
-    normalized_examples = []
-    for v in vulnerabilities:
-        normalized_examples.append(enrich_finding("Safety", {
-            "severity": "MEDIUM",
-            "package_name": v.get("package_name") or v.get("package"),
-            "vulnerability_id": v.get("vulnerability_id") or v.get("advisory"),
-            "affected_versions": v.get("affected_versions") or v.get("version"),
-            "fixed_versions": v.get("fixed_versions") or v.get("fixed"),
-            "description": v.get("description") or v.get("reason", "No description provided."),
-        }))
-
-    blocking_count = (
-        len(vulnerabilities)
-        if (
-            "MEDIUM" in fail_on
-            if fail_on is not None
-            else FAIL_ON_SAFETY and "MEDIUM" in FAIL_ON_SEVERITIES
-        )
-        else 0
-    )
-    return {
-        "tool": "Safety",
-        "total_issues": len(vulnerabilities),
-        "blocking_issues": blocking_count,
-        "status": "FAIL" if blocking_count else "PASS",
-        "severity_counts": {"MEDIUM": len(vulnerabilities)} if vulnerabilities else {},
-        "examples": normalized_examples[:5],
-    }
-
-
 def analyze_osv(
     report: List[Dict[str, Any]] | None,
     fail_on: set[str] | None = None,
@@ -459,46 +375,47 @@ def analyze_osv(
     }
 
 
-def analyze_trivy(
-    report: Dict[str, Any] | None,
-    fail_on: set[str] | None = None,
-) -> Dict[str, Any]:
-    vulnerabilities = []
-
-    if not report:
-        return {
-            "tool": "Trivy",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    for result in report.get("Results", []):
-        for vulnerability in result.get("Vulnerabilities", []) or []:
-            severity = vulnerability.get("Severity", "").upper()
-            vulnerabilities.append(enrich_finding("Trivy", {
-                "target": result.get("Target"),
-                "vulnerability_id": vulnerability.get("VulnerabilityID"),
-                "package_name": vulnerability.get("PkgName"),
-                "installed_version": vulnerability.get("InstalledVersion"),
-                "fixed_version": vulnerability.get("FixedVersion"),
-                "severity": severity,
-                "title": vulnerability.get("Title"),
-            }))
-
-    blocking_issues = [
-        v for v in vulnerabilities
-        if v["severity"] in (fail_on if fail_on is not None else FAIL_ON_TRIVY_SEVERITIES)
-    ]
-
+def analyze_codeql(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
+    """Analyze the complete normalized CodeQL report, independent of display limits."""
+    error = {
+        "tool": "CodeQL", "total_issues": 0, "blocking_issues": 0,
+        "status": "ERROR", "examples": [], "findings": [],
+    }
+    if not isinstance(report, dict) or report.get("status") != "completed":
+        return error
+    coverage = report.get("coverage")
+    raw_findings = report.get("findings")
+    if (
+        not isinstance(coverage, dict)
+        or coverage.get("complete") is not True
+        or not isinstance(coverage.get("languages"), list)
+        or not coverage["languages"]
+        or coverage.get("isolation") != "verified"
+        or not isinstance(raw_findings, list)
+    ):
+        return error
+    findings = []
+    for item in raw_findings:
+        if not isinstance(item, dict) or not item.get("rule_id") or not item.get("filename"):
+            return error
+        severity = str(item.get("severity") or "").upper()
+        if severity not in SEVERITIES:
+            return error
+        findings.append(enrich_finding("CodeQL", {
+            **item,
+            "test_id": item["rule_id"],
+            "severity": severity,
+        }))
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+    blocking = [item for item in findings if item["severity"] in threshold]
     return {
-        "tool": "Trivy",
-        "total_issues": len(vulnerabilities),
-        "blocking_issues": len(blocking_issues),
-        "status": "FAIL" if blocking_issues else "PASS",
-        "severity_counts": _severity_counts(vulnerabilities),
-        "examples": (blocking_issues if blocking_issues else vulnerabilities)[:5],
+        "tool": "CodeQL", "total_issues": len(findings),
+        "blocking_issues": len(blocking),
+        "status": "FAIL" if blocking else "PASS",
+        "severity_counts": _severity_counts(findings),
+        "examples": (blocking if blocking else findings)[:5],
+        "findings": findings,
+        "coverage": coverage,
     }
 
 
@@ -574,170 +491,6 @@ def analyze_yara(
     }
 
 
-def analyze_clamav(
-    report: List[Dict[str, Any]] | None,
-    fail_on: set[str] | None = None,
-) -> Dict[str, Any]:
-    if report is None:
-        return {
-            "tool": "ClamAV",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    findings = []
-    for f in report:
-        findings.append(enrich_finding("ClamAV", {
-            "severity": "HIGH",
-            "virus": f.get("virus"),
-            "filename": f.get("filename"),
-            "description": f.get("description")
-        }))
-
-    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
-    blocking_count = len(findings) if "HIGH" in threshold else 0
-    return {
-        "tool": "ClamAV",
-        "total_issues": len(findings),
-        "blocking_issues": blocking_count,
-        "status": "FAIL" if blocking_count else "PASS",
-        "severity_counts": _severity_counts(findings),
-        "examples": findings[:5],
-    }
-
-
-def analyze_zap(
-    report: List[Dict[str, Any]] | None,
-    fail_on: set[str] | None = None,
-) -> Dict[str, Any]:
-    if report is None:
-        return {
-            "tool": "Aegis DAST Probe",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "MISSING",
-            "examples": [],
-        }
-
-    findings = []
-    blocking_count = 0
-    for f in report:
-        is_exposed = f.get("status") == "EXPOSED"
-        findings.append(enrich_finding("Aegis DAST Probe", {
-            "severity": "HIGH" if is_exposed else "LOW",
-            "vuln_type": f.get("vuln_type"),
-            "route": f.get("route"),
-            "payload": f.get("payload"),
-            "description": f.get("description"),
-            "status": f.get("status")
-        }))
-        threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
-        if is_exposed and "HIGH" in threshold:
-            blocking_count += 1
-
-    return {
-        "tool": "Aegis DAST Probe",
-        "total_issues": len(findings),
-        "blocking_issues": blocking_count,
-        "status": "FAIL" if blocking_count > 0 else "PASS",
-        "severity_counts": _severity_counts(findings),
-        "examples": findings[:6],
-    }
-
-
-def analyze_iac(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]:
-    """Analyze the Aegis-owned Checkov boundary report.
-
-    Inline Checkov skips are deliberately represented as medium-severity
-    unmanaged findings.  They therefore require an Aegis suppression with an
-    owner, ticket, and expiry before they can stop affecting the gate.
-    """
-
-    if not isinstance(report, dict):
-        return {
-            "tool": "IaC",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "SKIPPED",
-            "examples": [],
-            "findings": [],
-        }
-    if report.get("status") == "failed":
-        return {
-            "tool": "IaC",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "ERROR",
-            "examples": [],
-            "findings": [],
-        }
-
-    findings: list[dict[str, Any]] = []
-    raw_findings = report.get("findings")
-    if not isinstance(raw_findings, list):
-        return {
-            "tool": "IaC",
-            "total_issues": 0,
-            "blocking_issues": 0,
-            "status": "ERROR",
-            "examples": [],
-            "findings": [],
-        }
-    for item in raw_findings:
-        if not isinstance(item, dict):
-            continue
-        severity = str(item.get("severity") or "MEDIUM").upper()
-        if severity not in SEVERITIES:
-            severity = "MEDIUM"
-        findings.append(enrich_finding("IaC", {
-            "severity": severity,
-            "test_id": item.get("rule_id"),
-            "filename": item.get("path"),
-            "line_number": item.get("start_line"),
-            "end_line": item.get("end_line"),
-            "issue_text": item.get("title"),
-            "framework": item.get("framework"),
-            "resource": item.get("resource"),
-            "remediation": item.get("remediation"),
-            "remediation_url": item.get("remediation_url"),
-        }))
-
-    suppressions = report.get("unmanaged_suppressions")
-    if isinstance(suppressions, list):
-        for item in suppressions:
-            if not isinstance(item, dict):
-                continue
-            findings.append(enrich_finding("IaC", {
-                "severity": "MEDIUM",
-                "test_id": item.get("rule_id"),
-                "filename": item.get("path"),
-                "line_number": item.get("start_line"),
-                "end_line": item.get("end_line"),
-                "issue_text": f"Unmanaged inline Checkov suppression for {item.get('rule_id') or 'unknown rule'}",
-                "framework": item.get("framework"),
-                "resource": item.get("resource"),
-                "unmanaged_suppression": True,
-                "remediation": "Replace the repository inline suppression with an Aegis-approved, ticketed, expiring suppression.",
-            }))
-
-    threshold = fail_on if fail_on is not None else FAIL_ON_IAC_SEVERITIES
-    blocking = [item for item in findings if item["severity"] in threshold]
-    return {
-        "tool": "IaC",
-        "total_issues": len(findings),
-        "blocking_issues": len(blocking),
-        "status": "FAIL" if blocking else "PASS",
-        "severity_counts": _severity_counts(findings),
-        "examples": (blocking if blocking else findings)[:5],
-        "findings": findings,
-        "frameworks": report.get("frameworks", []),
-        "summary": report.get("summary", {}),
-        "unmanaged_suppression_count": len(report.get("unmanaged_suppressions", [])) if isinstance(report.get("unmanaged_suppressions"), list) else 0,
-    }
-
-
 def analyze_report_set(
     reports: Dict[str, Any],
     fail_on: set[str] | None = None,
@@ -747,14 +500,10 @@ def analyze_report_set(
     return [
         analyze_ruff(reports.get("ruff"), fail_on),
         analyze_semgrep(reports.get("semgrep"), fail_on),
-        analyze_safety(reports.get("safety"), fail_on),
         analyze_osv(reports.get("osv"), fail_on),
-        analyze_trivy(reports.get("trivy"), fail_on),
         analyze_secrets(reports.get("secrets"), fail_on),
-        analyze_yara(reports.get("yara"), fail_on),
-        analyze_clamav(reports.get("clamav"), fail_on),
-        analyze_zap(reports.get("zap"), fail_on),
-        analyze_iac(reports.get("iac"), fail_on),
+        *([analyze_yara(reports.get("yara"), fail_on)] if "yara" in reports else []),
+        *([analyze_codeql(reports.get("codeql"), fail_on)] if "codeql" in reports else []),
     ]
 
 
@@ -1262,7 +1011,7 @@ def evaluate_policy_results(
     ]
     error_tools = list(dict.fromkeys([*(operational_failures or []), *scanner_errors]))
 
-    if error_tools and fail_on_errors:
+    if error_tools and (fail_on_errors or "CodeQL" in error_tools):
         return {
             "status": "ERROR",
             "reason": f"Operational scanner failure(s): {', '.join(error_tools)}",
@@ -1330,20 +1079,16 @@ def run_policy_engine(
         print(f"[WARN] Failed to generate SBOM manifest: {e}")
 
     ruff_report = load_json(scan_dir / "ruff-report.json")
-    safety_report = load_json(scan_dir / "safety-report.json")
-    trivy_report = load_json(scan_dir / "trivy-report.json")
     secrets_report = load_json(scan_dir / "secrets-report.json")
-    yara_report = load_json(scan_dir / "yara-report.json")
     semgrep_report = load_json(scan_dir / "semgrep-report.json")
-    clamav_report = load_json(scan_dir / "clamav-report.json")
-    zap_report = load_json(scan_dir / "zap-report.json")
-    iac_report = load_json(scan_dir / "iac-report.json")
+    yara_report = load_json(scan_dir / "yara-report.json") if (scan_dir / "yara-report.json").exists() else None
+    codeql_report = load_json(scan_dir / "codeql-report.json") if (scan_dir / "codeql-report.json").exists() else None
 
     osv_report_path = output_root.file("osv-report.json") if output_root else scan_dir / "osv-report.json"
     cached_osv_report = load_json(osv_report_path)
     inventory_errors = _dependency_inventory_errors(dependency_manifests)
     if inventory_errors and fail_on_scanner_errors:
-        osv_findings = []
+        osv_findings: list[dict] = []
         if "OSV" not in effective_operational_failures:
             effective_operational_failures.append("OSV")
         if output_root:
@@ -1382,15 +1127,13 @@ def run_policy_engine(
     report_set = {
         "ruff": ruff_report,
         "semgrep": semgrep_report,
-        "safety": safety_report,
         "osv": osv_findings,
-        "trivy": trivy_report,
         "secrets": secrets_report,
-        "yara": yara_report,
-        "clamav": clamav_report,
-        "zap": zap_report,
-        "iac": iac_report,
     }
+    if (tool_states is None and yara_report is not None) or (tool_states or {}).get("YARA") in {"completed", "failed"}:
+        report_set["yara"] = yara_report
+    if (tool_states is None and codeql_report is not None) or (tool_states or {}).get("CodeQL") in {"completed", "failed"}:
+        report_set["codeql"] = codeql_report
 
     # Diff-aware gating: tag raw entries with their durable fingerprints, then
     # exclude findings that already exist in the project baseline from the
@@ -1414,14 +1157,10 @@ def run_policy_engine(
     state_aliases = {
         "Ruff (SAST)": "Ruff",
         "Semgrep": "Semgrep",
-        "Safety": "Safety",
         "OSV Dependency Audit": "OSV",
-        "Trivy": "Trivy",
         "Secrets Scanner": "Secrets",
         "YARA Scanner": "YARA",
-        "ClamAV": "ClamAV",
-        "Aegis DAST Probe": "DAST",
-        "IaC": "IaC",
+        "CodeQL": "CodeQL",
     }
     for result in results:
         scanner_state = (tool_states or {}).get(state_aliases[result["tool"]])

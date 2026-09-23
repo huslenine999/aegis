@@ -421,6 +421,7 @@ def run_bounded_subprocess(
     on_output: Callable[[bytes], None] | None = None,
     check_callback: Callable[[], None] | None = None,
     preexec_fn: Callable[[], None] | None = None,
+    stdin: TextIO | BinaryIO | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a command while draining and bounding its stdout.
 
@@ -440,7 +441,7 @@ def run_bounded_subprocess(
         command,
         cwd=cwd,
         env=env,
-        stdin=subprocess.DEVNULL,
+        stdin=stdin if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=False,
@@ -617,6 +618,7 @@ def run_bounded_subprocess_stdout_to_file(
     on_output: Callable[[bytes], None] | None = None,
     check_callback: Callable[[], None] | None = None,
     accepted_return_codes: set[int] | None = None,
+    stdin: TextIO | BinaryIO | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Capture bounded stdout into an atomically promoted report file.
 
@@ -650,6 +652,7 @@ def run_bounded_subprocess_stdout_to_file(
                 max_output_bytes=max_output_bytes,
                 on_output=on_output,
                 check_callback=check_callback,
+                stdin=stdin,
             )
         if temporary.is_symlink() or not temporary.is_file():
             raise ResourceLimitError("Scanner output must be a regular file.")

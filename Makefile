@@ -1,8 +1,8 @@
 UV ?= uv
 PYTHON := $(UV) run python
-SECURITY_BOUNDARY_COVERAGE := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.iac_scanner --cov=app.artifact_storage --cov=app.reporting --cov=app.resource_budgets --cov=app.github_lifecycle
+SECURITY_BOUNDARY_COVERAGE := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.artifact_storage --cov=app.reporting --cov=app.resource_budgets --cov=app.github_lifecycle
 
-.PHONY: setup verify verify-fast lock lock-check export-requirements lint types test e2e clean
+.PHONY: setup codeql-setup verify verify-fast lock lock-check export-requirements lint types test e2e clean
 
 setup:
 	$(UV) venv
@@ -12,6 +12,9 @@ setup:
 	@echo "  source venv/bin/activate"
 	@echo "Then run:"
 	@echo "  aegis start"
+
+codeql-setup:
+	./scripts/setup_codeql.sh
 
 verify: lock-check lint types test e2e
 	git diff --check

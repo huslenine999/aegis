@@ -3,7 +3,6 @@ import hmac
 import importlib.metadata
 import json
 import os
-import shutil
 import subprocess
 import sys
 import uuid
@@ -28,7 +27,6 @@ from .resource_budgets import (
     load_bounded_json,
 )
 from .safe_output import SafeOutputRoot
-from .sandbox import is_docker_available
 from .scanners import find_runtime_executable
 
 
@@ -155,13 +153,8 @@ def run_doctor(json_output: bool = False) -> int:
 
     semgrep_bin = find_runtime_executable("semgrep")
     add_check("semgrep", semgrep_bin is not None, semgrep_bin or "not found")
-    checkov_bin = find_runtime_executable("checkov")
-    add_check("checkov", checkov_bin is not None, checkov_bin or "not found")
-    trivy_bin = shutil.which("trivy")
-    add_check("trivy", trivy_bin is not None, trivy_bin or "not found")
-    cli_module = sys.modules.get("app.cli")
-    docker_available = cli_module.is_docker_available() if cli_module else is_docker_available()
-    add_check("docker", docker_available, "available" if docker_available else "unavailable")
+    codeql_bin = find_runtime_executable("codeql")
+    add_check("codeql", False, f"{codeql_bin or 'not found'}; isolated runtime not provisioned")
 
     ok = all(check["ok"] for check in checks if check["name"] in {"python", "project_root", "ruff"})
     payload = {"status": "ok" if ok else "degraded", "checks": checks}
@@ -258,7 +251,7 @@ def run_demo(*, execute_scan_fn, open_report: bool = False, output_dir: str | No
     create_demo_target(target_dir)
 
     print(f"Created demo target: {target_dir}")
-    print("Running a quick local scan with Docker-dependent checks disabled...")
+    print("Running a quick local scan...")
     try:
         summary = execute_scan_fn(
             str(target_dir),

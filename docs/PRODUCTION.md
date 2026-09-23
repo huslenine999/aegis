@@ -91,9 +91,8 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Review `suppressions-report.json` in every release. Any exception without an
   approver, ticket, meaningful reason, or future expiry remains inactive and
   therefore cannot produce a clean result by hiding its finding.
-- OSV is the default dependency advisory source. Safety CLI is optional because
-  commercial use requires an appropriate Safety plan: enable it only with
-  `AEGIS_ENABLE_SAFETY=true` and a licensed `SAFETY_API_KEY` on the worker.
+- OSV is the dependency advisory source. An incomplete inventory or failed
+  required lookup produces an operational error rather than a clean result.
 - Keep the resource budgets explicit and size them against the largest approved
   scan: `AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES` bounds scanner pipes,
   `AEGIS_MAX_SCANNER_REPORT_BYTES` and `AEGIS_MAX_SCANNER_FINDINGS` bound
@@ -120,33 +119,35 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 
 ## Scanner runtime
 
-Quick and Standard scans run entirely in the worker image; the production image
-includes the Standard Semgrep dependency. Deep scans additionally require a
-reviewed Docker endpoint and Trivy executable available to the worker. A Deep
-scan fails with an operational error when either dependency is missing.
+Quick and Standard scans run in the worker image; the production image includes
+Semgrep. Deep CodeQL requests fail before queueing in the default Compose
+deployment. To enable Deep, provision a pinned CodeQL container image with
+`/opt/codeql/codeql` and trusted Python and JavaScript/TypeScript query suites
+outside the target source, then configure `AEGIS_CODEQL_IMAGE`,
+`AEGIS_CODEQL_PYTHON_SUITE`, and `AEGIS_CODEQL_JAVASCRIPT_SUITE` on a worker
+with access to a local Docker Unix socket. Set `AEGIS_ALLOW_DEEP_SCANS=true`
+and `AEGIS_ISOLATED_WORKER=true` on both dashboard and worker only after
+validating the actual runtime. These flags alone do not prove isolation.
+For the local Compose workbench, `make codeql-setup` downloads and verifies the
+pinned bundle, builds the local image, and updates `.env.aegis`; `aegis start`
+then enables the `deep` Compose profile. Production operators should build and
+publish the same `Dockerfile.codeql` through their reviewed image pipeline.
 
 `AEGIS_SCAN_JOB_TIMEOUT_SECONDS` controls the total RQ job lifetime and defaults
-to one hour. `AEGIS_SANDBOX_COMMAND_TIMEOUT_SECONDS` bounds individual Docker
-build, image-scan, start, and cleanup operations. `AEGIS_SCANNER_TIMEOUT_SECONDS`
-bounds streamed scanner subprocesses. Size these values for the largest approved
-repository; the total job timeout must exceed the combined scanner deadlines.
-
-Sandbox dependency installation rejects pip directives, local paths, VCS/URL
-requirements, and source distributions. Projects that require those forms fail
-closed in Deep mode and should be scanned only after their runtime is packaged as
-reviewed binary wheels in an approved package index.
-
-Do not mount the deployment host's Docker socket into the dashboard. Provision
-a separate worker host or remote TLS-protected Docker runtime with no production
-credentials, a restricted egress policy, disposable storage, and enforced CPU,
-memory, process, and execution-time limits.
+to one hour. `AEGIS_SCANNER_TIMEOUT_SECONDS` bounds streamed scanner
+subprocesses. The CodeQL adapter runs an offline, unprivileged, read-only
+container with bounded output and temporary storage, but the current worker
+still owns database and signing credentials. Test credential access, egress,
+cross-run reads, resource limits, and a real vulnerable fixture on the target
+host before production use. Provision CodeQL separately under its license;
+the published Aegis image does not contain it.
 
 ## Trust boundaries
 
-Aegis executes local scanner binaries and, for deep scans, may build and run a
-Docker sandbox from scanned source. Run the worker on infrastructure intended
-for untrusted code execution. Do not mount host secrets, Docker credentials, or
-production application data into the worker container.
+Aegis executes local scanner binaries on scanned source. The current worker
+still has database and evidence-signing access; a parser compromise therefore
+has a larger blast radius than the source repository. Keep this limitation in
+the deployment threat model until scanning and signing are separated.
 
 GitHub OAuth tokens, notification credentials, and webhook secrets are encrypted
 before persistence with `AEGIS_ENCRYPTION_KEY`. Losing this key makes those

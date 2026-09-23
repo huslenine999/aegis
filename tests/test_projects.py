@@ -36,6 +36,16 @@ def configure_project_database(tmp_path, monkeypatch):
         )
 
 
+def test_deep_scan_is_rejected_before_queuing_without_isolated_runtime(monkeypatch):
+    monkeypatch.setattr(project_routes, "create_scan_run", lambda **_: pytest.fail("queued unavailable Deep scan"))
+    with pytest.raises(fastapi.HTTPException) as error:
+        project_routes._enqueue_project_scan(
+            {"id": 1}, SimpleNamespace(user_id=1), "deep"
+        )
+    assert error.value.status_code == 503
+    assert "CodeQL" in error.value.detail
+
+
 def test_projects_are_membership_scoped(tmp_path, monkeypatch):
     configure_project_database(tmp_path, monkeypatch)
     project_id = projects.create_project(
@@ -172,6 +182,7 @@ def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeyp
     history = projects.list_scan_runs(project_id)
     assert [run["id"] for run in history] == [second, first]
     assert [run["has_report"] for run in history] == [False, True]
+    assert history[0]["decision"] == "ERROR"  # Missing policy evidence is not an approval.
 
 
 def test_failed_scan_history_includes_safe_error_without_artifact_link(tmp_path, monkeypatch):
@@ -190,7 +201,25 @@ def test_failed_scan_history_includes_safe_error_without_artifact_link(tmp_path,
     )
     scan = projects.list_scan_runs(project_id)[0]
     assert scan["failure_reason"] == "Repository access is unavailable."
+    assert scan["decision"] == "ERROR"
     assert scan["has_report"] is False
+
+
+def test_completed_blocked_scan_history_exposes_decision(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="API", repository_url="", github_full_name="", default_branch="main",
+        scan_preset="standard", user_id=10,
+    )
+    run_id = projects.create_scan_run(
+        job_id="blocked-job", project_id=project_id, requested_by=10,
+        target="project", preset="standard",
+    )
+    projects.update_scan_run(
+        run_id, state="completed", progress=100,
+        result={"policy": {"status": "BLOCKED", "reason": "Findings exceed threshold."}},
+    )
+    assert projects.list_scan_runs(project_id)[0]["decision"] == "BLOCKED"
 
 
 def test_fingerprints_cover_every_scanner_family_and_ignore_line_moves():
@@ -391,10 +420,7 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     monkeypatch.setattr(worker, "get_project", projects.get_project)
     monkeypatch.setattr(worker, "update_scan_run", projects.update_scan_run)
     monkeypatch.setattr(worker, "record_scan_artifacts", projects.record_scan_artifacts)
-    monkeypatch.setattr(worker, "is_docker_available", lambda: False)
-    monkeypatch.setattr(worker, "run_yara_scan", lambda *args: [])
-    monkeypatch.setattr(worker, "run_clamav_scan", lambda *args: [])
-    monkeypatch.setattr(worker, "stop_and_cleanup_sandbox", lambda *args: None)
+    monkeypatch.setenv("AEGIS_ENABLE_YARA", "false")
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
     with pytest.raises(worker.ScanOperationalFailure):
@@ -409,20 +435,12 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
 
     failed = projects.get_scan_run(run_id)
     assert failed["state"] == "failed"
-    assert set(failed["result"]["operational_failures"]) >= {
-        "Docker Sandbox",
-        "DAST",
-        "Trivy",
-    }
+    assert "CodeQL" in failed["result"]["operational_failures"]
     assert failed["result"]["is_blocked"] is True
-    assert set(failed["result"]["blocked_by"]) >= {
-        "Docker Sandbox",
-        "DAST",
-        "Trivy",
-    }
+    assert "CodeQL" in failed["result"]["blocked_by"]
 
 
-def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
+def test_standard_scan_does_not_launch_retired_scanners(tmp_path, monkeypatch):
     scans_dir = tmp_path / "scans"
     target = tmp_path / "target"
     target.mkdir()
@@ -432,19 +450,7 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "true")
     monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
     monkeypatch.setattr(worker, "PROJECT_ROOT", target)
-    monkeypatch.setattr(worker, "run_yara_scan", lambda *args: [])
-    monkeypatch.setattr(worker, "run_clamav_scan", lambda *args: [])
-    docker_checks = []
-    monkeypatch.setattr(
-        worker,
-        "is_docker_available",
-        lambda: docker_checks.append(True) or True,
-    )
-    monkeypatch.setattr(
-        worker,
-        "build_sandbox_image",
-        lambda *args: pytest.fail("test-mode scan attempted to build a container"),
-    )
+    monkeypatch.setenv("AEGIS_ENABLE_YARA", "false")
     scanner_commands = []
 
     def run_scanner(command, *args, **kwargs):
@@ -466,8 +472,8 @@ def test_test_mode_legacy_scan_does_not_launch_docker(tmp_path, monkeypatch):
     assert manifest["schema_version"] == 3
     assert manifest["source"]["attestation"]["status"] == "source-bound"
     assert (scans_dir / "runs" / "legacy-job" / "source-descriptor.json").exists()
-    assert docker_checks == [True]
     assert scanner_commands and "--no-cache" in scanner_commands[0]
+    assert not any("docker" in command[0] for command in scanner_commands)
 
 
 def test_new_worker_artifact_inventory_excludes_retired_scanner_reports():

@@ -1,6 +1,6 @@
 # Scanner simplification and CodeQL integration plan
 
-Date: 2026-09-22. Status: proposed implementation plan; no scanner changes applied.
+Date: 2026-09-23. Status: implementation and local runtime validation complete. The five detectors have been removed from new scans, and the CodeQL adapter, policy handling, evidence paths, and opt-in Deep worker are implemented. Authenticated browser flow and the held-out benchmark remain release gates.
 
 ## Outcome and scope
 
@@ -106,4 +106,4 @@ Implement as reviewable increments: compatibility contract/tests → retired-sca
 
 Record the prior application/image version before rollout; drain or explicitly cancel old queued/running jobs before changing worker contracts. Retain previous artifacts and avoid destructive database changes. Roll back the application version if needed without modifying evidence. Unknown/new result versions must produce an explicit unsupported state rather than a clean policy decision.
 
-This planning change installs no tools, removes no scanners, changes no secrets, and starts no scans.
+The default Compose deployment keeps Deep disabled and does not redistribute CodeQL. `make codeql-setup` downloads GitHub's CodeQL 2.27.0 bundle for the host architecture, verifies its pinned SHA-256, builds a local image, and enables the dedicated Compose worker. A live ARM64 check on 2026-09-23 ran the pinned image `aegis-codeql@sha256:79cc31f4aff8407f9bf860edbff357fc968d9dd86c83005a51a90d4c9f34cf35` offline from inside that worker and detected `py/sql-injection` as HIGH in the controlled vulnerable fixture. The suite measured 80.13% on its configured coverage scope. Authenticated browser workflow, adversarial credential/egress/cross-run tests, and the held-out benchmark remain release gates.

@@ -23,11 +23,11 @@ from .cli_config import (
     get_config_section,
     normalize_suppressions,
     resolve_exclude_paths,
-    should_skip_path,
     validate_fail_on,
 )
 from .cli_output import print_ascii_report, print_timing_summary
 from .cli_reports import read_json, utc_timestamp, write_json, write_sarif_report
+from .codeql_scanner import CodeQLScanError, operator_runtime_configuration, run_codeql_scan_isolated
 from .config import config_bool, load_advisory_config, load_config
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from .evidence import canonical_json, sign_manifest
@@ -46,6 +46,7 @@ from .scan_engine import (
     CliEventSink,
     ScanEvent,
     ScanRunner,
+    SCAN_PROFILE_VERSION,
     add_semgrep_excludes,
     build_ruff_command,
 )
@@ -223,7 +224,7 @@ def execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
-    preset: str = "standard",
+    preset: str | None = None,
     enable_yara: bool = False,
     tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
     output_dir: str | None = None,
@@ -314,7 +315,7 @@ def _execute_scan(
     target_path_str: str,
     *,
     use_docker: bool = True,
-    preset: str = "standard",
+    preset: str | None = None,
     enable_yara: bool = False,
     tool_timeout: int | None = DEFAULT_TOOL_TIMEOUT,
     output_dir: str | None = None,
@@ -381,6 +382,8 @@ def _execute_scan(
         raise ValueError("The Safety option was removed; OSV provides dependency auditing.")
     if not use_docker:
         raise ValueError("--no-docker was removed; choose --preset quick for a shorter scan.")
+    if preset is None:
+        preset = config_value(config, "preset", "standard")
     if preset not in {"quick", "standard", "deep"}:
         raise ValueError("--preset must be quick, standard, or deep.")
     if fast:
@@ -416,6 +419,10 @@ def _execute_scan(
         scan_dir = source_path.parent / ".aegis" / "scans"
     safe_output = SafeOutputRoot(scan_dir)
     scan_dir = safe_output.root
+
+    # The CLI reuses this directory; optional reports must belong to this run.
+    for filename in ("codeql.sarif", "codeql-report.json", "yara-report.json"):
+        safe_output.file(filename).unlink(missing_ok=True)
 
     placeholder_reports = {
         "ruff-report.json": [],
@@ -597,6 +604,20 @@ def _execute_scan(
             except Exception as exc:
                 print(f"  [YARA Warn] Report was discarded: {exc}")
                 mark_tool("YARA", "failed", detail=str(exc))
+    else:
+        mark_tool("YARA", "skipped", detail="optional signature analysis disabled")
+
+    if preset == "deep":
+        with timed_step(timings, "CodeQL"):
+            try:
+                image, suites = operator_runtime_configuration()
+                run_codeql_scan_isolated(Path(target_path), scan_dir, image=image, query_suites=suites)
+                mark_tool("CodeQL", "completed")
+            except (CodeQLScanError, OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
+                print(f"  [CodeQL Error] {exc}")
+                mark_tool("CodeQL", "failed", detail=str(exc))
+    else:
+        mark_tool("CodeQL", "skipped", detail="scan preset")
 
     # 8. Run Policy Engine
     print("\nEvaluating all reports against Aegis Security Gate rules...")
@@ -659,7 +680,9 @@ def _execute_scan(
         exit_code = EXIT_OPERATIONAL_ERROR
 
     policy_contract = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "scan_profile_version": SCAN_PROFILE_VERSION,
+        "preset": preset,
         "fail_on_severities": sorted(
             severity.strip().upper()
             for severity in str(fail_on or "").split(",")
@@ -667,8 +690,6 @@ def _execute_scan(
         ),
         "strict": strict,
         "fast": fast,
-        "docker_requested": use_docker,
-        "safety_enabled": safety_enabled,
         "excluded_paths": sorted(configured_excluded_paths),
         "suppressions": suppressions,
     }
@@ -704,7 +725,8 @@ def _execute_scan(
         "completed_at": utc_timestamp(),
         "strict": strict,
         "fast": fast,
-        "docker_requested": use_docker,
+        "preset": preset,
+        "scan_profile_version": SCAN_PROFILE_VERSION,
         "policy_exit_code": policy_exit_code,
         "exit_code": exit_code,
         "status": {

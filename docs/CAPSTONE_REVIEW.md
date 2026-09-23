@@ -20,6 +20,12 @@ The first remediation pass addresses the highest-risk, locally testable controls
 
 These are implementation changes against the pre-remediation observations below. The fixes are partial where the finding called for broader work (for example, Semgrep policy isolation, complete lockfile schema validation, and full worker isolation); those residual gaps remain open.
 
+## Scanner migration follow-up (2026-09-22)
+
+The current worktree removes Checkov, Safety, ClamAV, Trivy, and the custom DAST probes from new Quick, Standard, and Deep scans. Ruff, Semgrep, OSV, and secret detection remain; YARA is optional. New Deep scans use a dedicated worker and pinned, offline CodeQL child container with bundle-owned query suites. The default Compose deployment keeps Deep disabled until `make codeql-setup` provisions it locally. Historical findings and signed artifacts remain readable and are not treated as remediated merely because a detector was retired. The detailed contract and remaining release gates are in [SCANNER_MIGRATION_PLAN.md](SCANNER_MIGRATION_PLAN.md).
+
+This changes the interpretation of the dated DAST/Checkov/Trivy/Safety/ClamAV observations below: they describe the reviewed pre-migration behavior, not active coverage. CodeQL adds source and data-flow analysis; it does not restore container, infrastructure, malware, or runtime testing. On 2026-09-23, a live CodeQL 2.27.0 ARM64 child container ran offline from the Compose Deep worker and detected the controlled SQL-injection fixture as HIGH. Adversarial credential/egress/cross-run checks, an authenticated browser smoke test, and the held-out benchmark are still needed before making a production assurance claim. The trusted Deep-worker parent retains database, signing, and Docker-daemon capabilities, so F06 remains open.
+
 Focused regression coverage for these changes is passing. The remaining findings are still open work and should be treated as the defense backlog rather than implied guarantees.
 
 ## Verification and limits

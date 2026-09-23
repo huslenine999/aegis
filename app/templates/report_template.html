@@ -1768,27 +1768,14 @@
             <p style="margin-bottom: 1rem; font-size: 1.05rem; line-height: 1.55;" data-i18n="exp_report_summary">This report is compiled from automated security scanning tools checking the target codebase. If any severe vulnerabilities are found, the deployment gate blocks the release to ensure the live environment is not compromised.</p>
             <p style="margin-bottom: 0; font-size: 0.95rem; line-height: 1.45; color: var(--text-muted);">The heuristic risk index is a relative severity signal derived from findings. It is not a calibrated probability of exploitation and does not override the release decision.</p>
             
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 1rem; border-top: 1px dashed rgba(255,176,0,0.2); padding-top: 1rem;">
-                <div>
-                    <strong style="color: var(--primary); display: block; margin-bottom: 0.25rem;">🔍 BANDIT (Source Code Auditor)</strong>
-                    <span style="font-size: 0.98rem; line-height: 1.5; color: var(--text-main);" data-i18n="exp_desc_bandit">Scans Python files line-by-line looking for programmatic security errors (e.g. executing user inputs directly or using weak hashing).</span>
-                </div>
-                <div>
-                    <strong style="color: var(--primary); display: block; margin-bottom: 0.25rem;">📦 SAFETY (Third-Party Libraries)</strong>
-                    <span style="font-size: 0.98rem; line-height: 1.5; color: var(--text-main);" data-i18n="exp_desc_safety">Checks the requirements dependency tree against a global database of known library vulnerabilities (CVEs) and warns if packages are outdated or recalled.</span>
-                </div>
-                <div>
-                    <strong style="color: var(--primary); display: block; margin-bottom: 0.25rem;">🐳 TRIVY (System/Container Wrapper)</strong>
-                    <span style="font-size: 0.98rem; line-height: 1.5; color: var(--text-main);" data-i18n="exp_desc_trivy">Scans server setups, operating system packages, and docker files for security gaps that would let hackers gain host machine access.</span>
-                </div>
-            </div>
+            <p style="margin-bottom: 0; font-size: 0.95rem; line-height: 1.45; color: var(--text-muted);">The scanner rows below show the tools and coverage available for this run. CodeQL paths and signature matches are leads for review, not proof of an exploit or malware.</p>
         </div>
 
         <!-- Metrics Row -->
         <div class="metrics-grid reveal" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
             <div class="metric-card">
                 <div class="metric-value">{{ results | length }}</div>
-                <div class="metric-label" data-i18n="metrics_modules">Security Modules Run</div>
+                <div class="metric-label">Scanner results</div>
             </div>
             <div class="metric-card">
                 <div class="metric-value">
@@ -1798,7 +1785,7 @@
                     {% endfor %}
                     {{ total_issues.val }}
                 </div>
-                <div class="metric-label" data-i18n="metrics_vulns">Total Vulnerabilities</div>
+                <div class="metric-label">Reported findings</div>
             </div>
             <div class="metric-card">
                 <div class="metric-value">
@@ -1889,6 +1876,8 @@
                                         {{ example.issue_text }}
                                     {% elif result.tool == 'Semgrep' %}
                                         {{ example.issue_text }}
+                                    {% elif result.tool == 'CodeQL' %}
+                                        {{ example.issue_text }}
                                     {% elif result.tool == 'Safety' %}
                                         Insecure Package: {{ example.package_name }}
                                     {% elif result.tool == 'OSV Dependency Audit' %}
@@ -1912,6 +1901,8 @@
                                     <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Source Code Violation detected.</span>
                                 {% elif result.tool == 'Semgrep' %}
                                     <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Semgrep Pattern Match.</span>
+                                {% elif result.tool == 'CodeQL' %}
+                                    <span>Rule:</span> {{ example.test_id or example.rule_id }} &bull; <span>Static analysis finding; validate reachability and impact.</span>
                                 {% elif result.tool == 'Safety' %}
                                     <span data-i18n="affected_versions">Affected Versions:</span> {{ example.affected_versions }} &bull; <span data-i18n="fixed_versions">Fixed Versions:</span> {{ example.fixed_versions }}<br>
                                     <span data-i18n="description_label">Description:</span> {{ example.description }}
@@ -1937,6 +1928,8 @@
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
                                 {% elif result.tool == 'Semgrep' %}
                                     <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
+                                {% elif result.tool == 'CodeQL' %}
+                                    <span>Source:</span> {{ example.filename }}:{{ example.line_number }}
                                 {% elif result.tool == 'OSV Dependency Audit' %}
                                     <span data-i18n="dependency_pkg_label">> DEPENDENCY:</span> {{ example.package_name }} (Version: {{ example.version }})
                                 {% elif result.tool == 'Trivy' %}
@@ -1985,6 +1978,18 @@
                                     <pre><code>{{ example.suppression_example }}</code></pre>
                                 </details>
                                 {% endif %}
+                                {% if result.tool == 'CodeQL' and example.code_flows %}
+                                <div class="finding-guidance-card wide">
+                                    <span>Source-to-sink path</span>
+                                    {% for flow in example.code_flows %}
+                                    <ol>
+                                        {% for step in flow %}
+                                        <li><code>{{ step.filename }}:{{ step.line_number }}</code> — {{ step.message }}</li>
+                                        {% endfor %}
+                                    </ol>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
                             </div>
                             <!-- Explainer subtext for dynamic scan findings -->
                             <div class="explainer-subtext mono" style="display: none;">
@@ -2020,10 +2025,14 @@
                             </div>
                         </div>
                     {% endfor %}
-                {% else %}
+                {% elif result.status == 'PASS' %}
                     <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;" data-i18n="no_issues">
-                        No issues detected by this scanner daemon.
+                        No findings reported in this scan.
                     </div>
+                {% elif result.status == 'SKIPPED' or result.status == 'MISSING' %}
+                    <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">Not assessed by this scanner.</div>
+                {% else %}
+                    <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">Scanner failed or report incomplete; coverage unavailable.</div>
                 {% endif %}
             </div>
         </div>

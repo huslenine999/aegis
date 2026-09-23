@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import shutil
 import time
@@ -86,6 +87,14 @@ def _enqueue_project_scan(
 ) -> dict:
     if preset not in VALID_PRESETS:
         raise HTTPException(status_code=400, detail="Invalid scan preset.")
+    if preset == "deep" and not all(
+        os.environ.get(name, "false").lower() in {"1", "true", "yes", "on"}
+        for name in ("AEGIS_ALLOW_DEEP_SCANS", "AEGIS_ISOLATED_WORKER")
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Deep scans require an isolated CodeQL runtime, which is not available.",
+        )
     try:
         policy = ensure_active_policy(project["id"], principal.user_id)
     except ValueError as exc:

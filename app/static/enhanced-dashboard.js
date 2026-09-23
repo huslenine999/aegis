@@ -176,21 +176,20 @@
             };
         }
 
+        if (scanner === "CodeQL") {
+            return {
+                ...base,
+                why: "The query found a potentially unsafe data path; review whether untrusted input can reach the sink.",
+                fix: fallbackFix || "Validate the reported path and remove the unsafe flow before rerunning CodeQL.",
+            };
+        }
+
         if (scanner === "OSV") {
             return {
                 ...base,
                 why: "Vulnerable dependencies can expose the app even when first-party code looks clean.",
                 fix: fallbackFix || "Upgrade to a patched dependency version and regenerate the lockfile.",
                 fixSuggestion: fallbackFix || "python -m pip install --upgrade <package>",
-            };
-        }
-
-        if (scanner === "IaC") {
-            return {
-                ...base,
-                why: "Infrastructure configuration defines the security boundary before application code runs.",
-                fix: fallbackFix || "Apply the least-privilege Checkov remediation and rerun the IaC audit.",
-                fixSuggestion: fallbackFix || "Review the Checkov remediation, update the manifest, then rerun aegis scan .",
             };
         }
 
@@ -310,6 +309,19 @@
             });
         });
 
+        ((data.codeql || {}).findings || []).forEach((item) => {
+            const rule = item.rule_id || "CodeQL";
+            const title = item.issue_text || rule;
+            findings.push({
+                severity: normalizeSeverity(item.severity || "medium"),
+                scanner: "CodeQL",
+                code: rule,
+                title,
+                location: `${item.filename || "unknown"}:${item.line_number || "?"}`,
+                ...guidanceFor("CodeQL", rule, title, item.remediation),
+            });
+        });
+
         (data.osv || []).forEach((item) => {
             const title = `${item.package || "dependency"} ${item.id || "vulnerability"}`;
             findings.push({
@@ -321,33 +333,6 @@
                 ...guidanceFor("OSV", item.id || item.package, title, item.fix || "Upgrade the affected dependency to a patched version."),
                 suppress: item.suppression_guidance || "Suppress only when the vulnerable package is unreachable or protected by a compensating control.",
                 status: item.finding_status || "Pre-existing in this local scan evidence.",
-            });
-        });
-
-        const iacReport = data.iac || {};
-        const iacItems = [
-            ...(iacReport.findings || []).map((item) => ({ ...item, _unmanaged: false })),
-            ...(iacReport.unmanaged_suppressions || []).map((item) => ({ ...item, _unmanaged: true })),
-        ];
-        iacItems.forEach((item) => {
-            const rule = item.rule_id || "IaC";
-            const title = item.title || `${item.framework || "IaC"} configuration finding`;
-            const location = `${item.path || "unknown"}:${item.start_line || "?"}${item.end_line && item.end_line !== item.start_line ? `-${item.end_line}` : ""}`;
-            const unmanaged = item._unmanaged || item.source === "repository-inline-checkov";
-            findings.push({
-                severity: unmanaged ? "medium" : normalizeSeverity(item.severity || "medium"),
-                scanner: "IaC",
-                code: rule,
-                title,
-                location,
-                ...guidanceFor("IaC", rule, title, item.remediation || item.comment || "Apply the Checkov remediation and rerun the audit."),
-                ...(unmanaged ? {
-                    why: "A repository-controlled Checkov suppression is not an Aegis-approved, expiring disposition.",
-                } : {}),
-                suppress: unmanaged
-                    ? "Replace this inline suppression with an Aegis-approved ticketed suppression with an expiry."
-                    : "Suppress only with a named owner, ticket, and expiry after reviewing the configuration risk.",
-                status: unmanaged ? "Unmanaged repository suppression" : (item.finding_status || "Pre-existing in this local scan evidence."),
             });
         });
 
@@ -376,34 +361,6 @@
                 location: item.filename || "unknown",
                 ...guidanceFor("YARA", item.rule, item.rule || "Suspicious signature", item.description || "Review the matched code and remove suspicious behavior if it is not expected."),
                 suppress: "Suppress only after confirming the matched behavior is intentional and documented.",
-                status: "Pre-existing in this local scan evidence.",
-            });
-        });
-
-        (data.clamav || []).forEach((item) => {
-            findings.push({
-                severity: "critical",
-                scanner: "ClamAV",
-                code: item.virus || "malware",
-                title: item.virus || "Malware signature",
-                location: item.filename || "unknown",
-                ...guidanceFor("ClamAV", item.virus, item.virus || "Malware signature", item.description || "Quarantine the file and verify its origin before restoring it."),
-                why: "Malware signatures indicate code or artifacts that can compromise developer and runtime systems.",
-                suppress: "Do not suppress unless the signature is a verified scanner false positive.",
-                status: "Pre-existing in this local scan evidence.",
-            });
-        });
-
-        (data.zap || []).filter((item) => item.status === "EXPOSED").forEach((item) => {
-            findings.push({
-                severity: "high",
-                scanner: "DAST",
-                code: item.vuln_type || "DAST",
-                title: item.vuln_type || "Exposed route",
-                location: item.route || "runtime endpoint",
-                ...guidanceFor("DAST", item.vuln_type, item.vuln_type || "Exposed route", item.description || "Add input validation, output encoding, or WAF coverage for this route."),
-                why: "The running app accepted a hostile request path during dynamic testing.",
-                suppress: "Suppress only if the route is intentionally exposed and protected by another control.",
                 status: "Pre-existing in this local scan evidence.",
             });
         });
@@ -535,17 +492,19 @@
         const findings = buildFindings(data);
         const sources = [
             ["ruff", "Ruff"], ["semgrep", "Semgrep"], ["osv", "OSV"],
-            ["iac", "IaC"], ["secrets", "Secrets"], ["yara", "YARA"], ["clamav", "ClamAV"], ["zap", "DAST"],
+            ["secrets", "Secrets"], ["codeql", "CodeQL"], ["yara", "YARA"],
         ];
         let alerts = 0;
         container.innerHTML = sources.map(([key, label]) => {
             const sourceFindings = findings.filter((finding) => finding.scanner === label);
-            const hasEvidence = data[key] !== null && data[key] !== undefined;
+            const hasEvidence = key === "codeql"
+                ? data.codeql?.status === "completed" && data.codeql?.coverage?.complete === true
+                : data[key] !== null && data[key] !== undefined;
             const state = sourceFindings.length ? "alert" : (hasEvidence ? "ready" : "standby");
             if (state === "alert") alerts += 1;
             return `<span class="telemetry-source ${state}"><i></i>${label}<small>${state === "alert" ? sourceFindings.length : state}</small></span>`;
         }).join("");
-        setText("uxTelemetryState", alerts ? `${alerts} alert ${alerts === 1 ? "source" : "sources"}` : "Signals nominal");
+        setText("uxTelemetryState", alerts ? `${alerts} alert ${alerts === 1 ? "source" : "sources"}` : "No scanner alerts reported");
     }
 
     async function loadTopology() {
@@ -630,13 +589,19 @@
         const blockedBy = data.blocked_by || [];
         const findings = buildFindings(data);
         const criticalCount = findings.filter((finding) => normalizeSeverity(finding.severity) === "critical").length;
-        const scannerKeys = ["ruff", "semgrep", "osv", "iac", "secrets", "yara", "clamav", "zap"];
-        const scannerCount = scannerKeys.filter((key) => data[key] !== null && data[key] !== undefined).length;
+        const scannerKeys = ["ruff", "semgrep", "osv", "secrets", "codeql", "yara"];
+        const scannerCount = scannerKeys.filter((key) => key === "codeql"
+            ? data.codeql?.status === "completed" && data.codeql?.coverage?.complete === true
+            : data[key] !== null && data[key] !== undefined).length;
+        const incomplete = data.decision === "ERROR";
         const decision = $("uxOverviewDecision");
         if (decision) {
             decision.classList.remove("allowed", "blocked", "neutral");
             if (!data.has_run) {
                 decision.textContent = "Not evaluated";
+                decision.classList.add("neutral");
+            } else if (incomplete) {
+                decision.textContent = "Incomplete";
                 decision.classList.add("neutral");
             } else if (data.is_blocked) {
                 decision.textContent = "Blocked";
@@ -652,11 +617,14 @@
         setText("uxOverviewScanners", String(scannerCount));
         setText("uxOverviewNextStep", !data.has_run
             ? "Run an audit to generate a release decision."
-            : (data.is_blocked ? "Review the top blockers, apply fixes, then rerun the audit." : "No blockers found. Share the evidence package with reviewers."));
+            : (incomplete ? "Resolve the scanner error and rerun the audit." : (data.is_blocked ? "Review the top blockers, apply fixes, then rerun the audit." : "No blockers found. Share the evidence package with reviewers.")));
         if (verdict) {
             verdict.classList.remove("allowed", "blocked", "neutral");
             if (!data.has_run) {
                 verdict.textContent = "No Scan Yet";
+                verdict.classList.add("neutral");
+            } else if (incomplete) {
+                verdict.textContent = "Scan incomplete";
                 verdict.classList.add("neutral");
             } else if (data.is_blocked) {
                 verdict.textContent = "Blocked";
@@ -667,9 +635,9 @@
             }
         }
         if (reason) {
-            reason.textContent = blockedBy.length ? `Blocked by ${blockedBy.join(", ")}` : (data.has_run ? "No blocking security issues found." : "Run an audit to generate a deployment decision.");
+            reason.textContent = incomplete ? (data.decision_reason || "Scanner coverage is incomplete.") : (blockedBy.length ? `Blocked by ${blockedBy.join(", ")}` : (data.has_run ? "No blocking security issues found." : "Run an audit to generate a deployment decision."));
         }
-        setText("uxVerdictSignal", !data.has_run ? "Not evaluated" : (data.is_blocked ? "Release stopped" : "Gate passed"));
+        setText("uxVerdictSignal", !data.has_run ? "Not evaluated" : (incomplete ? "Coverage incomplete" : (data.is_blocked ? "Release stopped" : "Gate passed")));
         const blockedByContainer = $("uxBlockedBy");
         if (blockedByContainer) {
             blockedByContainer.innerHTML = blockedBy.map((source) => `<span>${escapeHtml(source)}</span>`).join("");
@@ -731,7 +699,7 @@
             reportPath.textContent = data.report_url ? `${window.location.origin}${data.report_url}` : "Report path appears after a scan.";
         }
         setText("uxReportAvailability", data.report_url ? "Evidence package ready" : "No report generated");
-        setText("uxReportVerdict", !data.has_run ? "No deployment verdict" : (data.is_blocked ? "Deployment blocked" : "Deployment allowed"));
+        setText("uxReportVerdict", !data.has_run ? "No deployment verdict" : (incomplete ? "Scan incomplete" : (data.is_blocked ? "Deployment blocked" : "Deployment allowed")));
         setText("uxReportSummary", !data.has_run
             ? "Run an audit to compile a complete evidence package."
             : `${findings.length} actionable ${findings.length === 1 ? "finding" : "findings"} across ${scannerCount} reporting scanners.`);

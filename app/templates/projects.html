@@ -202,6 +202,7 @@
       return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
     }
     function scanStage(scan) {
+      if (scan.state === "analyzing" && scan.preset === "deep") return "Analyzing source with CodeQL (this stage can take several minutes)";
       const stages = {queued:"Queued", running:"Preparing source", analyzing:"Analyzing source", correlating:"Evaluating findings", reporting:"Finalizing report"};
       return stages[scan.state] || scan.state;
     }
@@ -284,9 +285,9 @@
       cachedScans = (await response.json()).scans || [];
       byId("scan-history").innerHTML = cachedScans.length ? cachedScans.map((scan) => `
         <article class="scan">
-          <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state)}</span></div>
+          <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state === "completed" && scan.decision ? (scan.decision === "ERROR" ? "incomplete" : scan.decision.toLowerCase()) : scan.state)}</span></div>
           <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
-          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : ["completed", "cancelled"].includes(scan.state) ? `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${escapeHtml(scanElapsed(scan))}` : `${escapeHtml(scanStage(scan))} · ${escapeHtml(scanElapsed(scan))} elapsed · refreshing every 3s`}</small>
+          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : scan.state === "completed" && scan.decision === "ERROR" ? `Coverage incomplete · ${escapeHtml(scanElapsed(scan))}` : ["completed", "cancelled"].includes(scan.state) ? `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${escapeHtml(scanElapsed(scan))}` : `${escapeHtml(scanStage(scan))} · ${escapeHtml(scanElapsed(scan))} elapsed · refreshing every 3s`}</small>
           <div class="row">
             ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
             ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
@@ -323,20 +324,22 @@
         byId("release-reason").textContent = `The latest scan ${latest.state}; no release approval should be inferred.`;
         return;
       }
-      let isBlocked = blockers.length > 0;
+      let decision = null;
+      let reason = "";
       try {
         const detailResponse = await api(`/api/projects/${selected.id}/scans/${latest.id}`);
         if (detailResponse.ok) {
           const detail = await detailResponse.json();
-          if (typeof detail.result?.is_blocked === "boolean") isBlocked = detail.result.is_blocked;
+          decision = detail.result?.policy?.status || (typeof detail.result?.is_blocked === "boolean" ? (detail.result.is_blocked ? "BLOCKED" : "ALLOWED") : null);
+          reason = detail.result?.policy?.reason || "";
         }
       } catch (_) {
-        // Durable findings remain a conservative fallback when detail is unavailable.
+        // A missing policy decision cannot approve a release.
       }
-      byId("release-decision").textContent = isBlocked ? "Blocked" : "Allowed";
-      byId("release-reason").textContent = isBlocked
-        ? `${blockers.length || "Policy"} blocking finding${blockers.length === 1 ? "" : "s"} require an outcome before release.`
-        : "The latest completed evidence does not contain a policy blocker.";
+      byId("release-decision").textContent = decision === "ALLOWED" ? "Allowed" : decision === "BLOCKED" ? "Blocked" : "Scan incomplete";
+      byId("release-reason").textContent = decision === "ALLOWED" ? "The latest completed evidence does not contain a policy blocker."
+        : decision === "BLOCKED" ? (reason || `${blockers.length || "Policy"} blocking finding${blockers.length === 1 ? "" : "s"} require an outcome before release.`)
+        : (reason || "A complete policy decision is unavailable; no release approval should be inferred.");
     }
     async function scanAction(id, action) {
       const response = await api(`/api/scans/${id}/${action}`, {method:"POST"});

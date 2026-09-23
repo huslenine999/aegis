@@ -56,11 +56,8 @@ def test_makefile_uses_the_uv_managed_environment():
 def test_optional_scanners_are_not_installed_in_the_core_runtime():
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())["project"]
 
-    assert not any(item.startswith("safety==") for item in project["dependencies"])
-    assert any(
-        item.startswith("safety==")
-        for item in project["optional-dependencies"]["scanner"]
-    )
+    assert not any(item.startswith(("safety==", "checkov==")) for item in project["dependencies"])
+    assert not any(item.startswith(("safety==", "checkov==")) for item in project["optional-dependencies"]["scanner"])
 
 
 def test_python_package_metadata_uses_current_license_and_explicit_data_packages():

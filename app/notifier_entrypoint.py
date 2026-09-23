@@ -13,7 +13,6 @@ FORBIDDEN_PRODUCTION_SECRETS = {
     "AEGIS_SESSION_SECRET",
     "AEGIS_SETUP_TOKEN",
     "AEGIS_TOKEN_PEPPER",
-    "SAFETY_API_KEY",
 }
 
 
@@ -36,7 +35,10 @@ def validate_notifier_configuration() -> None:
 
 def main() -> None:
     validate_notifier_configuration()
-    arguments = ["rq", "worker", *sys.argv[1:]]
+    arguments = [
+        "rq", "worker", "--worker-ttl", "900", "--maintenance-interval", "60",
+        *sys.argv[1:],
+    ]
     os.execvp(arguments[0], arguments)
 
 
