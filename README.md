@@ -12,10 +12,10 @@ Use it as:
 - or a self-hosted workbench for findings, policy, evidence, and remediation.
 
 > [!IMPORTANT]
-> Aegis is ready for local evaluation and controlled single-customer pilots.
-> Production deployment still requires an operator to provision secrets,
-> backups and monitoring. Deep scans require a separately provisioned, isolated
-> CodeQL runtime. This release is not presented as a public shared multi-tenant service.
+> Aegis is ready for local evaluation. Controlled single-customer pilots require
+> an operator to provision secrets, backups, and monitoring and complete the
+> validation described below. Deep scans require a separately provisioned
+> CodeQL runtime. This release is not a public shared multi-tenant service.
 
 ## Why Aegis?
 
@@ -138,11 +138,12 @@ After signing in:
 
 1. open **Projects**;
 2. create a local project or connect GitHub and import a repository;
-3. choose Quick or Standard scanning;
-4. review the policy decision and durable findings;
-5. assign owners, acknowledge or resolve findings, and create GitHub remediation
-   issues;
-6. download the report bundle and signed evidence manifest.
+3. choose Quick or Standard scanning, or Deep after
+   [enabling CodeQL](#enable-deep-codeql-scans);
+4. run a scan from **Scan history**, then open its report in the browser;
+5. review the policy decision and durable findings, assign owners, and create
+   GitHub remediation issues;
+6. download the evidence bundle, including its signed manifest, when needed.
 
 ### Enable Deep CodeQL scans
 
@@ -157,8 +158,8 @@ aegis start --no-open
 The setup command verifies the official CodeQL 2.27.0 bundle checksum, builds a
 pinned local image, and enables the dedicated `deep` worker profile. In the
 website, open **Projects**, select a project, choose **Deep** under **Project
-settings**, save, and run the scan. Deep supports Python and
-JavaScript/TypeScript; a repository with neither language fails explicitly.
+settings**, save, then use **Run scan** in **Scan history**. Deep supports Python
+and JavaScript/TypeScript; a repository with neither language fails explicitly.
 
 Stop the stack without deleting its data:
 
@@ -191,9 +192,9 @@ The web application turns one-off scanner output into an operational workflow:
 | **Standard** | Pull requests and branch gates | Quick plus Python Semgrep rules and OSV dependency audit |
 | **Deep** | Controlled release audit | Standard plus CodeQL for Python and JavaScript/TypeScript |
 
-Deep scans are unavailable in the default local topology. They require an
-operator-provisioned pinned CodeQL image, trusted query suites, and a tested
-isolated runtime. An unavailable runtime is an operational error, never a pass.
+Deep scans are unavailable in the default local topology. `make codeql-setup`
+provisions the pinned local image and trusted query suites for the optional
+Deep worker. An unavailable runtime is an operational error, never a pass.
 
 ## Scanner coverage
 
@@ -207,8 +208,10 @@ isolated runtime. An unavailable runtime is an operational error, never a pass.
 | Optional signatures | YARA, only when explicitly enabled |
 | Correlation and gating | Versioned severity policy and audited suppressions |
 
-Infrastructure, container-image, and runtime vulnerabilities are outside the
-current scanner coverage. A finding is a lead for review, not proof of exploitation.
+Infrastructure, container-image, live-endpoint, and malware detection are
+outside the current default scanner coverage. Optional YARA reports signature
+matches, not confirmed malware. A finding is a lead for review, not proof of
+exploitation.
 
 Requested scanner failures are recorded as operational failures. Use strict mode
 for any release decision.
@@ -365,9 +368,12 @@ Important controls include:
 - a separate notifier process that does not expose SMTP credentials to scanners;
 - production host and CORS allowlists with no wildcard defaults.
 
-Aegis still executes security tooling against untrusted source. Treat worker
-compromise as a realistic threat, keep production credentials out of workers,
-and review the [threat model](docs/THREAT_MODEL.md) before deployment.
+Aegis still executes security tooling against untrusted source. The disposable
+CodeQL child has no application credentials, network, or host filesystem mounts.
+Its trusted Deep-worker supervisor still holds database and evidence-signing
+credentials and access to the local Docker socket. A compromise of that
+supervisor crosses the isolation boundary; review the
+[threat model](docs/THREAT_MODEL.md) before deployment.
 
 ## Operations
 
@@ -419,15 +425,19 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The current baseline is:
+The last local validation on 2026-09-23 recorded 313 passing Python tests, 2
+skipped Compose integration tests, 80.13% coverage over the configured modules,
+and passing Ruff and mypy checks. A live offline CodeQL scan found SQL injection
+in a controlled Python fixture. The coverage percentage is not whole-project
+coverage.
 
-- 312 Python tests (all passing);
-- 30 balanced scanner benchmark cases;
-- 7 Playwright and axe accessibility tests;
-- Ruff (0 errors) and mypy (0 errors across 52 source files) validation in CI.
-
-The benchmark is useful regression evidence, not an independent certification or
-a substitute for testing Aegis against representative repositories.
+The existing 30-case benchmark exercises the Quick Python scanner. Seven
+browser tests cover setup, access control, the dashboard, accessibility, and
+output escaping. An authenticated Deep browser flow, adversarial isolation
+checks, and a held-out CodeQL benchmark remain to be completed before claiming
+production assurance. See the [capstone review](docs/CAPSTONE_REVIEW.md) and
+[scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
+questions and release gates.
 
 ## Documentation
 
@@ -439,6 +449,8 @@ a substitute for testing Aegis against representative repositories.
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Threat model](docs/THREAT_MODEL.md)
+- [Capstone review](docs/CAPSTONE_REVIEW.md)
+- [Scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md)
 - [Hardening baseline](docs/HARDENING.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Security policy](SECURITY.md)
