@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: huslenine999/aegis
-          ref: 972aac6f1c782cd3bb096bdad34382760dfd1245
+          ref: ed6b080b1e340fca1286d4aa68705e1edfdd0ee1
           path: trusted-aegis
           persist-credentials: false
 
@@ -67,7 +67,7 @@ jobs:
           cp trusted-aegis/aegis.yml target/.aegis-trusted.yml
           set +e
           aegis scan target \
-            --no-docker \
+            --preset standard \
             --strict \
             --timeout 120 \
             --output "$OUTPUT_DIR" \
@@ -184,7 +184,6 @@ jobs:
             --cov=app.rate_limit \
             --cov=app.scan_engine \
             --cov=app.security_middleware \
-            --cov=app.iac_scanner \
             --cov=app.github_lifecycle \
             --cov-report=term-missing
 

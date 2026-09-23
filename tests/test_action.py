@@ -188,17 +188,19 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     scan_script = scan_step["run"]
 
     assert "uses: ./" not in workflow
-    assert "ref: 972aac6f1c782cd3bb096bdad34382760dfd1245" in workflow
+    assert "ref: ed6b080b1e340fca1286d4aa68705e1edfdd0ee1" in workflow
     assert 'python -m pip install "./trusted-aegis[scanner]"' in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
     assert 'OUTPUT_DIR="${GITHUB_WORKSPACE}/aegis-reports"' in scan_script
     assert 'realpath "$OUTPUT_DIR"' in scan_script
     assert "aegis scan target \\" in scan_script
-    assert "--no-docker" in scan_script
+    assert "--preset standard" in scan_script
+    assert "--no-docker" not in scan_script
     assert "--fast" not in scan_script
     assert "--disable-version-check" in workflow
     assert "--validate" in workflow
+    assert "--cov=app.iac_scanner" not in workflow
 
 
 def test_security_gate_shell_script_has_valid_bash_syntax(tmp_path):
