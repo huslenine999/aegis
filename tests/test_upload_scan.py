@@ -28,8 +28,9 @@ def test_run_scan_default(client):
     
     # Check that reports were generated
     assert (SCANS_DIR / "ruff-report.json").exists()
-    assert (SCANS_DIR / "safety-report.json").exists()
-    assert (SCANS_DIR / "trivy-report.json").exists()
+    assert (SCANS_DIR / "semgrep-report.json").exists()
+    assert (SCANS_DIR / "osv-report.json").exists()
+    assert (SCANS_DIR / "secrets-report.json").exists()
     assert (SCANS_DIR / "report.html").exists()
 
 def test_run_scan_custom_clean(client):

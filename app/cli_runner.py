@@ -789,7 +789,7 @@ exit 0
 """
     
     pre_push_path.write_text(hook_content)
-    os.chmod(pre_push_path, 0o755)
+    pre_push_path.chmod(0o700)
     print("✅ Aegis Git pre-push hook installed successfully at .git/hooks/pre-push")
     return 0
 

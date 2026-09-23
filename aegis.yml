@@ -11,13 +11,6 @@ scan:
     - tests
   suppressions:
     - tool: Ruff
-      rule: S103
-      path: app/cli.py
-      reason: Git hook installer intentionally writes an executable pre-push hook.
-      approved_by: security-owner
-      ticket: AEGIS-RISK-001
-      expires_at: 2027-07-20
-    - tool: Ruff
       rule: S104
       path: app/main.py
       reason: Development dashboard binds to all interfaces only when launched directly.

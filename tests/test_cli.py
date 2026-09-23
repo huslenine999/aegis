@@ -60,6 +60,7 @@ def test_install_uninstall_hook(tmp_path, monkeypatch):
     
     # Check that hook has execution permissions
     assert os.access(pre_push_hook, os.X_OK)
+    assert pre_push_hook.stat().st_mode & 0o777 == 0o700
     
     # Uninstall the hook
     assert uninstall_hook() == 0

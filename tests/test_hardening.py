@@ -148,7 +148,7 @@ def test_api_tokens_are_keyed_scoped_and_track_last_use(tmp_path, monkeypatch):
             (
                 user_id,
                 auth.hash_api_token(token),
-                auth.API_TOKEN_HASH_SCHEME,
+                auth.HMAC_DIGEST_SCHEME,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -191,7 +191,7 @@ def test_legacy_api_token_rows_are_rejected_and_versioned_tokens_work(
             (
                 user_id,
                 auth.hash_api_token(current_token),
-                auth.API_TOKEN_HASH_SCHEME,
+                auth.HMAC_DIGEST_SCHEME,
                 now,
             ),
         )
@@ -424,7 +424,7 @@ def test_isolated_worker_preflights_pinned_codeql_runtime(monkeypatch):
 
     validate_worker_configuration()
 
-    assert inspected[0][:3] == ["docker", "image", "inspect"]
+    assert inspected[0][:3] == ["/usr/bin/docker", "image", "inspect"]
 
     monkeypatch.setenv(
         "AEGIS_EVIDENCE_SIGNING_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"

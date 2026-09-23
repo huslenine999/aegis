@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ..audit import record_audit
 from ..auth import (
-    API_TOKEN_HASH_SCHEME,
+    HMAC_DIGEST_SCHEME,
     AUTH_REQUIRED,
     SESSION_COOKIE,
     TOKEN_SCOPES,
@@ -568,7 +568,7 @@ async def create_api_token(
             (
                 user_id,
                 hash_api_token(token),
-                API_TOKEN_HASH_SCHEME,
+                HMAC_DIGEST_SCHEME,
                 name or "automation",
                 expires_at,
                 datetime.now(timezone.utc).isoformat(),

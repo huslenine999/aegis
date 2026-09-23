@@ -8,7 +8,7 @@ principal or an unauthenticated non-loopback listener.
 import os
 import sys
 
-from .config import validate_runtime_configuration, validate_server_bind
+from .config import CONTAINER_BIND_HOST, validate_runtime_configuration, validate_server_bind
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -27,7 +27,7 @@ def validate_startup_configuration() -> None:
     # Containers intentionally listen on all interfaces; production auth and
     # bind validation run before Uvicorn starts.
     validate_server_bind(
-        os.environ.get("AEGIS_HOST", "0.0.0.0"),  # noqa: S104
+        os.environ.get("AEGIS_HOST", CONTAINER_BIND_HOST),
         auth_required=_authentication_required(),
     )
 
@@ -40,7 +40,7 @@ def main() -> None:
             "uvicorn",
             "app.main:app",
             "--host",
-            os.environ.get("AEGIS_HOST", "0.0.0.0"),  # noqa: S104
+            os.environ.get("AEGIS_HOST", CONTAINER_BIND_HOST),
             "--port",
             "5001",
         ]

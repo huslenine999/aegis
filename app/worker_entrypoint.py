@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import socket
+from pathlib import Path
 
 from .evidence import evidence_public_key
 from .codeql_scanner import SUPPORTED_LANGUAGES, operator_runtime_configuration
@@ -35,11 +36,12 @@ def validate_worker_configuration() -> None:
         image, suites = operator_runtime_configuration()
         if set(suites) != SUPPORTED_LANGUAGES:
             raise RuntimeError("Deep workers require trusted Python and JavaScript CodeQL suites.")
-        if not shutil.which("docker"):
+        docker_executable = shutil.which("docker")
+        if not docker_executable or not Path(docker_executable).is_absolute():
             raise RuntimeError("Deep workers require the Docker CLI.")
         try:
             subprocess.run(
-                ["docker", "image", "inspect", image],
+                [docker_executable, "image", "inspect", image],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

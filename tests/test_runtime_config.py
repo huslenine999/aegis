@@ -311,6 +311,34 @@ def test_container_preflight_rejects_missing_production_configuration(monkeypatc
         validate_startup_configuration()
 
 
+def test_container_preflight_accepts_authenticated_non_loopback(monkeypatch):
+    from app.preflight import validate_startup_configuration
+
+    monkeypatch.setenv("AEGIS_ENV", "development")
+    monkeypatch.setenv("AEGIS_REQUIRE_AUTH", "true")
+    monkeypatch.setenv("AEGIS_HOST", "0.0.0.0")
+
+    validate_startup_configuration()
+
+
+def test_container_preflight_builds_default_command(monkeypatch):
+    from app import preflight
+
+    executed = []
+    monkeypatch.setattr(preflight, "validate_startup_configuration", lambda: None)
+    monkeypatch.setattr(preflight.sys, "argv", ["app.preflight"])
+    monkeypatch.delenv("AEGIS_HOST", raising=False)
+    monkeypatch.setattr(
+        preflight.os,
+        "execvp",
+        lambda executable, arguments: executed.append((executable, arguments)),
+    )
+
+    preflight.main()
+
+    assert executed == [("uvicorn", ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5001"])]
+
+
 def test_security_headers_are_added_to_dynamic_responses():
     response = TestClient(app_main.app).get("/health")
 

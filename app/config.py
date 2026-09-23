@@ -13,6 +13,7 @@ from .resource_budgets import ResourceLimitError, resource_budgets
 
 CONFIG_FILENAMES = ("aegis.yml", "aegis.yaml", ".aegis.yml", ".aegis.yaml")
 TRUE_VALUES = {"1", "true", "yes", "on"}
+CONTAINER_BIND_HOST = str(ipaddress.IPv4Address(0))
 ConfigTrustLevel = Literal["trusted", "advisory"]
 
 

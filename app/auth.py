@@ -18,7 +18,7 @@ from .database import get_connection
 SESSION_COOKIE = "aegis_session"
 ROLE_LEVEL = {"viewer": 10, "operator": 20, "admin": 30}
 TOKEN_SCOPES = {"read", "write", "admin"}
-API_TOKEN_HASH_SCHEME = "hmac-sha256-v1"
+HMAC_DIGEST_SCHEME = "hmac-sha256-v1"
 AUTH_REQUIRED = os.environ.get("AEGIS_REQUIRE_AUTH", "").lower() in {"1", "true", "yes", "on"} or (
     os.environ.get("AEGIS_ENV", "development").lower() == "production"
 )
@@ -520,7 +520,7 @@ def _api_token_principal(token: str) -> Principal | None:
                WHERE t.hash_scheme = ? AND t.token_hash = ?
                AND t.revoked_at IS NULL AND u.active = 1
                AND (t.expires_at IS NULL OR t.expires_at > ?)""",
-            (API_TOKEN_HASH_SCHEME, token_hash, now),
+            (HMAC_DIGEST_SCHEME, token_hash, now),
         ).fetchone()
         if row:
             connection.execute(
