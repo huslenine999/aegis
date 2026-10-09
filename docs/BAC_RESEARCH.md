@@ -1,5 +1,7 @@
 # Broken-access-control research with Aegis
 
+New to Aegis? Start with [the thesis team beginner walkthrough](THESIS_TEAM_GUIDE.md).
+
 This module is a CLI-first research workflow for a bachelor's thesis. It combines an
 owned synthetic API, an explicit permission matrix, role-aware requests,
 evidence-based classification, and repeatable evaluation. It does not scan
