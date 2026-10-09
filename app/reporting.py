@@ -131,6 +131,8 @@ ReportSource = bytes | Path | Callable[[], Iterable[bytes]]
 
 def _selected_bundle_sources(
     artifacts: Mapping[str, ReportSource],
+    *,
+    include_all: bool = False,
 ) -> list[tuple[str, str, ReportSource]]:
     preferred_files = [
         "report.html",
@@ -148,6 +150,9 @@ def _selected_bundle_sources(
     for filename in artifacts:
         if not SAFE_ARTIFACT_NAME.fullmatch(filename):
             raise ArtifactLimitError(f"Invalid artifact name: {filename!r}.")
+
+    if include_all:
+        return [(filename, filename, artifacts[filename]) for filename in sorted(artifacts)]
 
     for filename in preferred_files:
         if filename in artifacts:
@@ -186,12 +191,14 @@ def _source_chunks(
 def build_report_bundle_to_path(
     artifacts: Mapping[str, ReportSource],
     destination: Path,
+    *,
+    include_all: bool = False,
 ) -> None:
     """Build a bounded ZIP incrementally and atomically publish it."""
 
     limits = artifact_limits()
     budgets = resource_budgets()
-    selected = _selected_bundle_sources(artifacts)
+    selected = _selected_bundle_sources(artifacts, include_all=include_all)
     if len(selected) + 1 > budgets.max_zip_entries:
         raise ResourceLimitError(
             f"Report bundle exceeds the configured ZIP entry limit of "

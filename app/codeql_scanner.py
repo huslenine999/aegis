@@ -439,7 +439,8 @@ def run_codeql_scan_isolated(
             archive = workspace / f"{language}-source.tar"
             _source_tar(source_root, archive)
             script = (
-                "mkdir /work/source; tar -xf /dev/stdin -C /work/source; "
+                "mkdir /work/source; cat > /work/source.tar; "
+                "tar -xf /work/source.tar -C /work/source; rm /work/source.tar; "
                 f"/opt/codeql/codeql database create /work/db --language={language} "
                 "--build-mode=none --source-root=/work/source --threads=2 --ram=2048 >/dev/null; "
                 f"/opt/codeql/codeql database analyze /work/db {shlex.quote(suites[language])} "

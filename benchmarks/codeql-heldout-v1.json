@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "description": "Held-out synthetic source/sink pairs for the pinned CodeQL security-extended suites. These cases measure query behavior, not production-repository accuracy.",
+  "cases": [
+    {
+      "id": "python-sql-injection",
+      "file": "python/sql_injection.py",
+      "expected_rule_id": "py/sql-injection",
+      "source": "import sqlite3\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n@app.get('/user')\ndef user():\n    name = request.args.get('name', '')\n    connection = sqlite3.connect(':memory:')\n    query = \"SELECT id FROM users WHERE name = '%s'\" % name\n    return str(connection.execute(query).fetchall())\n"
+    },
+    {
+      "id": "python-parameterized-sql",
+      "file": "python/parameterized_sql.py",
+      "expected_rule_id": null,
+      "source": "import sqlite3\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n@app.get('/user')\ndef user():\n    name = request.args.get('name', '')\n    connection = sqlite3.connect(':memory:')\n    cursor = connection.cursor()\n    cursor.execute('SELECT id FROM users WHERE name = ?', (name,))\n    return str(cursor.fetchall())\n"
+    },
+    {
+      "id": "python-command-injection",
+      "file": "python/command_injection.py",
+      "expected_rule_id": "py/command-line-injection",
+      "source": "import subprocess\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n@app.get('/search')\ndef search():\n    term = request.args.get('term', '')\n    return subprocess.run('grep ' + term + ' /var/log/aegis.log', shell=True, capture_output=True, text=True).stdout\n"
+    },
+    {
+      "id": "python-argv-command",
+      "file": "python/argv_command.py",
+      "expected_rule_id": null,
+      "source": "import subprocess\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n@app.get('/search')\ndef search():\n    term = request.args.get('term', '')\n    return subprocess.run(['/usr/bin/grep', '--', term, '/var/log/aegis.log'], capture_output=True, text=True).stdout\n"
+    },
+    {
+      "id": "javascript-command-injection",
+      "file": "javascript/command_injection.js",
+      "expected_rule_id": "js/command-line-injection",
+      "source": "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\n\napp.get('/search', (req, res) => {\n  exec('grep ' + req.query.term + ' /var/log/aegis.log', (error, stdout) => res.send(stdout));\n});\n"
+    },
+    {
+      "id": "javascript-exec-file-arguments",
+      "file": "javascript/exec_file_arguments.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst { execFile } = require('child_process');\nconst app = express();\n\napp.get('/status', (req, res) => {\n  const args = req.query.action === 'version' ? ['--version'] : ['status'];\n  execFile('/usr/bin/git', args, (error, stdout) => res.send(stdout));\n});\n"
+    },
+    {
+      "id": "javascript-code-injection",
+      "file": "javascript/code_injection.js",
+      "expected_rule_id": "js/code-injection",
+      "source": "const express = require('express');\nconst app = express();\n\napp.get('/calculate', (req, res) => {\n  const result = eval(req.query.expression);\n  res.json({ result });\n});\n"
+    },
+    {
+      "id": "javascript-json-parser",
+      "file": "javascript/json_parser.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst app = express();\n\napp.get('/parse', (req, res) => {\n  const value = JSON.parse(String(req.query.value || '{}'));\n  res.json(value);\n});\n"
+    }
+  ]
+}

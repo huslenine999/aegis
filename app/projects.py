@@ -1,5 +1,6 @@
 import json
 import re
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -326,6 +327,37 @@ def create_scan_run(
     return int(run_id)
 
 
+def claim_bac_import_run(
+    connection, *, job_id: str, project_id: int, tenant_id: int, requested_by: int
+) -> tuple[int, bool]:
+    row = connection.execute(
+        """SELECT p.tenant_id, u.tenant_id, u.role, m.role
+           FROM projects p JOIN auth_users u ON u.id = ? AND u.active = 1
+           LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = u.id
+           WHERE p.id = ?""",
+        (requested_by, project_id),
+    ).fetchone()
+    if not row or int(row[0]) != tenant_id or int(row[1]) != tenant_id:
+        raise ValueError("Research requester and project must belong to the same tenant.")
+    if row[2] not in {"admin", "operator"} or (row[2] != "admin" and row[3] not in {"admin", "operator"}):
+        raise PermissionError("Project operator access is required for research imports.")
+    # The preset satisfies the legacy schema only; the target excludes research
+    # imports from source coverage, worker dispatch, and release policies.
+    inserted = connection.execute(
+        """INSERT INTO scan_runs
+           (job_id, project_id, requested_by, tenant_id, target, preset, state, progress, created_at)
+           VALUES (?, ?, ?, ?, 'bac-research', 'quick', 'queued', 0, ?)
+           ON CONFLICT (job_id) DO NOTHING""",
+        (job_id, project_id, requested_by, tenant_id, _now()),
+    ).rowcount == 1
+    run = connection.execute(
+        "SELECT id, project_id, tenant_id, target FROM scan_runs WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    if not run or tuple(run[1:]) != (project_id, tenant_id, "bac-research"):
+        raise ValueError("Research import identity conflicts with an existing scan.")
+    return int(run[0]), inserted
+
+
 def _fingerprints(result: dict | None) -> set[str]:
     result = result or {}
     values = set()
@@ -406,9 +438,9 @@ def _fingerprints(result: dict | None) -> set[str]:
 
 
 def update_scan_run(
-    run_id: int, *, state: str, progress: int, result: dict | None = None
+    run_id: int, *, state: str, progress: int, result: dict | None = None, connection=None
 ) -> None:
-    with get_connection() as connection:
+    with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         new_findings = 0
         result_json = None
         completed_at = None
@@ -425,6 +457,7 @@ def update_scan_run(
                 previous = connection.execute(
                     """SELECT result_json FROM scan_runs
                        WHERE project_id = ? AND id != ? AND state = 'completed'
+                       AND target != 'bac-research'
                        AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1""",
                     (row[0], run_id),
                 ).fetchone()
@@ -482,6 +515,7 @@ def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
         "project_id": int(row[2]),
         "requested_by": int(row[3]),
         "target": row[4],
+        "run_kind": "bac_research" if row[4] == "bac-research" else "source",
         "preset": row[5],
         "state": row[6],
         "progress": int(row[7]),
@@ -499,16 +533,17 @@ def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
     }
 
 
-def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
+def list_scan_runs(project_id: int, limit: int = 50, *, source_only: bool = False) -> list[dict]:
+    source_filter = "AND target != 'bac-research'" if source_only else ""
     with get_connection() as connection:
         rows = connection.execute(
-            """SELECT id, job_id, project_id, requested_by, target, preset,
+            f"""SELECT id, job_id, project_id, requested_by, target, preset,
                       state, progress, new_findings, created_at, completed_at,
                       CASE WHEN state IN ('failed', 'completed')
                            THEN result_json ELSE NULL END,
                       EXISTS(SELECT 1 FROM scan_artifacts a
                              WHERE a.scan_run_id = scan_runs.id AND a.name = 'report.html')
-               FROM scan_runs WHERE project_id = ?
+               FROM scan_runs WHERE project_id = ? {source_filter}
                ORDER BY id DESC LIMIT ?""",
             (project_id, max(1, min(limit, 100))),
         ).fetchall()
@@ -521,6 +556,7 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
             "project_id": int(row[2]),
             "requested_by": int(row[3]),
             "target": row[4],
+            "run_kind": "bac_research" if row[4] == "bac-research" else "source",
             "preset": row[5],
             "state": row[6],
             "progress": int(row[7]),
@@ -529,17 +565,21 @@ def list_scan_runs(project_id: int, limit: int = 50) -> list[dict]:
             "completed_at": row[10],
             "failure_reason": result.get("error") or (result.get("policy") or {}).get("reason"),
             "decision": (
-                "ERROR" if row[6] == "failed"
+                None if row[4] == "bac-research"
+                else "ERROR" if row[6] == "failed"
                 else (result.get("policy") or {}).get("status", "ERROR")
                 if row[6] == "completed" else None
             ),
             "has_report": bool(row[12]),
+            "research_status": (result.get("bac_report") or {}).get("status") if row[4] == "bac-research" else None,
+            "research_exit_code": (result.get("bac_report") or {}).get("exit_code") if row[4] == "bac-research" else None,
+            "research_mode": (result.get("bac_report") or {}).get("mode") if row[4] == "bac-research" else None,
         })
     return scans
 
 
-def record_scan_artifacts(scan_run_id: int, artifacts: list[dict]) -> None:
-    with get_connection() as connection:
+def record_scan_artifacts(scan_run_id: int, artifacts: list[dict], *, connection=None) -> None:
+    with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         run = connection.execute(
             "SELECT job_id, project_id, tenant_id FROM scan_runs WHERE id = ?",
             (scan_run_id,),

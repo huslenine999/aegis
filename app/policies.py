@@ -220,12 +220,14 @@ def approve_policy(project_id: int, policy_id: int, actor_id: int) -> dict[str, 
 def simulate_policy(project_id: int, scan_run_id: int, definition: dict[str, Any]) -> dict[str, Any]:
     with get_connection() as connection:
         row = connection.execute(
-            """SELECT result_json, preset FROM scan_runs
+            """SELECT result_json, preset, target FROM scan_runs
                WHERE id = ? AND project_id = ? AND state = 'completed'""",
             (scan_run_id, project_id),
         ).fetchone()
     if not row or not row[0]:
         raise ValueError("A completed scan with results is required for simulation.")
+    if row[2] == "bac-research":
+        raise ValueError("BAC research imports cannot evaluate release policies.")
     result = json.loads(row[0])
     normalized = normalize_definition(definition, allow_legacy=not result.get("profile_version"))
     findings = extract_findings(result)

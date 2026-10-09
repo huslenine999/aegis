@@ -11,6 +11,7 @@
     "app/downloads/",
     "app/static/",
     "app/templates/",
+    "rules/",
     "bin/",
     "scripts/",
     "aegis.yml",
@@ -43,7 +44,8 @@
   },
   "homepage": "https://github.com/huslenine999/aegis#readme",
   "scripts": {
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:deep": "playwright test --config=playwright.deep.config.js"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

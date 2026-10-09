@@ -216,6 +216,27 @@ exploitation.
 Requested scanner failures are recorded as operational failures. Use strict mode
 for any release decision.
 
+### Broken-access-control research lab
+
+The separate `aegis bac` workflow tests an owned, temporary synthetic API lab,
+not arbitrary applications or existing production deployments. It includes
+permission scenarios, fixed/vulnerable variants, state-confirmed outcomes,
+redacted HTTP/server evidence, signed exports, and a paired evaluation against
+an explicitly limited HTTP-status-only baseline.
+
+```bash
+aegis bac run --mode vulnerable
+aegis bac run --mode fixed
+aegis bac benchmark --split evaluation --repeats 3
+```
+
+A vulnerable run normally exits `1` because a violation was confirmed; a
+complete fixed run exits `0`. Incomplete testing exits `2`. A benchmark exits
+`0` when the enhanced detector matches its seeded labels, even though vulnerable
+trials contain expected findings. These synthetic results do not establish
+real-world detection accuracy. See [the research protocol](docs/BAC_RESEARCH.md).
+BAC does not change Quick, Standard, or Deep scanner coverage.
+
 ## Project configuration
 
 Aegis accepts `aegis.yml`, `aegis.yaml`, `.aegis.yml`, or `.aegis.yaml` as a

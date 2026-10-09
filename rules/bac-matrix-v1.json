@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "corpus_id": "aegis-bac-v1",
+  "description": "Owned synthetic BAC lab. Each case starts from reset data. Private -1 records belong to development; private -2 records belong to evaluation. The evaluation split is not an independent external dataset.",
+  "cases": [
+    {"id": "dev-alice-own-read", "split": "development", "operation": "read", "actor": "alice", "resource": "alice-private-1", "expected_allowed": true},
+    {"id": "dev-bob-cross-read", "split": "development", "operation": "read", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
+    {"id": "dev-guest-private-read", "split": "development", "operation": "read", "actor": "guest", "resource": "bob-private-1", "expected_allowed": false},
+    {"id": "dev-guest-public-read", "split": "development", "operation": "read", "actor": "guest", "resource": "alice-public", "expected_allowed": true},
+    {"id": "dev-bob-cross-preview", "split": "development", "operation": "preview", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
+    {"id": "dev-admin-private-preview", "split": "development", "operation": "preview", "actor": "admin", "resource": "bob-private-1", "expected_allowed": true},
+    {"id": "dev-alice-cross-update", "split": "development", "operation": "update", "actor": "alice", "resource": "bob-private-1", "expected_allowed": false},
+    {"id": "dev-bob-own-update", "split": "development", "operation": "update", "actor": "bob", "resource": "bob-private-1", "expected_allowed": true},
+    {"id": "dev-admin-private-delete", "split": "development", "operation": "delete", "actor": "admin", "resource": "alice-private-1", "expected_allowed": true},
+    {"id": "dev-bob-cross-delete", "split": "development", "operation": "delete", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
+    {"id": "dev-alice-admin-read", "split": "development", "operation": "admin-read", "actor": "alice", "resource": "users", "expected_allowed": false},
+    {"id": "dev-admin-disable-bob", "split": "development", "operation": "admin-disable", "actor": "admin", "resource": "bob", "expected_allowed": true},
+    {"id": "eval-bob-own-read", "split": "evaluation", "operation": "read", "actor": "bob", "resource": "bob-private-2", "expected_allowed": true},
+    {"id": "eval-alice-cross-read", "split": "evaluation", "operation": "read", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
+    {"id": "eval-guest-private-preview", "split": "evaluation", "operation": "preview", "actor": "guest", "resource": "alice-private-2", "expected_allowed": false},
+    {"id": "eval-bob-public-read", "split": "evaluation", "operation": "read", "actor": "bob", "resource": "alice-public", "expected_allowed": true},
+    {"id": "eval-alice-cross-preview", "split": "evaluation", "operation": "preview", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
+    {"id": "eval-guest-public-preview", "split": "evaluation", "operation": "preview", "actor": "guest", "resource": "bob-public", "expected_allowed": true},
+    {"id": "eval-bob-cross-update", "split": "evaluation", "operation": "update", "actor": "bob", "resource": "alice-private-2", "expected_allowed": false},
+    {"id": "eval-admin-private-update", "split": "evaluation", "operation": "update", "actor": "admin", "resource": "bob-private-2", "expected_allowed": true},
+    {"id": "eval-alice-own-delete", "split": "evaluation", "operation": "delete", "actor": "alice", "resource": "alice-private-2", "expected_allowed": true},
+    {"id": "eval-alice-cross-delete", "split": "evaluation", "operation": "delete", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
+    {"id": "eval-admin-user-read", "split": "evaluation", "operation": "admin-read", "actor": "admin", "resource": "users", "expected_allowed": true},
+    {"id": "eval-bob-admin-disable-alice", "split": "evaluation", "operation": "admin-disable", "actor": "bob", "resource": "alice", "expected_allowed": false}
+  ]
+}

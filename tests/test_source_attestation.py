@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app.evidence import classify_source_attestation
+from app.evidence import canonical_json
 from app.evidence import sign_manifest
 from app import cli
 from app.source_attestation import (
@@ -44,6 +45,73 @@ def test_source_snapshot_is_canonical_and_stable(tmp_path):
         snapshot.cleanup()
 
     assert not snapshot.scan_path.exists()
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_snapshot_hashes_preserve_canonical_json_with_unicode_filename(tmp_path, kind):
+    target = tmp_path / ("한글.py" if kind == "file" else "source")
+    if kind == "directory":
+        target.mkdir()
+        source_file = target / "한글.py"
+        (target / "a.py").write_bytes(b"print('ascii')\n")
+    else:
+        source_file = target
+    source_file.write_bytes("print('안전')\n".encode("utf-8"))
+    snapshot = create_source_snapshot(target)
+    try:
+        descriptor = snapshot.descriptor
+        legacy_json = json.dumps(descriptor, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        assert canonical_json(descriptor) == legacy_json
+        assert "한글.py".encode("utf-8") in legacy_json
+        assert descriptor["root_kind"] == kind
+        assert [entry["path"] for entry in descriptor["files"]] == (["한글.py"] if kind == "file" else ["a.py", "한글.py"])
+        assert snapshot.descriptor_sha256 == hashlib.sha256(legacy_json).hexdigest()
+        content = {"schema_version": 1, "files": [
+            {key: entry[key] for key in ("path", "sha256", "size")}
+            for entry in descriptor["files"]
+        ]}
+        content_json = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        assert snapshot.content_sha256 == hashlib.sha256(content_json).hexdigest()
+    finally:
+        snapshot.cleanup()
+
+
+@pytest.mark.parametrize("kind", ["file", "directory"])
+@pytest.mark.parametrize("remove_source", [False, True])
+def test_snapshot_cleanup_only_removes_snapshot_and_is_idempotent(tmp_path, monkeypatch, kind, remove_source):
+    import app.source_attestation as attestation
+
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    make_tempdir = attestation.tempfile.mkdtemp
+    monkeypatch.setattr(attestation.tempfile, "mkdtemp", lambda **kwargs: make_tempdir(dir=temporary, **kwargs))
+    target = tmp_path / "source.py" if kind == "file" else tmp_path / "source"
+    if kind == "directory":
+        target.mkdir()
+    source_file = target if kind == "file" else target / "app.py"
+    source_file.write_text("print('safe')\n")
+    nearby = tmp_path / "user-owned.txt"
+    nearby.write_text("keep source neighbor")
+    temporary_neighbor = temporary / "user-owned.txt"
+    temporary_neighbor.write_text("keep snapshot neighbor")
+    snapshot = create_source_snapshot(target)
+    snapshot_root = snapshot.scan_path.parent if kind == "file" else snapshot.scan_path
+    assert snapshot_root.parent == temporary.resolve()
+    if remove_source:
+        source_file.unlink()
+        if kind == "directory":
+            target.rmdir()
+
+    snapshot.cleanup()
+    snapshot.cleanup()
+
+    assert not snapshot_root.exists()
+    assert not snapshot.scan_path.exists()
+    assert nearby.read_text() == "keep source neighbor"
+    assert temporary_neighbor.read_text() == "keep snapshot neighbor"
+    assert target.exists() is not remove_source
+    if not remove_source:
+        assert source_file.read_text() == "print('safe')\n"
 
 
 def test_source_snapshot_rejects_mutating_or_unsupported_source(tmp_path):

@@ -301,7 +301,7 @@ pre {
   gap: 18px;
   align-items: start;
 }
-.project-rail { position: sticky; top: 82px; padding: 16px; }
+.project-rail { min-width: 0; position: sticky; top: 82px; padding: 16px; }
 .project-list { max-height: calc(100vh - 260px); overflow: auto; }
 .project-list .project {
   position: relative;
@@ -446,6 +446,16 @@ dialog {
 }
 dialog::backdrop { background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(5px); }
 .dialog-content { padding: 24px; }
+#bac-review-dialog { width: min(1040px, calc(100% - 28px)); max-height: calc(100dvh - 28px); }
+#bac-review-run, .bac-case { overflow-wrap: anywhere; }
+#bac-review-error { color: var(--aegis-danger); }
+#bac-review-error:empty, #bac-review-status:empty, #bac-review-run:empty { display: none; }
+.bac-case { padding: 14px; border: 1px solid var(--aegis-line); border-radius: var(--aegis-radius-sm); }
+.bac-case summary { cursor: pointer; }
+.bac-case-context { display: block; margin-top: 6px; color: var(--aegis-muted); font-size: 12px; }
+.bac-case-evidence { display: grid; gap: 14px; margin-top: 14px; }
+.bac-case-evidence h3 { margin: 0 0 6px; font-size: 13px; }
+.bac-case-evidence pre { margin: 0; }
 
 .auth-page {
   min-height: 100vh;

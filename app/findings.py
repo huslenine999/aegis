@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -308,6 +309,17 @@ def extract_findings(result: dict | None) -> list[dict]:
                 raw=item,
             )
 
+    if result.get("research_only") is True:
+        corpus = (result.get("bac_report") or {}).get("corpus_id")
+        for item in result.get("bac_findings") or []:
+            add(
+                "BAC", item["rule_id"],
+                f"Synthetic BAC research: {item['actor']} / {item['rule_id']} / {item['resource']}",
+                "HIGH",
+                fingerprint_parts=("BAC", "bac-runtime-lab", corpus, item["rule_id"], item["actor"], item["resource"]),
+                raw={**item},
+            )
+
     unique = {item["fingerprint"]: item for item in normalized}
     return list(unique.values())
 
@@ -398,17 +410,19 @@ def _insert_event(
     )
 
 
-def sync_findings(scan_run_id: int, result: dict) -> dict:
+def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
     observed = extract_findings(result)
     now = _now()
-    with get_connection() as connection:
+    with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         run = connection.execute(
-            "SELECT project_id, tenant_id, state, preset FROM scan_runs WHERE id = ?",
+            "SELECT project_id, tenant_id, state, preset, target FROM scan_runs WHERE id = ?",
             (scan_run_id,),
         ).fetchone()
         if not run:
             raise ValueError("Scan run not found.")
         project_id, tenant_id, current_preset = int(run[0]), int(run[1]), str(run[3])
+        research = run[4] == "bac-research"
+        observed = [item for item in observed if (item["tool"] == "BAC") == research]
         seen: set[str] = set()
         created = reopened = 0
         for item in observed:
@@ -423,7 +437,7 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
                     continue
                 finding_id = int(existing[0])
                 old_status = existing[1]
-                next_status = "open" if old_status == "resolved" else old_status
+                next_status = "open" if old_status == "resolved" and not research else old_status
                 occurrence_exists = connection.execute(
                     """SELECT 1 FROM finding_occurrences
                        WHERE finding_id = ? AND scan_run_id = ?""",
@@ -496,7 +510,7 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
             if isinstance(tool, dict) and tool.get("status") == "completed"
         }
         resolved = 0
-        if completed_tools and not result.get("operational_failures"):
+        if not research and completed_tools and not result.get("operational_failures"):
             candidates = connection.execute(
                 """SELECT f.id, f.fingerprint, f.status, f.tool, previous_run.preset,
                           f.last_seen_run_id, previous_run.result_json
@@ -506,6 +520,8 @@ def sync_findings(scan_run_id: int, result: dict) -> dict:
                 (project_id,),
             ).fetchall()
             for finding_id, fingerprint, old_status, tool, previous_preset, last_seen_run_id, previous_result_json in candidates:
+                if tool == "BAC":
+                    continue
                 if fingerprint in seen:
                     continue
                 if last_seen_run_id is not None and int(last_seen_run_id) >= scan_run_id:
@@ -638,15 +654,30 @@ def get_finding(project_id: int, finding_id: int) -> dict | None:
                WHERE e.finding_id = ? ORDER BY e.id""",
             (finding_id,),
         ).fetchall()
-    finding["events"] = [
-        {
+        research_case = None
+        if finding["tool"] == "BAC":
+            occurrence = connection.execute(
+                """SELECT o.scan_run_id, o.raw_json FROM finding_occurrences o
+                   JOIN scan_runs r ON r.id = o.scan_run_id
+                   WHERE o.finding_id = ? AND o.scan_run_id = ?
+                   AND r.project_id = ? AND r.target = 'bac-research'""",
+                (finding_id, finding["last_seen_run_id"], project_id),
+            ).fetchone()
+            if occurrence:
+                raw = json.loads(occurrence[1])
+                research_case = {
+                    "scan_run_id": int(occurrence[0]), "case_id": raw["case_id"],
+                    "actor": raw["actor"], "operation": raw["rule_id"], "resource": raw["resource"],
+                }
+    return {
+        **finding,
+        "events": [{
             "event_type": row[0], "from_status": row[1], "to_status": row[2],
             "note": row[3], "details": json.loads(row[4] or "{}"),
             "created_at": row[5], "actor": row[6],
-        }
-        for row in events
-    ]
-    return finding
+        } for row in events],
+        **({"research_case": research_case} if finding["tool"] == "BAC" else {}),
+    }
 
 
 def update_finding(

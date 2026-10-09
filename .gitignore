@@ -17,6 +17,7 @@ dist/
 .e2e-data/
 scans/
 aegis-reports/
+/output/
 backups/
 *.db
 *.zip
@@ -25,7 +26,9 @@ benchmark-results.json
 pilot-readiness*.json
 pilot-rehearsal*.json
 .env
-.env.aegis
+.env.*
+!.env.example
+!.env.*.example
 
 # JavaScript and browser-test output
 node_modules/
@@ -34,6 +37,7 @@ playwright-report/
 
 # Coverage, logs, and operating-system files
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 *.log

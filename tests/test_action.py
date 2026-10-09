@@ -168,6 +168,29 @@ def test_repository_has_no_tracked_absolute_symlinks():
     )
 
 
+def test_gitignore_excludes_private_output_coverage_and_local_env_but_keeps_examples(tmp_path):
+    repository = tmp_path / "isolated-repository"
+    repository.mkdir()
+    (repository / ".gitignore").write_text((PROJECT_ROOT / ".gitignore").read_text())
+    environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "--quiet"], cwd=repository, env=environment, check=True)
+    ignored = {"output/private-notes.md", "output/nested/private-study.docx",
+               ".coverage.worker.pid123.part", ".env.local", ".env.production"}
+    addable = {".env.example", ".env.production.example", "app/example.py",
+               "app/output/example.py", "tests/fixtures/output/template.yaml"}
+    for name in ignored | addable:
+        path = repository / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic test fixture")
+    result = subprocess.run(
+        ["git", "-c", f"core.excludesFile={os.devnull}", "check-ignore", "--no-index", "--stdin"],
+        input="\n".join(sorted(ignored | addable)) + "\n", cwd=repository, env=environment,
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode in {0, 1}, result.stderr
+    assert set(result.stdout.splitlines()) == ignored
+
+
 def test_redis_runtime_starts_as_its_unprivileged_user():
     compose = yaml.safe_load((PROJECT_ROOT / "docker-compose.yml").read_text())
     redis_service = compose["services"]["redis"]

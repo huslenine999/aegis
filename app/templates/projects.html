@@ -94,6 +94,13 @@
                   <div class="section-heading"><div><h2>Scan history</h2><p>Every decision remains bound to its evidence and policy version.</p></div><button id="start-scan" class="primary" type="button">Run scan</button></div>
                   <div id="scan-history"><div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div></div>
                 </section>
+                <section id="bac-import" class="panel section-card" aria-labelledby="bac-import-title" hidden>
+                  <div class="section-heading"><div><h2 id="bac-import-title">Import BAC research</h2><p id="bac-import-help">Select all eight original exported files from one BAC run. Benchmark summaries are not supported. Synthetic lab evidence stays separate from release decisions and source coverage.</p></div></div>
+                  <form id="bac-import-form" class="form-grid">
+                    <label class="full">BAC run artifacts<input id="bac-import-files" name="files" type="file" multiple accept=".json,.md,.html" aria-describedby="bac-import-help" required></label>
+                    <div class="full row"><button type="submit">Import research run</button><p id="bac-import-status" role="status" aria-live="polite"></p></div>
+                  </form>
+                </section>
               </div>
 
               <div id="panel-findings" class="workspace-section" role="tabpanel" data-workspace-panel="findings" hidden>
@@ -153,6 +160,19 @@
     </form>
   </dialog>
 
+  <dialog id="bac-review-dialog" aria-labelledby="bac-review-title" aria-describedby="bac-review-limitations">
+    <div class="dialog-content stack">
+      <div class="row spread"><h2 id="bac-review-title">BAC case reviewer</h2><button id="bac-review-close" type="button" autofocus>Close reviewer</button></div>
+      <p id="bac-review-limitations" class="muted">Read-only imported synthetic lab evidence. Signatures establish artifact integrity, not proof of execution, source attestation, or production approval. No observed violation does not establish security; inconclusive evidence cannot establish a safe outcome.</p>
+      <p id="bac-review-run" class="mono"></p>
+      <nav id="bac-review-originals" class="row" aria-label="Original BAC artifacts" hidden><a data-bac-original="report.json" target="_blank" rel="noopener">Original report JSON</a><a data-bac-original="evidence.json" target="_blank" rel="noopener">Original evidence JSON</a><a data-bac-original="server-events.json" target="_blank" rel="noopener">Original audit events</a><a data-bac-original="scan-manifest.json" target="_blank" rel="noopener">Signed manifest</a></nav>
+      <p id="bac-review-status" role="status" aria-live="polite"></p>
+      <p id="bac-review-error" role="alert" aria-live="assertive"></p>
+      <button id="bac-review-retry" type="button" hidden>Retry review</button>
+      <div id="bac-review-cases" class="stack"></div>
+    </div>
+  </dialog>
+
   <script nonce="{{ request.state.csp_nonce }}">
     let csrf = "";
     let projects = [];
@@ -160,6 +180,7 @@
     let currentIdentity = null;
     let cachedFindings = [];
     let cachedScans = [];
+    let cachedLatestSourceScan = null;
     let currentMembers = [];
     let scanRefreshTimer = null;
     const presetNotes = {
@@ -206,16 +227,28 @@
       const stages = {queued:"Queued", running:"Preparing source", analyzing:"Analyzing source", correlating:"Evaluating findings", reporting:"Finalizing report"};
       return stages[scan.state] || scan.state;
     }
+    function isResearchScan(scan) {
+      return scan?.run_kind === "bac_research" || scan?.target === "bac-research" || scan?.result?.research_only === true;
+    }
+    function researchOutcome(scan) {
+      const code = scan.research_exit_code ?? scan.result?.bac_report?.exit_code;
+      const status = scan.research_status || scan.result?.bac_report?.status;
+      if (code === 2 || status === "error") return "incomplete";
+      if (code === 1 || status === "blocked") return "violation";
+      return code === 0 || status === "allowed" ? "complete" : "incomplete";
+    }
     function scheduleScanRefresh() {
       clearTimeout(scanRefreshTimer);
       scanRefreshTimer = null;
       const projectId = selected?.id;
-      if (!projectId || !cachedScans.length || ["completed", "failed", "cancelled"].includes(cachedScans[0].state)) return;
+      const latest = cachedLatestSourceScan;
+      if (!projectId || !latest || ["completed", "failed", "cancelled"].includes(latest.state)) return;
       scanRefreshTimer = setTimeout(async () => {
         if (selected?.id !== projectId) return;
         try {
           await loadScans();
-          if (["completed", "failed", "cancelled"].includes(cachedScans[0]?.state)) await Promise.all([loadFindings(), loadPolicies()]);
+          if (selected?.id !== projectId) return;
+          if (["completed", "failed", "cancelled"].includes(cachedLatestSourceScan?.state)) await Promise.all([loadFindings(), loadPolicies()]);
         } catch (error) {
           console.warn("Scan status refresh failed", error);
           if (selected?.id === projectId) scheduleScanRefresh();
@@ -227,9 +260,10 @@
     }
     function updateOnboarding() {
       const params = new URLSearchParams(location.search);
-      const welcome = params.has("welcome") || projects.length === 0;
-      byId("onboarding").hidden = !welcome;
-      byId("onboarding-scan").disabled = !selected;
+      const hasSourceScan = Boolean(cachedLatestSourceScan);
+      const welcome = params.has("welcome") || projects.length === 0 || (selected && !hasSourceScan);
+      byId("onboarding").hidden = !welcome || hasSourceScan;
+      byId("onboarding-scan").disabled = !selected || selected.role === "viewer";
       byId("onboarding-copy").textContent = selected
         ? `${selected.name} is ready for its first scan.`
         : "Create or import a project, then start a quick scan.";
@@ -261,6 +295,10 @@
     async function selectProject(id) {
       selected = projects.find((project) => project.id === id);
       if (!selected) return;
+      document.dispatchEvent(new Event("aegis:project-change"));
+      cachedScans = [];
+      cachedLatestSourceScan = null;
+      cachedFindings = [];
       byId("empty-project").hidden = true;
       byId("project-detail").hidden = false;
       byId("project-name").textContent = selected.name;
@@ -272,6 +310,9 @@
       byId("scan-preset").value = selected.scan_preset;
       byId("save-project").hidden = selected.role !== "admin";
       byId("delete-project").hidden = selected.role !== "admin";
+      byId("bac-import").hidden = !["operator", "admin"].includes(selected.role);
+      byId("bac-import-form").reset();
+      byId("bac-import-status").textContent = "";
       updatePresetNote();
       updateOnboarding();
       const url = new URL(location.href);
@@ -281,29 +322,44 @@
       await Promise.all([loadScans(), loadFindings(), loadPolicies(), loadMembers(), loadNotifications()]);
     }
     async function loadScans() {
-      const response = await api(`/api/projects/${selected.id}/scans`);
-      cachedScans = (await response.json()).scans || [];
-      byId("scan-history").innerHTML = cachedScans.length ? cachedScans.map((scan) => `
+      const projectId = selected?.id;
+      if (!projectId) return;
+      const response = await api(`/api/projects/${projectId}/scans`);
+      const data = await response.json();
+      if (selected?.id !== projectId) return;
+      cachedScans = data.scans || [];
+      cachedLatestSourceScan = data.latest_source_scan === undefined
+        ? cachedScans.find((scan) => !isResearchScan(scan)) || null
+        : data.latest_source_scan;
+      const canOperate = ["operator", "admin"].includes(selected.role);
+      byId("scan-history").innerHTML = cachedScans.length ? cachedScans.map((scan) => {
+        const research = isResearchScan(scan);
+        return `
         <article class="scan">
-          <div class="row spread"><span><strong>${escapeHtml(scan.preset)} scan</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(scan.state === "completed" && scan.decision ? (scan.decision === "ERROR" ? "incomplete" : scan.decision.toLowerCase()) : scan.state)}</span></div>
-          <div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>
-          <small class="muted">${scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : scan.state === "completed" && scan.decision === "ERROR" ? `Coverage incomplete · ${escapeHtml(scanElapsed(scan))}` : ["completed", "cancelled"].includes(scan.state) ? `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${escapeHtml(scanElapsed(scan))}` : `${escapeHtml(scanStage(scan))} · ${escapeHtml(scanElapsed(scan))} elapsed · refreshing every 3s`}</small>
+          <div class="row spread"><span><strong>${research ? "BAC research" : `${escapeHtml(scan.preset)} scan`}</strong><br><small class="muted mono">${escapeHtml(formatDate(scan.created_at))}</small></span><span class="badge">${escapeHtml(research ? researchOutcome(scan) : scan.state === "completed" && scan.decision ? (scan.decision === "ERROR" ? "incomplete" : scan.decision.toLowerCase()) : scan.state)}</span></div>
+          ${research ? "" : `<div class="progress"><span style="width:${Number(scan.progress)}%"></span></div>`}
+          <small class="muted">${research ? "Research only · synthetic lab evidence · excluded from release decisions and source coverage." : scan.state === "failed" ? escapeHtml(scan.failure_reason || "Scan failed before a report was generated. Check worker logs.") : scan.state === "completed" && scan.decision === "ERROR" ? `Coverage incomplete · ${escapeHtml(scanElapsed(scan))}` : ["completed", "cancelled"].includes(scan.state) ? `${Number(scan.new_findings || 0)} new finding${Number(scan.new_findings || 0) === 1 ? "" : "s"} · ${escapeHtml(scanElapsed(scan))}` : `${escapeHtml(scanStage(scan))} · ${escapeHtml(scanElapsed(scan))} elapsed · refreshing every 3s`}</small>
           <div class="row">
-            ${!["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
-            ${["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
+            ${research ? `<button type="button" data-bac-review="${Number(scan.id)}">Review cases</button>` : ""}
+            ${canOperate && !research && !["completed","failed","cancelled"].includes(scan.state) ? `<button class="danger" data-cancel="${scan.id}">Cancel</button>` : ""}
+            ${canOperate && !research && ["completed","failed","cancelled"].includes(scan.state) ? `<button data-retry="${scan.id}">Retry</button>` : ""}
             ${scan.has_report ? `<a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report.html" target="_blank" rel="noopener">Open report</a><a class="button subtle" href="/api/projects/${selected.id}/scans/${scan.id}/artifacts/report-bundle.zip">Download evidence</a>` : ""}
           </div>
-        </article>`).join("") : '<div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div>';
+        </article>`;
+      }).join("") : '<div class="empty-state"><strong>No scans yet</strong>Run a scan to create the first release decision.</div>';
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
       document.querySelectorAll("[data-retry]").forEach((button) => button.onclick = () => scanAction(button.dataset.retry, "retry"));
+      updateOnboarding();
       await updateProjectSummary();
+      if (selected?.id !== projectId) return;
       scheduleScanRefresh();
     }
     async function updateProjectSummary() {
       if (!selected) return;
+      const projectId = selected.id;
       const active = cachedFindings.filter((finding) => !["resolved", "false_positive"].includes(finding.status));
-      const blockers = active.filter((finding) => ["HIGH", "CRITICAL"].includes(finding.severity));
-      const latest = cachedScans[0];
+      const blockers = active.filter((finding) => finding.tool !== "BAC" && ["HIGH", "CRITICAL"].includes(finding.severity));
+      const latest = cachedLatestSourceScan;
       byId("summary-open").textContent = active.length;
       byId("summary-blockers").textContent = blockers.length;
       byId("summary-new").textContent = Number(latest?.new_findings || 0);
@@ -327,7 +383,7 @@
       let decision = null;
       let reason = "";
       try {
-        const detailResponse = await api(`/api/projects/${selected.id}/scans/${latest.id}`);
+        const detailResponse = await api(`/api/projects/${projectId}/scans/${latest.id}`);
         if (detailResponse.ok) {
           const detail = await detailResponse.json();
           decision = detail.result?.policy?.status || (typeof detail.result?.is_blocked === "boolean" ? (detail.result.is_blocked ? "BLOCKED" : "ALLOWED") : null);
@@ -336,12 +392,15 @@
       } catch (_) {
         // A missing policy decision cannot approve a release.
       }
+      if (selected?.id !== projectId || cachedLatestSourceScan !== latest) return;
       byId("release-decision").textContent = decision === "ALLOWED" ? "Allowed" : decision === "BLOCKED" ? "Blocked" : "Scan incomplete";
       byId("release-reason").textContent = decision === "ALLOWED" ? "The latest completed evidence does not contain a policy blocker."
         : decision === "BLOCKED" ? (reason || `${blockers.length || "Policy"} blocking finding${blockers.length === 1 ? "" : "s"} require an outcome before release.`)
         : (reason || "A complete policy decision is unavailable; no release approval should be inferred.");
     }
     async function scanAction(id, action) {
+      const scan = cachedScans.find((item) => item.id === Number(id));
+      if (!scan || isResearchScan(scan)) return;
       const response = await api(`/api/scans/${id}/${action}`, {method:"POST"});
       if (!response.ok) return message((await response.json()).detail || "Scan action failed.", true);
       message(action === "retry" ? "Retry queued." : "Cancellation requested.");
@@ -367,16 +426,17 @@
     function renderFindings() {
       const canOperate = selected.role !== "viewer";
       const findings = filteredFindings();
-      byId("findings").innerHTML = findings.map(finding => `<article class="finding-row">
-        <div class="finding-head"><div><h3 class="finding-title">${escapeHtml(finding.title)}</h3><div class="finding-meta">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "unclassified")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${Number(finding.line_number)}` : ""}</div></div><div class="finding-context"><span class="badge severity-${escapeHtml(finding.severity.toLowerCase())}">${escapeHtml(finding.severity)}</span><span class="badge">${escapeHtml(finding.status.replaceAll("_", " "))}</span></div></div>
+      byId("findings").innerHTML = findings.map(finding => `<article class="finding-row" data-finding="${Number(finding.id)}">
+        <div class="finding-head"><div><h3 class="finding-title">${escapeHtml(finding.title)}</h3><div class="finding-meta">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "unclassified")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${Number(finding.line_number)}` : ""}</div></div><div class="finding-context">${finding.tool === "BAC" ? '<span class="badge">BAC research · synthetic lab</span>' : ""}<span class="badge severity-${escapeHtml(finding.severity.toLowerCase())}">${escapeHtml(finding.severity)}</span><span class="badge">${escapeHtml(finding.status.replaceAll("_", " "))}</span></div></div>
         <div class="finding-context"><span class="badge">Owner: ${escapeHtml(finding.owner || "unassigned")}</span><span class="badge">Due: ${escapeHtml(finding.due_at ? formatDate(finding.due_at, true) : "not set")}</span><span class="badge">Seen ${Number(finding.occurrence_count)}×</span>${finding.accepted_until ? `<span class="badge">Risk expires ${escapeHtml(formatDate(finding.accepted_until, true))}</span>` : ""}</div>
         ${finding.resolution_note ? `<p class="muted">${escapeHtml(finding.resolution_note)}</p>` : ""}
         <div class="row finding-actions">
+          ${finding.tool === "BAC" ? '<button type="button" data-bac-finding>Review BAC case</button>' : ""}
           ${canOperate && finding.status === "open" ? `<button data-finding-status="${finding.id}:acknowledged">Acknowledge</button>` : ""}
           ${canOperate && !["resolved", "false_positive"].includes(finding.status) ? `<button data-finding-status="${finding.id}:resolved">Resolve</button>` : ""}
           ${canOperate && ["open", "acknowledged"].includes(finding.status) ? `<button data-finding-status="${finding.id}:accepted">Accept risk</button><button data-finding-status="${finding.id}:false_positive">False positive</button>` : ""}
           ${canOperate && ["resolved", "accepted", "false_positive"].includes(finding.status) ? `<button data-finding-status="${finding.id}:open">Reopen</button>` : ""}
-          ${canOperate && selected.github_full_name && !finding.ticket_url ? `<button data-finding-ticket="${finding.id}">Create GitHub issue</button>` : ""}
+          ${canOperate && finding.tool !== "BAC" && selected.github_full_name && !finding.ticket_url ? `<button data-finding-ticket="${finding.id}">Create GitHub issue</button>` : ""}
           ${finding.ticket_url ? `<a class="button subtle" href="${escapeHtml(finding.ticket_url)}" target="_blank" rel="noopener">Remediation ticket</a>` : ""}
         </div>
         ${canOperate ? `<div class="row"><select data-finding-owner="${finding.id}" aria-label="Owner for ${escapeHtml(finding.title)}"><option value="">Unassigned</option>${currentMembers.map(member => `<option value="${Number(member.user_id)}" ${Number(finding.owner_id) === Number(member.user_id) ? "selected" : ""}>${escapeHtml(member.username)}</option>`).join("")}</select><input data-finding-due="${finding.id}" type="date" aria-label="Due date for ${escapeHtml(finding.title)}" value="${finding.due_at ? escapeHtml(finding.due_at.slice(0, 10)) : ""}"><button data-save-assignment="${finding.id}">Save owner & due date</button></div>` : ""}
@@ -503,6 +563,48 @@
     byId("new-project").onclick = openProjectDialog;
     byId("onboarding-create").onclick = openProjectDialog;
     byId("close-dialog").onclick = () => byId("project-dialog").close();
+    byId("bac-import-form").onsubmit = async (event) => {
+      event.preventDefault();
+      if (!selected || !["operator", "admin"].includes(selected.role)) return;
+      const form = event.currentTarget;
+      const input = byId("bac-import-files");
+      const status = byId("bac-import-status");
+      if (input.files.length !== 8) {
+        status.textContent = "Select all eight original files from one BAC run.";
+        return;
+      }
+      const projectId = selected.id;
+      const body = new FormData(form);
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      input.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      byId("error").textContent = "";
+      status.textContent = "Importing BAC research artifacts…";
+      try {
+        const response = await api(`/api/projects/${projectId}/bac-imports`, {method:"POST", body});
+        const data = await response.json();
+        if (selected?.id !== projectId) return;
+        if (!response.ok) {
+          const detail = typeof data.detail === "string" ? data.detail : "BAC research import failed.";
+          status.textContent = detail;
+          message(detail, true);
+          return;
+        }
+        form.reset();
+        status.textContent = data.imported ? `Imported BAC research run #${data.scan_run_id}.` : `BAC research run #${data.scan_run_id} already imported; no duplicate created.`;
+        await Promise.all([loadScans(), loadFindings()]);
+      } catch (_) {
+        if (selected?.id === projectId) {
+          status.textContent = "BAC research import could not finish. Check the connection and try again.";
+          message(status.textContent, true);
+        }
+      } finally {
+        button.disabled = false;
+        input.disabled = false;
+        button.setAttribute("aria-busy", "false");
+      }
+    };
     byId("project-form").onsubmit = async (event) => {
       event.preventDefault();
       const response = await api("/api/projects", {method:"POST", body:JSON.stringify({
@@ -522,7 +624,7 @@
       if (!confirm(`Delete ${selected.name} and all of its scan history?`)) return;
       const response = await api(`/api/projects/${selected.id}`, {method:"DELETE"});
       const data = await response.json(); if (!response.ok) return message(data.detail || "Project deletion failed.", true);
-      selected = null; message("Project deleted."); byId("project-detail").hidden = true; byId("empty-project").hidden = false; await loadProjects();
+      selected = null; document.dispatchEvent(new Event("aegis:project-change")); message("Project deleted."); byId("project-detail").hidden = true; byId("empty-project").hidden = false; await loadProjects();
     };
     byId("member-form").onsubmit = async event => {
       event.preventDefault(); const response = await api(`/api/projects/${selected.id}/members`, {method:"PUT", body:JSON.stringify({username:byId("member-username").value,role:byId("member-role").value})});
@@ -609,5 +711,6 @@
       updateOnboarding();
     })();
   </script>
+  <script src="/static/bac-review.js?v=1" nonce="{{ request.state.csp_nonce }}"></script>
 </body>
 </html>

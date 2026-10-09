@@ -1,7 +1,28 @@
 const { test, expect } = require("@playwright/test");
 const AxeBuilder = require("@axe-core/playwright").default;
+const fs = require("node:fs/promises");
 
 test.describe.configure({ mode: "serial" });
+
+async function signInE2EOwner(page) {
+  await page.goto("/setup#e2e-first-run-setup-token");
+  const workspaceName = page.getByLabel("Workspace name");
+  if (await workspaceName.isVisible()) {
+    await workspaceName.fill("E2E Engineering");
+    await page.getByLabel("Repository URL or path").fill("");
+    await page.getByLabel("Default scan depth").selectOption("standard");
+    await page.getByLabel("Administrator username").fill("e2e-owner");
+    await page.getByLabel("Administrator password", { exact: true }).fill("e2e-owner-password");
+    await page.getByLabel("Confirm password").fill("e2e-owner-password");
+    await page.getByRole("button", { name: "Finish setup" }).click();
+  } else {
+    await page.goto("/login");
+    await page.getByLabel("Username").fill("e2e-owner");
+    await page.getByLabel("Password").fill("e2e-owner-password");
+    await page.getByRole("button", { name: "Sign in" }).click();
+  }
+  await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
+}
 
 test("first-run wizard claims the administrator and configures the workspace", async ({ page }) => {
   await page.goto("/setup#e2e-first-run-setup-token");
@@ -131,6 +152,90 @@ test("project dashboard creates and displays a project accessibly", async ({ pag
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
+});
+
+test("project scan opens its report and downloads verified evidence", async ({ page }) => {
+  const deepScanEnabled = process.env.AEGIS_E2E_DEEP === "1";
+  test.setTimeout(deepScanEnabled ? 900_000 : 120_000);
+  await signInE2EOwner(page);
+
+  const projectName = `Browser scan ${Date.now()}`;
+  await page.getByRole("button", { name: "New project" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Project name").fill(projectName);
+  await dialog.getByLabel("Default branch").fill("main");
+  await dialog.getByLabel("Scan preset").selectOption("quick");
+  const createProject = page.waitForResponse((response) =>
+    response.url().endsWith("/api/projects") && response.request().method() === "POST"
+  );
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  const createResponse = await createProject;
+  expect(createResponse.status()).toBe(201);
+  await page.locator("[data-project]").filter({ hasText: projectName }).click();
+
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.locator("#scan-preset").selectOption("deep");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.locator("#notice")).toContainText("Project settings saved");
+  await page.getByRole("tab", { name: "Overview" }).click();
+  await page.getByRole("button", { name: "Run scan" }).click();
+
+  if (deepScanEnabled) {
+    await expect(page.locator("#notice")).toContainText("queued");
+  } else {
+    await expect(page.locator("#error")).toContainText("Deep scans require an isolated CodeQL runtime");
+    await expect(page.locator("#scan-history")).toContainText("No scans yet");
+    await page.getByRole("tab", { name: "Settings" }).click();
+    await page.locator("#scan-preset").selectOption("quick");
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.locator("#notice")).toContainText("Project settings saved");
+    await page.getByRole("tab", { name: "Overview" }).click();
+    await page.getByRole("button", { name: "Run scan" }).click();
+  }
+
+  const reportLink = page.getByRole("link", { name: "Open report" });
+  await expect(reportLink).toBeVisible({ timeout: deepScanEnabled ? 900_000 : 60_000 });
+  const reportUrl = await reportLink.getAttribute("href");
+  const match = reportUrl.match(/\/api\/projects\/(\d+)\/scans\/(\d+)\/artifacts\/report\.html$/);
+  expect(match).not.toBeNull();
+
+  const artifactResponse = await page.request.get(`/api/projects/${match[1]}/scans/${match[2]}/artifacts`);
+  expect(artifactResponse.ok()).toBeTruthy();
+  const artifacts = (await artifactResponse.json()).artifacts;
+  expect(artifacts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "report.html", integrity: "verified" }),
+    expect.objectContaining({ name: "scan-manifest.json", integrity: "verified" })
+  ]));
+  if (deepScanEnabled) {
+    expect(artifacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "codeql.sarif", integrity: "verified" }),
+      expect.objectContaining({ name: "codeql-report.json", integrity: "verified" })
+    ]));
+    const codeqlResponse = await page.request.get(
+      `/api/projects/${match[1]}/scans/${match[2]}/artifacts/codeql-report.json`
+    );
+    expect(codeqlResponse.ok()).toBeTruthy();
+    const codeqlReport = await codeqlResponse.json();
+    expect(codeqlReport.coverage).toMatchObject({ complete: true, isolation: "verified" });
+    expect(codeqlReport.coverage.languages).toContain("python");
+  }
+
+  const [reportPage] = await Promise.all([
+    page.context().waitForEvent("page"),
+    reportLink.click()
+  ]);
+  await expect(reportPage).toHaveTitle("Aegis | Security Assessment");
+  await expect(reportPage.locator(".decision-banner")).toContainText(/Deployment (passed|blocked)|Scan incomplete/);
+  await reportPage.close();
+
+  const evidenceLink = page.getByRole("link", { name: "Download evidence" });
+  const downloadPromise = page.waitForEvent("download");
+  await evidenceLink.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.zip$/);
+  const downloadedFile = await download.path();
+  const bundle = await fs.readFile(downloadedFile);
+  expect(bundle.subarray(0, 2).toString()).toBe("PK");
 });
 
 test("operations console issues and revokes API tokens accessibly", async ({ page }) => {

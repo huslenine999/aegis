@@ -311,6 +311,8 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     run_dir.mkdir(parents=True)
     (run_dir / "report.html").write_text("<h1>Project report</h1>")
     (run_dir / "sbom.json").write_text("{}")
+    (run_dir / "codeql.sarif").write_text('{"version":"2.1.0","runs":[]}')
+    (run_dir / "codeql-report.json").write_text("{}")
     monkeypatch.setattr(artifact_routes, "SCANS_DIR", scans_dir)
     monkeypatch.setattr(project_routes, "_project_access", lambda *args: {"id": 7})
     monkeypatch.setattr(
@@ -334,7 +336,12 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "created_at": "2026-01-01T00:00:00+00:00",
         }
-        for path in (run_dir / "report.html", run_dir / "sbom.json")
+        for path in (
+            run_dir / "report.html",
+            run_dir / "sbom.json",
+            run_dir / "codeql.sarif",
+            run_dir / "codeql-report.json",
+        )
     ]
     monkeypatch.setattr(artifact_routes, "list_scan_artifacts", lambda run_id: metadata)
     monkeypatch.setattr(
@@ -349,6 +356,8 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
     assert {item["name"] for item in listing["artifacts"]} == {
         "report.html",
         "sbom.json",
+        "codeql.sarif",
+        "codeql-report.json",
         "report-bundle.zip",
     }
     response = artifact_routes.project_scan_artifact(
@@ -360,6 +369,13 @@ def test_project_scan_artifacts_are_run_scoped(tmp_path, monkeypatch):
         return b"".join([chunk async for chunk in response.body_iterator])
     assert b".reveal{opacity:1!important" in asyncio.run(read_report())
     assert (run_dir / "report.html").read_text() == "<h1>Project report</h1>"
+
+    codeql_response = artifact_routes.project_scan_artifact(
+        7, 3, "codeql-report.json", principal=object()
+    )
+    async def read_codeql_report():
+        return b"".join([chunk async for chunk in codeql_response.body_iterator])
+    assert asyncio.run(read_codeql_report()) == b"{}"
 
     (run_dir / "report.html").write_text("tampered")
     with pytest.raises(fastapi.HTTPException, match="integrity verification failed"):

@@ -20,6 +20,7 @@ from ..artifact_storage import (
     validate_artifact_sizes,
 )
 from ..auth import require_role
+from ..bac_imports import BAC_ARTIFACTS
 from ..database import PROJECT_ROOT, SCANS_DIR
 from ..observability import record_artifact_integrity_failure
 from ..projects import get_scan_artifact, list_scan_artifacts
@@ -137,6 +138,7 @@ def _stream_bundle_response(
     artifacts: Mapping[str, ReportSource],
     *,
     filename: str,
+    include_all: bool = False,
 ):
     SCANS_DIR.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -147,7 +149,7 @@ def _stream_bundle_response(
     try:
         from ..reporting import build_report_bundle_to_path
 
-        build_report_bundle_to_path(artifacts, bundle_path)
+        build_report_bundle_to_path(artifacts, bundle_path, include_all=include_all)
         response_limit = min(
             resource_budgets().max_response_bytes,
             artifact_limits()["bundle"],
@@ -177,6 +179,7 @@ def project_scan_artifacts(
     project_id: int, run_id: int, principal=Depends(require_role("viewer"))
 ):
     run = _authorized_scan(project_id, run_id, principal)
+    artifact_types = BAC_ARTIFACTS if run.get("target") == "bac-research" else RUN_ARTIFACTS
     report_dir = run_directory(
         SCANS_DIR,
         run["job_id"],
@@ -187,7 +190,7 @@ def project_scan_artifacts(
     for metadata in list_scan_artifacts(run_id):
         name = metadata["name"]
         path = report_dir / name
-        if name not in RUN_ARTIFACTS:
+        if name not in artifact_types:
             continue
         try:
             integrity = (
@@ -235,6 +238,7 @@ def project_scan_artifact(
     principal=Depends(require_role("viewer")),
 ):
     run = _authorized_scan(project_id, run_id, principal)
+    artifact_types = BAC_ARTIFACTS if run.get("target") == "bac-research" else RUN_ARTIFACTS
     report_dir = run_directory(
         SCANS_DIR,
         run["job_id"],
@@ -259,7 +263,7 @@ def project_scan_artifact(
         staged_s3_paths: list[Path] = []
         try:
             for metadata in recorded:
-                if metadata.get("name") not in RUN_ARTIFACTS:
+                if metadata.get("name") not in artifact_types:
                     record_artifact_integrity_failure()
                     raise HTTPException(
                         status_code=409,
@@ -304,11 +308,12 @@ def project_scan_artifact(
             return _stream_bundle_response(
                 artifact_sources,
                 filename=f"aegis-{project_id}-{run_id}.zip",
+                include_all=run.get("target") == "bac-research",
             )
         finally:
             for staged in staged_s3_paths:
                 staged.unlink(missing_ok=True)
-    media_type = RUN_ARTIFACTS.get(artifact_name)
+    media_type = artifact_types.get(artifact_name)
     artifact_path = report_dir / artifact_name
     artifact_metadata = get_scan_artifact(run_id, artifact_name)
     if not media_type or not artifact_metadata:

@@ -50,6 +50,8 @@ RUN_ARTIFACTS = {
     "trivy-report.json": "application/json",
     "secrets-report.json": "application/json",
     "yara-report.json": "application/json",
+    "codeql.sarif": "application/sarif+json",
+    "codeql-report.json": "application/json",
     "clamav-report.json": "application/json",
     "zap-report.json": "application/json",
     "iac-report.json": "application/json",

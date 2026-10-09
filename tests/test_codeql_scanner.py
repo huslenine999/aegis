@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -126,6 +128,13 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
     (source / "src" / "app.py").write_text("pass\n")
+    for ignored in codeql_scanner.IGNORED_DIRS:
+        directory = source / ignored
+        directory.mkdir()
+        (directory / "must-not-enter-analysis.py").write_text("raise RuntimeError()\n")
+    outside = tmp_path / "outside.py"
+    outside.write_text("raise RuntimeError()\n")
+    (source / "src" / "escape.py").symlink_to(outside)
     docker = tmp_path / "docker"
     docker.write_text("#!/bin/sh\n")
     docker.chmod(0o755)
@@ -134,17 +143,28 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
     socket_path.touch()
     monkeypatch.setattr(codeql_scanner.stat, "S_ISSOCK", lambda mode: True)
     commands = []
+    scanner_environment = []
 
     def fake_run(command, **kwargs):
         commands.append(command)
+        scanner_environment.append(kwargs["env"])
         if "version" in " ".join(command):
             kwargs["stdout_sink"].write(b"CodeQL command-line toolchain release 2.20.0\n")
         return SimpleNamespace(returncode=0)
 
     def fake_scan(command, **kwargs):
         commands.append(command)
-        assert kwargs["stdin"].read(1)
+        scanner_environment.append(kwargs["env"])
+        source_archive = kwargs["stdin"].read()
         kwargs["stdin"].seek(0)
+        with tarfile.open(fileobj=io.BytesIO(source_archive), mode="r") as archive:
+            members = archive.getmembers()
+        assert {member.name for member in members} == {"src/app.py"}
+        assert all(member.isfile() for member in members)
+        assert set(kwargs["env"]) == {"PATH", "DOCKER_HOST", "DOCKER_CONFIG"}
+        assert "cat > /work/source.tar" in command[-1]
+        assert "tar -xf /work/source.tar -C /work/source" in command[-1]
+        assert "rm /work/source.tar" in command[-1]
         kwargs["output_path"].write_text(json.dumps({
             "version": "2.1.0", "runs": [sarif_run(language="python", results=[sarif_result()])]
         }))
@@ -158,8 +178,14 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
         docker_host=f"unix://{socket_path}", docker_path=docker,
     )
     command = next(item for item in commands if "database create" in " ".join(item))
-    assert {"--network=none", "--read-only", "--cap-drop=ALL", "--pull=never"} <= set(command)
+    assert {
+        "--network=none", "--read-only", "--cap-drop=ALL", "--pull=never",
+        "--security-opt=no-new-privileges:true", "--pids-limit=128",
+        "--memory=4g", "--cpus=2", "--user=10001:10001",
+    } <= set(command)
     assert not any("type=bind" in item for item in command)
+    assert not any(item.startswith("-v") or item.startswith("--volume") for item in command)
+    assert all("DATABASE_URL" not in env and "AEGIS_EVIDENCE_SIGNING_KEY" not in env for env in scanner_environment)
     assert report["coverage"]["isolation"] == "verified"
     assert report["findings"][0]["rule_id"] == "py/sql-injection"
     assert (tmp_path / "output" / "codeql.sarif").exists()

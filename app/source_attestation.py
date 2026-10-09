@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .evidence import canonical_json
 from .sandbox import validate_untrusted_tree
 from .resource_budgets import load_bounded_json
 
@@ -23,12 +24,6 @@ REPORT_PATH_KEYS = frozenset({"file", "file_path", "filename", "path", "target_p
 
 class SourceAttestationError(RuntimeError):
     """Raised when a source cannot be admitted to a stable scan snapshot."""
-
-
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
 
 
 def _sha256_file(path: Path) -> tuple[str, int, int]:
@@ -143,9 +138,9 @@ def _collect_descriptor(
 
 
 def _descriptor_digests(descriptor: dict[str, Any]) -> tuple[str, str]:
-    descriptor_digest = hashlib.sha256(_canonical_json(descriptor)).hexdigest()
+    descriptor_digest = hashlib.sha256(canonical_json(descriptor)).hexdigest()
     content_digest = hashlib.sha256(
-        _canonical_json(
+        canonical_json(
             {
                 "schema_version": SOURCE_DESCRIPTOR_SCHEMA,
                 "files": [
@@ -192,8 +187,7 @@ class SourceSnapshot:
         return int(self.descriptor["total_bytes"])
 
     def cleanup(self) -> None:
-        root = self.scan_path if self.source_path.is_file() else self.scan_path
-        snapshot_root = root.parent if self.descriptor["root_kind"] == "file" else root
+        snapshot_root = self.scan_path.parent if self.descriptor["root_kind"] == "file" else self.scan_path
         shutil.rmtree(snapshot_root, ignore_errors=True)
 
     def manifest_source(
@@ -282,14 +276,14 @@ def create_source_snapshot(
             ignored_names=set(),
             excluded_paths=(),
         )
-        if _canonical_json(snapshot_descriptor) != _canonical_json(descriptor):
+        if canonical_json(snapshot_descriptor) != canonical_json(descriptor):
             raise SourceAttestationError("Source changed while creating the stable snapshot.")
         current_descriptor = _collect_descriptor(
             source,
             ignored_names=ignored,
             excluded_paths=excluded,
         )
-        if _canonical_json(current_descriptor) != _canonical_json(descriptor):
+        if canonical_json(current_descriptor) != canonical_json(descriptor):
             raise SourceAttestationError("Source changed while creating the stable snapshot.")
     except Exception:
         shutil.rmtree(snapshot_root, ignore_errors=True)

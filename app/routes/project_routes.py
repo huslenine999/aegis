@@ -7,10 +7,14 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 
-from ..artifact_storage import project_directory
+from ..artifact_storage import ArtifactLimitError, artifact_limits, project_directory
 from ..audit import record_audit
+from ..bac_imports import BAC_ARTIFACTS
+from ..bac_projects import configured_import_public_key, import_bac_report
 from ..auth import AUTH_REQUIRED, principal_from_request, require_role
 from ..database import REDIS_AVAILABLE, REDIS_URL, SCANS_DIR, redis_client
 from ..findings import get_finding, list_findings, update_finding
@@ -274,7 +278,48 @@ def project_scans(
     project_id: int, principal=Depends(require_role("viewer"))
 ):
     _project_access(project_id, principal, "viewer")
-    return {"scans": list_scan_runs(project_id)}
+    latest_source = list_scan_runs(project_id, limit=1, source_only=True)
+    return {"scans": list_scan_runs(project_id), "latest_source_scan": latest_source[0] if latest_source else None}
+
+
+@router.post("/api/projects/{project_id}/bac-imports")
+async def project_bac_import(
+    project_id: int, request: Request, principal=Depends(require_recent_access("operator")),
+):
+    project = _project_access(project_id, principal, "operator")
+    try:
+        configured_import_public_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    limits = artifact_limits()
+    artifacts: dict[str, bytes] = {}
+    async with request.form(max_files=len(BAC_ARTIFACTS), max_fields=0) as form:
+        for field, upload in form.multi_items():
+            if field != "files" or not isinstance(upload, UploadFile):
+                raise HTTPException(status_code=400, detail="Upload the eight BAC artifacts using the files field.")
+            name = upload.filename
+            if not isinstance(name, str) or name not in BAC_ARTIFACTS or name in artifacts:
+                raise HTTPException(status_code=400, detail="BAC artifact names must be supported and unique.")
+            remaining = limits["total"] - sum(len(content) for content in artifacts.values())
+            budget = min(limits["per_artifact"], remaining)
+            content = await upload.read(budget + 1)
+            if len(content) > budget:
+                raise HTTPException(status_code=413, detail="BAC artifacts exceed the configured size limit.")
+            artifacts = {**artifacts, name: content}
+    try:
+        result = await run_in_threadpool(import_bac_report, project=project, requested_by=principal.user_id, artifacts=artifacts)
+    except ArtifactLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("BAC research import failed for project %s", project_id)
+        raise HTTPException(status_code=503, detail="Research import could not be stored. Existing evidence was not replaced.") from exc
+    if result["imported"]:
+        record_audit(principal.user_id, "research.bac_imported", "scan", result["scan_run_id"], {"project_id": project_id}, tenant_id=principal.tenant_id)
+    return JSONResponse(result, status_code=201 if result["imported"] else 200)
 
 
 def _authorized_scan(project_id: int, run_id: int, principal):
@@ -355,6 +400,8 @@ async def project_finding_github_issue(
     finding = get_finding(project_id, finding_id)
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found.")
+    if finding["tool"] == "BAC":
+        raise HTTPException(status_code=409, detail="Research findings are not repository remediation tickets.")
     if finding.get("ticket_url"):
         raise HTTPException(status_code=409, detail="Finding already has a remediation ticket.")
     repository = project.get("github_full_name")
@@ -602,6 +649,8 @@ def project_scan_retry(
     if not run:
         raise HTTPException(status_code=404, detail="Scan not found.")
     project = _project_access(run["project_id"], principal, "operator")
+    if run["target"] == "bac-research":
+        raise HTTPException(status_code=409, detail="Research imports cannot be retried as source scans.")
     result = _enqueue_project_scan(project, principal, run["preset"])
     record_audit(principal.user_id, "scan.retried", "scan", run_id, {"new_run_id": result["scan_run_id"]})
     return result

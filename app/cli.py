@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 import webbrowser
 from pathlib import Path
 
@@ -333,6 +334,20 @@ def main():
     demo_parser = subparsers.add_parser("demo", help="Create a tiny sample app, scan it, and print the report path")
     demo_parser.add_argument("--output", help="Directory for generated demo reports")
     demo_parser.add_argument("--open", action="store_true", help="Open the generated HTML report")
+    bac_parser = subparsers.add_parser("bac", help="Run isolated broken-access-control research experiments")
+    bac_commands = bac_parser.add_subparsers(dest="bac_command", required=True)
+    bac_run = bac_commands.add_parser("run", help="Test the owned temporary loopback BAC lab")
+    bac_run.add_argument("--mode", choices=("fixed", "vulnerable"), required=True, help="Explicit synthetic lab variant")
+    bac_benchmark = bac_commands.add_parser("benchmark", help="Evaluate paired fixed/vulnerable lab trials")
+    bac_freeze = bac_commands.add_parser("freeze", help="Sign a local study definition without running the lab")
+    for command in (bac_benchmark, bac_freeze):
+        command.add_argument("--repeats", type=int, default=3, help="Paired repeats (1–20; repeated trials are not independent cases)")
+    bac_benchmark.add_argument("--protocol", help="Signed study-protocol.json; refuse input/software drift before starting")
+    for command in (bac_run, bac_benchmark, bac_freeze):
+        command.add_argument("--matrix", help="Operator-selected JSON permission matrix (default: bundled synthetic corpus)")
+        command.add_argument("--split", choices=("development", "evaluation", "all"), default="all" if command is bac_run else "evaluation")
+        command.add_argument("--output", help="Output directory (run/freeze: new/empty; benchmark: parent for a unique experiment)")
+        command.add_argument("--json", action="store_true", help="Print the complete machine-readable research report")
     subparsers.add_parser("version", help="Print Aegis version")
 
     args = parser.parse_args()
@@ -427,6 +442,34 @@ def main():
         )
     elif args.command == "demo":
         return run_demo(open_report=args.open, output_dir=args.output)
+    elif args.command == "bac":
+        from .bac import load_matrix, run_research
+        from .bac_benchmark import run_benchmark
+        from .bac_reports import freeze_protocol
+
+        try:
+            matrix = load_matrix(args.matrix)
+            if args.bac_command == "run":
+                output = args.output or str(Path.cwd() / ".aegis" / "bac-runs" / uuid.uuid4().hex)
+                result = run_research(mode=args.mode, matrix=matrix, split=args.split, output_dir=output)
+            elif args.bac_command == "freeze":
+                output = args.output or str(Path.cwd() / ".aegis" / "bac-protocols" / uuid.uuid4().hex)
+                result = freeze_protocol(matrix=matrix, split=args.split, repeats=args.repeats, output_dir=output)
+            else:
+                output = args.output or str(Path.cwd() / ".aegis" / "bac-benchmarks")
+                result = run_benchmark(matrix=matrix, split=args.split, repeats=args.repeats, output_dir=output,
+                                       **({"protocol": args.protocol} if args.protocol is not None else {}))
+        except (ValueError, OSError, RuntimeError) as exc:
+            result = {"status": "error", "exit_code": EXIT_OPERATIONAL_ERROR, "error": str(exc)}
+        if args.json:
+            print(json.dumps(result, indent=2))
+        elif result.get("error"):
+            print(f"Aegis BAC operational error: {result['error']}", file=sys.stderr)
+        else:
+            print(f"Aegis BAC {args.bac_command}: {result['status']}")
+            label = "Signed protocol" if args.bac_command == "freeze" else "Signed evidence"
+            print(f"{label}: {result['manifest_path']}")
+        return result.get("exit_code", EXIT_OPERATIONAL_ERROR)
     elif args.command == "version":
         print(get_package_version())
         return 0
