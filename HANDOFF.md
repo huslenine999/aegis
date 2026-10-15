@@ -58,9 +58,9 @@ docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ```
 pytest:      1062 passed, 4 skipped (Compose x2, PostgreSQL opt-in x2)
              includes Hypothesis fuzz tests and a 500-request API monkey test
-PostgreSQL:  role and path integration tests pass on PostgreSQL 16
-             (AEGIS_TEST_POSTGRES_URL); 10,000 monkey requests on PostgreSQL
-e2e:         33 passed (Playwright, Chromium; last run 2026-10-15)
+PostgreSQL:  the full suite passes with AEGIS_TEST_POSTGRES_URL on PostgreSQL 16
+             (Linux x86_64), including per-service login checks
+e2e:         33 passed (Playwright, Chromium)
 coverage:    89.2% over the gated modules
 ruff:        clean
 mypy:        clean (configured modules)

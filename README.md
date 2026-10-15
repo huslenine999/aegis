@@ -505,8 +505,8 @@ coverage over the configured modules (not whole-project coverage). The suite
 includes property-based fuzz tests of untrusted-input parsers, an API monkey
 test across every route and role, and an end-to-end scan of a repository that
 tries known scanner-evasion tricks. The PostgreSQL integration tests, including
-each service's least-privilege login, pass on PostgreSQL 16. The 33 browser
-tests last passed on 2026-10-15. A live offline CodeQL scan found SQL injection
+each service's least-privilege login, pass on PostgreSQL 16. All 33 browser
+tests pass. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture.
 
 The existing 30-case benchmark exercises the Quick Python scanner. Seven

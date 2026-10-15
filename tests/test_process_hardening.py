@@ -37,6 +37,7 @@ def run_parent(mode):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc semantics")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root bypasses the dumpable check; workers run as a non-root user")
 def test_scanner_child_can_read_an_unhardened_parent_but_not_a_hardened_one():
     assert run_parent("plain") == "READ"
     assert run_parent("harden") == "DENIED"
