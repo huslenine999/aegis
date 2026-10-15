@@ -7,6 +7,13 @@ rules:
       - pattern: $REQUEST.path_params
       - pattern: $REQUEST.form(...)
       - pattern: $REQUEST.json(...)
+      # Flask and Django request data
+      - pattern: flask.request.args
+      - pattern: flask.request.form
+      - pattern: flask.request.values
+      - pattern: flask.request.get_json(...)
+      - pattern: $REQUEST.GET
+      - pattern: $REQUEST.POST
     pattern-sinks:
       - patterns:
           - pattern: $CURSOR.execute($QUERY, ...)
@@ -21,10 +28,13 @@ rules:
   - id: python-rce
     patterns:
       - pattern-either:
-          - pattern: subprocess.check_output(..., shell=True)
-          - pattern: subprocess.run(..., shell=True)
-          - pattern: subprocess.Popen(..., shell=True)
+          - patterns:
+              - pattern: subprocess.$FN(..., shell=True, ...)
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: ^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$
           - pattern: os.system(...)
+          - pattern: os.popen(...)
     message: "Detected command injection risk via subprocess/os.system with shell=True."
     languages: [python]
     severity: ERROR
@@ -76,31 +86,54 @@ rules:
   - id: javascript-command-injection
     patterns:
       - pattern-either:
-          - pattern-inside: |
-              $CP = require('child_process');
-              ...
-          - pattern-inside: |
-              import $CP from 'child_process';
-              ...
-          - pattern-inside: |
-              import * as $CP from 'child_process';
-              ...
-          - pattern-inside: |
-              $CP = require('node:child_process');
-              ...
-          - pattern-inside: |
-              import $CP from 'node:child_process';
-              ...
-          - pattern-inside: |
-              import * as $CP from 'node:child_process';
-              ...
-      - pattern-either:
-          - pattern: $CP.exec($CMD, ...)
-          - pattern: $CP.execSync($CMD, ...)
-          - pattern: '$CP.spawn($CMD, $ARGS, {..., shell: true, ...})'
-          - pattern: '$CP.spawnSync($CMD, $ARGS, {..., shell: true, ...})'
-      - pattern-not: $CP.exec("...", ...)
-      - pattern-not: $CP.execSync("...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $CP = require('child_process');
+                      ...
+                  - pattern-inside: |
+                      import $CP from 'child_process';
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from 'child_process';
+                      ...
+                  - pattern-inside: |
+                      $CP = require('node:child_process');
+                      ...
+                  - pattern-inside: |
+                      import $CP from 'node:child_process';
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from 'node:child_process';
+                      ...
+              - pattern-either:
+                  - pattern: $CP.exec($CMD, ...)
+                  - pattern: $CP.execSync($CMD, ...)
+                  - pattern: '$CP.spawn($CMD, $ARGS, {..., shell: true, ...})'
+                  - pattern: '$CP.spawnSync($CMD, $ARGS, {..., shell: true, ...})'
+          # const { exec } = require('child_process') binds no namespace object.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const {..., $FN, ...} = require('child_process');
+                      ...
+                  - pattern-inside: |
+                      const {..., $FN, ...} = require('node:child_process');
+                      ...
+                  - pattern-inside: |
+                      import {..., $FN, ...} from 'child_process';
+                      ...
+                  - pattern-inside: |
+                      import {..., $FN, ...} from 'node:child_process';
+                      ...
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: ^(exec|execSync)$
+              - pattern: $FN($CMD, ...)
+      - metavariable-pattern:
+          metavariable: $CMD
+          patterns:
+            - pattern-not: '"..."'
     message: "A shell command is built from a non-constant value. Use execFile/spawn with an argument array and no shell."
     languages: [javascript, typescript]
     severity: ERROR

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -8,7 +8,6 @@ const crypto = require('crypto');
 
 const aegisHome = path.join(os.homedir(), '.aegis');
 const venvDir = path.join(aegisHome, 'venv');
-const pipBin = path.join(venvDir, os.platform() === 'win32' ? 'Scripts/pip' : 'bin/pip');
 const pythonBin = path.join(venvDir, os.platform() === 'win32' ? 'Scripts/python' : 'bin/python');
 const installStamp = path.join(venvDir, '.aegis-install-stamp');
 
@@ -41,7 +40,8 @@ async function setupEnv() {
     if (!fs.existsSync(pythonBin)) {
         console.log('🛡️ Creating Python virtual environment in ' + venvDir + '...');
         try {
-            execSync(`${pythonCmd} -m venv "${venvDir}"`, { stdio: 'inherit' });
+            // Argument arrays, not a shell string: paths are never parsed by a shell.
+            execFileSync(pythonCmd, ['-m', 'venv', venvDir], { stdio: 'inherit' });
             created = true;
         } catch (e) {
             console.error('Failed to create virtual environment:', e);
@@ -62,8 +62,8 @@ async function setupEnv() {
 
     console.log('🛡️ Installing Python dependencies...');
     try {
-        execSync(`"${pipBin}" install --upgrade pip`, { stdio: 'inherit' });
-        execSync(`"${pipBin}" install -r "${requirementsPath}"`, { stdio: 'inherit' });
+        execFileSync(pythonBin, ['-m', 'pip', 'install', '--upgrade', 'pip'], { stdio: 'inherit' });
+        execFileSync(pythonBin, ['-m', 'pip', 'install', '--require-hashes', '-r', requirementsPath], { stdio: 'inherit' });
         fs.writeFileSync(installStamp, requirementsHash + '\n', { mode: 0o600 });
     } catch (e) {
         console.error('Failed to install Python dependencies:', e);
