@@ -524,6 +524,38 @@ def test_standard_scan_runs_semgrep_for_javascript_only_projects(tmp_path, monke
     assert "| Ruff (SAST) | SKIPPED |" in report
 
 
+def test_worker_secrets_scan_sees_the_snapshot_and_ignores_inline_allowlists(tmp_path, monkeypatch):
+    """detect-secrets skips files outside its working directory; the worker's snapshot is always outside it."""
+    scans_dir = tmp_path / "scans"
+    target = tmp_path / "target"
+    (target / "rules").mkdir(parents=True)
+    (target / "rules" / "semgrep_rules.yaml").write_text("rules: []\n")
+    (target / "settings.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret\n')
+    # A hostile tree must not shadow the scanner module now that it is the working directory.
+    (target / "detect_secrets").mkdir()
+    (target / "detect_secrets" / "__main__.py").write_text("raise SystemExit(0)\n")
+    monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "false")
+    monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(worker, "PROJECT_ROOT", target)
+    monkeypatch.setenv("AEGIS_ENABLE_YARA", "false")
+    monkeypatch.setattr(worker, "query_osv_vulnerabilities", lambda *args, **kwargs: [], raising=False)
+
+    def run_scanner(command, *args, **kwargs):
+        output_path = Path(kwargs.get("stdout_output_path") or kwargs.get("output_path"))
+        output_path.write_text('{"results": []}' if "semgrep" in output_path.name else "[]")
+        return 0
+
+    monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
+    monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
+
+    worker.async_scan_task("secrets-job", "project")
+
+    run_dir = scans_dir / "runs" / "secrets-job"
+    secrets = json.loads((run_dir / "secrets-report.json").read_text())
+    assert [item["type"] for item in secrets["results"]["settings.py"]] == ["AWS Access Key"]
+    assert json.loads((run_dir / "scan-manifest.json").read_text())["policy_status"] == "BLOCKED"
+
+
 def test_new_worker_artifact_inventory_excludes_retired_scanner_reports():
     retired = {
         "safety-report.json",

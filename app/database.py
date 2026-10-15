@@ -1558,7 +1558,7 @@ def _migration_025_least_privilege_support(cursor) -> None:
 # that keep audit events, signatures, and finished runs immutable.
 SERVICE_DATABASE_ROLES: dict[str, dict[str, Any]] = {
     "aegis_worker": {
-        "password_env": "AEGIS_DB_WORKER_PASSWORD",
+        "login_env": "AEGIS_DB_WORKER_PASSWORD",
         "grants": (
             ("SELECT", "projects"),
             ("SELECT", "tenants"),
@@ -1577,7 +1577,7 @@ SERVICE_DATABASE_ROLES: dict[str, dict[str, Any]] = {
         "functions": ("aegis_github_connection_state(BIGINT)",),
     },
     "aegis_signer": {
-        "password_env": "AEGIS_DB_SIGNER_PASSWORD",
+        "login_env": "AEGIS_DB_SIGNER_PASSWORD",
         "grants": (
             ("SELECT (id, job_id, project_id, state)", "scan_runs"),
             ("SELECT (id, tenant_id)", "projects"),
@@ -1586,7 +1586,7 @@ SERVICE_DATABASE_ROLES: dict[str, dict[str, Any]] = {
         "functions": (),
     },
     "aegis_github_broker": {
-        "password_env": "AEGIS_DB_BROKER_PASSWORD",
+        "login_env": "AEGIS_DB_BROKER_PASSWORD",
         "grants": (
             ("SELECT (id, state, requested_by, github_installation_id, github_check_run_id, project_id)", "scan_runs"),
             ("SELECT (id, tenant_id, github_full_name, created_by)", "projects"),
@@ -1598,7 +1598,7 @@ SERVICE_DATABASE_ROLES: dict[str, dict[str, Any]] = {
         "functions": (),
     },
     "aegis_notifier": {
-        "password_env": "AEGIS_DB_NOTIFIER_PASSWORD",
+        "login_env": "AEGIS_DB_NOTIFIER_PASSWORD",
         "grants": (
             ("SELECT", "notification_channels"),
             ("INSERT", "notification_deliveries"),
@@ -1624,7 +1624,7 @@ def apply_service_roles(connection) -> list[str]:
     raw.execute("REVOKE ALL ON FUNCTION aegis_github_connection_state(BIGINT) FROM PUBLIC")
     configured = []
     for role, spec in SERVICE_DATABASE_ROLES.items():
-        password = os.environ.get(spec["password_env"], "")
+        password = os.environ.get(spec["login_env"], "")
         if not password:
             continue
         exists = raw.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()

@@ -20,7 +20,13 @@ from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
 from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner, SCAN_PROFILE_VERSION, SEMGREP_SOURCE_EXTENSIONS
-from .scan_engine import add_semgrep_excludes, build_ruff_command, exclude_files_pattern
+from .scan_engine import (
+    DETECT_SECRETS_TRUSTED_FLAGS,
+    add_semgrep_excludes,
+    build_ruff_command,
+    detect_secrets_target,
+    exclude_files_pattern,
+)
 from .scan_status import ToolStatusTracker
 from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import DEFAULT_IGNORED_DIRS
@@ -910,17 +916,19 @@ def async_scan_task(
                 mark_tool("Secrets", "skipped", detail="scanner configuration")
                 publish_job_event(job_id, "log", {"text": "[Secrets] Skipped by scanner configuration.", "color": "var(--text-muted)"})
             else:
+                secrets_root, secrets_target = detect_secrets_target(target_path)
                 secrets_cmd = [
-                    python_bin, "-m", "detect_secrets", "scan", "--all-files",
+                    python_bin, "-I", "-m", "detect_secrets", "scan", "--all-files",
                     "--exclude-files", EXCLUDE_FILES_PATTERN,
                     "--no-verify",
-                    target_path
+                    *DETECT_SECRETS_TRUSTED_FLAGS,
+                    secrets_target,
                 ]
                 publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
                 with secrets_report_path.open("w") as report_file:
                     completed = run_bounded_subprocess(
                         secrets_cmd,
-                        cwd=PROJECT_ROOT,
+                        cwd=secrets_root,
                         stdout_sink=report_file,
                         timeout=120,
                         env=scanner_subprocess_environment(),

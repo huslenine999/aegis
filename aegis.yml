@@ -8,6 +8,8 @@ scan:
     - app/demo_lab.py
     - app/scanners.py
     - app/templates/report_template.html
+    - benchmarks/results
+    - test-results
     - tests
   suppressions:
     - tool: Ruff
@@ -86,6 +88,13 @@ scan:
       reason: E2E test credentials are deterministic local-only fixtures scoped to the temporary test server.
       approved_by: security-owner
       ticket: AEGIS-RISK-008
+      expires_at: 2027-07-20
+    - tool: Secrets
+      rule: Base64 High Entropy String
+      path: app/bac_projects.py
+      reason: The pinned development public key is public by design; its seed is published in app/evidence.py and it verifies only local demo bundles.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-014
       expires_at: 2027-07-20
     - tool: YARA
       rule: Backdoor_Webshell

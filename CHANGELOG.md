@@ -62,6 +62,15 @@ All notable changes to the Aegis project will be documented in this file.
   `python-sqli` ignored Flask and Django request data;
   `javascript-command-injection` missed destructured `child_process` imports.
 - The npm launcher no longer builds shell commands from home-directory paths.
+- The secrets scanner found nothing in any scan. detect-secrets silently skips
+  files outside its working directory, and Aegis scans an immutable snapshot
+  in a temporary directory, so both the CLI and the worker reported a clean
+  Secrets result even for a committed AWS key. It now runs from the scan root
+  (with `python -I`, so the scanned tree cannot shadow the module), and inline
+  `pragma: allowlist secret` comments no longer hide findings; reviewed
+  exceptions belong in the trusted config. Aegis's own repository now passes
+  with real secrets coverage (`aegis.yml` excludes generated benchmark and
+  Playwright output and records one reviewed public-key exception).
 - A scanned repository could hide code from Semgrep: `# nosemgrep` comments
   and its own `.semgrepignore` files were honored, files over 1 MB were
   skipped silently, and per-file timeouts still produced a "completed"

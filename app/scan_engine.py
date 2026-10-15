@@ -8,6 +8,7 @@ drifting while the scanner phases are migrated into this module incrementally.
 
 import re
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from .scanners import DEFAULT_IGNORED_DIRS
@@ -33,6 +34,20 @@ def exclude_files_pattern(
 
 
 EXCLUDE_FILES_PATTERN = exclude_files_pattern()
+# The scanned repository must not allowlist its own secrets with inline
+# "pragma: allowlist secret" comments; reviewed exceptions belong in trusted config.
+DETECT_SECRETS_TRUSTED_FLAGS = ("--disable-filter", "detect_secrets.filters.allowlist.is_line_allowlisted")
+
+
+def detect_secrets_target(target_path: str | Path) -> tuple[Path, str]:
+    """Return (working directory, path argument) for a detect-secrets scan.
+
+    detect-secrets silently skips every file outside its working directory, so
+    it must run from the scan root. Run it with ``python -I`` so the scanned
+    tree, now the working directory, cannot shadow the detect_secrets module.
+    """
+    target = Path(target_path)
+    return (target, ".") if target.is_dir() else (target.parent, target.name)
 
 
 # The scanned repository must not choose what Semgrep skips: ignore its

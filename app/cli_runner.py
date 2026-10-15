@@ -46,8 +46,10 @@ from .scan_engine import (
     CliEventSink,
     ScanEvent,
     ScanRunner,
+    DETECT_SECRETS_TRUSTED_FLAGS,
     SCAN_PROFILE_VERSION,
     add_semgrep_excludes,
+    detect_secrets_target,
     build_ruff_command,
 )
 from .scan_status import ToolStatusTracker
@@ -164,6 +166,7 @@ def run_scanner_command(
     accepted_return_codes: set[int] | None = None,
     timeout: int = DEFAULT_TOOL_TIMEOUT,
     label: str = "Scanner",
+    cwd: Path | None = None,
 ) -> int:
     try:
         if output_path is not None and stdout_output_path is not None:
@@ -185,6 +188,7 @@ def run_scanner_command(
         else:
             result = run_bounded_subprocess(
                 command,
+                cwd=cwd,
                 stdout_sink=stdout,
                 timeout=timeout,
             )
@@ -553,8 +557,10 @@ def _execute_scan(
         secrets_excludes.append(re.escape(output_relative_path))
     except ValueError:
         pass
+    secrets_root, secrets_target = detect_secrets_target(target_path)
     secrets_cmd = [
         sys.executable,
+        "-I",
         "-m",
         "detect_secrets",
         "scan",
@@ -562,7 +568,8 @@ def _execute_scan(
         "--exclude-files",
         "|".join(secrets_excludes),
         "--no-verify",
-        str(target_path),
+        *DETECT_SECRETS_TRUSTED_FLAGS,
+        secrets_target,
     ]
     with timed_step(timings, "Secrets"):
         secrets_raw_path = safe_output.file("secrets-report.raw.json")
@@ -573,6 +580,7 @@ def _execute_scan(
                     stdout=f,
                     timeout=tool_timeout,
                     label="Secrets",
+                    cwd=secrets_root,
                 )
             secrets_report = read_json(secrets_raw_path)
             if secrets_return_code == 0 and isinstance(secrets_report, dict):

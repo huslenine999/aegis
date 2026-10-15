@@ -24,6 +24,7 @@ def fake_scanner_command(
     timeout=120,
     label="Scanner",
     accepted_return_codes=None,
+    cwd=None,
 ):
     report_path = Path(stdout_output_path or output_path) if (stdout_output_path or output_path) else None
     if "ruff" in command:
@@ -237,6 +238,7 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
         timeout=120,
         label="Scanner",
         accepted_return_codes=None,
+        cwd=None,
     ):
         commands.append(command)
         return fake_scanner_command(
@@ -462,6 +464,7 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
         timeout=120,
         label="Scanner",
         accepted_return_codes=None,
+        cwd=None,
     ):
         labels.append(label)
         return fake_scanner_command(
@@ -551,6 +554,7 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
         timeout=120,
         label="Scanner",
         accepted_return_codes=None,
+        cwd=None,
     ):
         if label == "Secrets" and stdout is not None:
             stdout.write('{"results": {}}')
@@ -591,6 +595,7 @@ def test_non_strict_scan_surfaces_operational_failures(tmp_path, monkeypatch):
         timeout=120,
         label="Scanner",
         accepted_return_codes=None,
+        cwd=None,
     ):
         if label == "Ruff":
             return 2
@@ -793,3 +798,16 @@ def test_restore_stops_on_sql_errors_and_reports_failed_report_copy(tmp_path):
     psql = next(command for command in calls if "psql" in command)
     assert ["-v", "ON_ERROR_STOP=1", "--single-transaction"] == psql[psql.index("psql") + 1:psql.index("psql") + 4]
     assert scans_source is not None
+
+
+def test_cli_secrets_scan_finds_keys_in_a_target_outside_the_working_directory(tmp_path, monkeypatch, capsys):
+    """Regression: detect-secrets returned nothing for targets outside its cwd, so every scan passed."""
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "settings.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret\n')
+    output = tmp_path / "out"
+    monkeypatch.chdir(tmp_path / "..")
+    monkeypatch.setattr(sys, "argv", ["aegis", "scan", str(target), "--preset", "quick", "--output", str(output), "--json"])
+    assert main() == 1
+    secrets = json.loads((output / "secrets-report.json").read_text())
+    assert [item["type"] for item in secrets["results"]["settings.py"]] == ["AWS Access Key"]

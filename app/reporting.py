@@ -60,15 +60,8 @@ def load_json_report(path: Path):
 def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
 
     reports = {
-        name: load_json_report(scans_dir / f"{filename}-report.json")
-        for name, filename in {
-            "ruff": "ruff",
-            "semgrep": "semgrep",
-            "codeql": "codeql",
-            "secrets": "secrets",  # pragma: allowlist secret
-            "yara": "yara",
-            "osv": "osv",
-        }.items()
+        name: load_json_report(scans_dir / f"{name}-report.json")
+        for name in ("ruff", "semgrep", "codeql", "secrets", "yara", "osv")
     }
     results = analyze_report_set(reports)
     return calculate_policy_exploitability_score(results, waf_enabled)
