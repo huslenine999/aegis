@@ -492,6 +492,38 @@ def test_standard_scan_does_not_launch_retired_scanners(tmp_path, monkeypatch):
     assert not any("docker" in command[0] for command in scanner_commands)
 
 
+def test_standard_scan_runs_semgrep_for_javascript_only_projects(tmp_path, monkeypatch):
+    scans_dir = tmp_path / "scans"
+    target = tmp_path / "target"
+    (target / "rules").mkdir(parents=True)
+    (target / "rules" / "semgrep_rules.yaml").write_text("rules: []\n")
+    (target / "server.js").write_text("module.exports = () => 1;\n")
+    monkeypatch.setenv("AEGIS_SKIP_EXTERNAL_SCANNERS", "false")
+    monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
+    monkeypatch.setattr(worker, "PROJECT_ROOT", target)
+    monkeypatch.setenv("AEGIS_ENABLE_YARA", "false")
+    monkeypatch.setattr(worker, "query_osv_vulnerabilities", lambda *args, **kwargs: [], raising=False)
+    scanner_commands = []
+
+    def run_scanner(command, *args, **kwargs):
+        scanner_commands.append(command)
+        output_path = Path(kwargs.get("stdout_output_path") or kwargs.get("output_path"))
+        output_path.write_text('{"results": []}' if "semgrep" in output_path.name else "[]")
+        return 0
+
+    monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
+    monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
+
+    worker.async_scan_task("js-job", "project")
+
+    semgrep_commands = [command for command in scanner_commands if "--config" in command]
+    assert len(semgrep_commands) == 1
+    assert semgrep_commands[0][semgrep_commands[0].index("--config") + 1] == str(target / "rules" / "semgrep_rules.yaml")
+    report = (scans_dir / "runs" / "js-job" / "report.md").read_text()
+    assert "| Semgrep | PASS |" in report
+    assert "| Ruff (SAST) | SKIPPED |" in report
+
+
 def test_new_worker_artifact_inventory_excludes_retired_scanner_reports():
     retired = {
         "safety-report.json",

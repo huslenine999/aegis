@@ -46,3 +46,443 @@ rules:
     message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
     languages: [python]
     severity: WARNING
+
+  # ---------------------------------------------------------------------------
+  # JavaScript and TypeScript
+  # ---------------------------------------------------------------------------
+  - id: javascript-eval
+    patterns:
+      - pattern-either:
+          - pattern: eval($CODE)
+          - pattern: new Function(..., $CODE)
+          - pattern: vm.runInNewContext($CODE, ...)
+          - pattern: vm.runInThisContext($CODE, ...)
+          - pattern: setTimeout("..." + $X, ...)
+          - pattern: setTimeout($X + "...", ...)
+          - pattern: setTimeout(`...${$X}...`, ...)
+          - pattern: setInterval("..." + $X, ...)
+          - pattern: setInterval($X + "...", ...)
+          - pattern: setInterval(`...${$X}...`, ...)
+      - pattern-not: eval("...")
+      - pattern-not: new Function(..., "...")
+      - pattern-not: vm.runInNewContext("...", ...)
+      - pattern-not: vm.runInThisContext("...", ...)
+    message: "Dynamic code is evaluated from a non-constant string. Remove eval-style execution or map input to a fixed set of functions."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+
+  - id: javascript-command-injection
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $CP = require('child_process');
+              ...
+          - pattern-inside: |
+              import $CP from 'child_process';
+              ...
+          - pattern-inside: |
+              import * as $CP from 'child_process';
+              ...
+          - pattern-inside: |
+              $CP = require('node:child_process');
+              ...
+          - pattern-inside: |
+              import $CP from 'node:child_process';
+              ...
+          - pattern-inside: |
+              import * as $CP from 'node:child_process';
+              ...
+      - pattern-either:
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: $CP.execSync($CMD, ...)
+          - pattern: '$CP.spawn($CMD, $ARGS, {..., shell: true, ...})'
+          - pattern: '$CP.spawnSync($CMD, $ARGS, {..., shell: true, ...})'
+      - pattern-not: $CP.exec("...", ...)
+      - pattern-not: $CP.execSync("...", ...)
+    message: "A shell command is built from a non-constant value. Use execFile/spawn with an argument array and no shell."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+
+  - id: javascript-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$METHOD(`...${$X}...`, ...)
+          - pattern: $DB.$METHOD("..." + $X, ...)
+          - pattern: $DB.$METHOD($X + "...", ...)
+          - pattern: |
+              $SQL = `...${$X}...`;
+              ...
+              $DB.$METHOD($SQL, ...);
+          - pattern: |
+              $SQL = "..." + $X;
+              ...
+              $DB.$METHOD($SQL, ...);
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(query|execute|raw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe|exec)$
+      - metavariable-regex:
+          metavariable: $DB
+          regex: (?i)(db|database|conn|connection|client|pool|sequelize|knex|prisma|sql|pg|mysql|tx|trx|transaction)
+    message: "A SQL query is built with string concatenation or interpolation. Pass values as bound parameters instead."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+
+  - id: javascript-xss-html-sink
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $HTML
+          - pattern: $EL.outerHTML = $HTML
+          - pattern: $EL.insertAdjacentHTML($POS, $HTML)
+          - pattern: document.write($HTML)
+          - pattern: document.writeln($HTML)
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.outerHTML = "..."
+      - pattern-not: $EL.insertAdjacentHTML($POS, "...")
+      - pattern-not: document.write("...")
+      - pattern-not: $EL.innerHTML = $SANITIZER.sanitize(...)
+      - pattern-not: $EL.innerHTML = $ESC(...)
+      - metavariable-pattern:
+          metavariable: $HTML
+          patterns:
+            # A template literal with no ${...} is a constant.
+            - pattern-not-regex: ^`[^$]*`$
+            - pattern-not-regex: (?i)(escape|sanitize|purify)
+    message: "Non-constant HTML is written to the DOM. Use textContent, a DOM API, or a vetted sanitizer such as DOMPurify."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+
+  - id: javascript-react-dangerously-set-inner-html
+    patterns:
+      - pattern: '<$EL dangerouslySetInnerHTML={{__html: $HTML}} />'
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: "..."}} />'
+      - metavariable-pattern:
+          metavariable: $HTML
+          patterns:
+            - pattern-not-regex: (?i)(sanitize|purify)
+    message: "Non-constant HTML is rendered with dangerouslySetInnerHTML. Sanitize it with a vetted library or render text instead."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+
+  - id: javascript-express-tainted-request
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($REQ, $RES, ...) { ... }
+              - pattern-inside: ($REQ, $RES, ...) => { ... }
+              - pattern-inside: async function ($REQ, $RES, ...) { ... }
+              - pattern-inside: async ($REQ, $RES, ...) => { ... }
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.readFile($PATH, ...)
+              - pattern: fs.readFileSync($PATH, ...)
+              - pattern: fs.createReadStream($PATH, ...)
+              - pattern: fs.writeFile($PATH, ...)
+              - pattern: fs.writeFileSync($PATH, ...)
+              - pattern: fs.unlink($PATH, ...)
+              - pattern: fs.promises.readFile($PATH, ...)
+              - pattern: $RES.sendFile($PATH, ...)
+              - pattern: $RES.download($PATH, ...)
+              - pattern: $RES.redirect($PATH)
+              - pattern: axios.get($PATH, ...)
+              - pattern: axios.post($PATH, ...)
+              - pattern: axios($PATH, ...)
+              - pattern: fetch($PATH, ...)
+              - pattern: http.get($PATH, ...)
+              - pattern: https.get($PATH, ...)
+              - pattern: http.request($PATH, ...)
+              - pattern: https.request($PATH, ...)
+          - focus-metavariable: $PATH
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      - pattern: encodeURIComponent(...)
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+    message: "Request input reaches a file path, outbound URL, or redirect. Validate it against an allowlist (path traversal, SSRF, or open redirect risk)."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-22 / CWE-918 / CWE-601"
+
+  - id: javascript-tls-verification-disabled
+    pattern-either:
+      - pattern: "{..., rejectUnauthorized: false, ...}"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    message: "TLS certificate verification is disabled. Remove the override and trust the required CA instead."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+
+  - id: javascript-unsafe-deserialization
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $S = require('node-serialize');
+              ...
+          - pattern-inside: |
+              import $S from 'node-serialize';
+              ...
+      - pattern: $S.unserialize(...)
+    message: "node-serialize can execute code embedded in the input. Use JSON.parse for untrusted data."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+
+  - id: javascript-jwt-hardcoded-secret
+    pattern-either:
+      - pattern: $JWT.sign($PAYLOAD, "...", ...)
+      - pattern: $JWT.verify($TOKEN, "...", ...)
+    message: "A JWT is signed or verified with a hard-coded secret. Load the key from a secret store or environment."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  - id: javascript-weak-hash
+    pattern-either:
+      - pattern: $CRYPTO.createHash("md5")
+      - pattern: $CRYPTO.createHash('md5')
+    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or stronger; for passwords use bcrypt, scrypt, or Argon2."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-328: Use of Weak Hash"
+
+  # ---------------------------------------------------------------------------
+  # Go
+  # ---------------------------------------------------------------------------
+  - id: go-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$METHOD(fmt.Sprintf(...), ...)
+          - pattern: $DB.$METHOD($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.$METHOD("..." + $X, ...)
+          - pattern: $DB.$METHOD($CTX, "..." + $X, ...)
+          - pattern: $DB.$METHOD($X + "...", ...)
+          - pattern: $DB.$METHOD($CTX, $X + "...", ...)
+          - pattern: |
+              $SQL := fmt.Sprintf(...)
+              ...
+              $DB.$METHOD(..., $SQL, ...)
+          - pattern: |
+              $SQL := "..." + $X
+              ...
+              $DB.$METHOD(..., $SQL, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Prepare|PrepareContext|Raw)$
+    message: "A SQL query is built with fmt.Sprintf or concatenation. Use placeholders and pass values as arguments."
+    languages: [go]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+
+  - id: go-command-injection
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("$SHELL", "-c", $CMD, ...)
+          - pattern: exec.CommandContext($CTX, "$SHELL", "-c", $CMD, ...)
+      - metavariable-regex:
+          metavariable: $SHELL
+          regex: ^(sh|bash|zsh|/bin/sh|/bin/bash|cmd|cmd\.exe|powershell)$
+      - pattern-not: exec.Command("$SHELL", "-c", "...", ...)
+      - pattern-not: exec.CommandContext($CTX, "$SHELL", "-c", "...", ...)
+    message: "A shell command is built from a non-constant value. Call the program directly with separate arguments."
+    languages: [go]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+
+  - id: go-tainted-request
+    mode: taint
+    pattern-sources:
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: $R.URL.Query()
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: mux.Vars(...)
+      - pattern: ($C *gin.Context).Query(...)
+      - pattern: ($C *gin.Context).Param(...)
+      - pattern: ($C *gin.Context).PostForm(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: os.Open($P)
+              - pattern: os.OpenFile($P, ...)
+              - pattern: os.ReadFile($P)
+              - pattern: ioutil.ReadFile($P)
+              - pattern: os.Remove($P)
+              - pattern: http.ServeFile($W, $REQ, $P)
+              - pattern: http.Get($P)
+              - pattern: http.Post($P, ...)
+              - pattern: http.NewRequest($M, $P, ...)
+              - pattern: http.NewRequestWithContext($CTX, $M, $P, ...)
+              - pattern: http.Redirect($W, $REQ, $P, ...)
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      - pattern: filepath.Base(...)
+      - pattern: strconv.Atoi(...)
+      - pattern: url.QueryEscape(...)
+    message: "Request input reaches a file path, outbound URL, or redirect. Validate it against an allowlist (path traversal, SSRF, or open redirect risk)."
+    languages: [go]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-22 / CWE-918 / CWE-601"
+
+  - id: go-tls-insecure-skip-verify
+    pattern: "tls.Config{..., InsecureSkipVerify: true, ...}"
+    message: "TLS certificate verification is disabled. Remove InsecureSkipVerify and configure the required root CAs."
+    languages: [go]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+
+  - id: go-unescaped-template
+    patterns:
+      - pattern-either:
+          - pattern: template.HTML($X)
+          - pattern: template.JS($X)
+          - pattern: template.URL($X)
+      - pattern-not: template.HTML("...")
+      - pattern-not: template.JS("...")
+      - pattern-not: template.URL("...")
+    message: "A non-constant value bypasses html/template escaping. Pass plain strings so the template escapes them."
+    languages: [go]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+
+  - id: go-weak-hash
+    pattern-either:
+      - pattern: md5.New()
+      - pattern: md5.Sum(...)
+    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or stronger; for passwords use bcrypt, scrypt, or Argon2."
+    languages: [go]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-328: Use of Weak Hash"
+
+  # ---------------------------------------------------------------------------
+  # Java
+  # ---------------------------------------------------------------------------
+  - id: java-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: $STMT.$METHOD("..." + $X, ...)
+          - pattern: $STMT.$METHOD($X + "...", ...)
+          - pattern: $STMT.$METHOD(String.format(...), ...)
+          - pattern: |
+              String $SQL = "..." + $X;
+              ...
+              $STMT.$METHOD($SQL, ...);
+          - pattern: |
+              String $SQL = String.format(...);
+              ...
+              $STMT.$METHOD($SQL, ...);
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(executeQuery|executeUpdate|execute|addBatch|prepareStatement|prepareCall|createQuery|createNativeQuery|queryForObject|queryForList|query|update)$
+    message: "A SQL query is built with string concatenation or String.format. Use a PreparedStatement with ? placeholders."
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+
+  - id: java-command-injection
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($CMD, ...)
+          - pattern: new ProcessBuilder("$SHELL", "-c", $CMD, ...)
+      - pattern-not: Runtime.getRuntime().exec("...", ...)
+      - pattern-not: new ProcessBuilder("$SHELL", "-c", "...", ...)
+    message: "An OS command is built from a non-constant value. Use ProcessBuilder with a fixed program and separate arguments."
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+
+  - id: java-unsafe-deserialization
+    pattern-either:
+      - pattern: (ObjectInputStream $IN).readObject()
+      - pattern: (ObjectInputStream $IN).readUnshared()
+      - pattern: (java.beans.XMLDecoder $D).readObject()
+      - pattern: new XMLDecoder(...).readObject()
+    message: "Java native deserialization of untrusted data can execute code. Use a data format such as JSON, or an ObjectInputFilter allowlist."
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+
+  - id: java-xxe
+    patterns:
+      - pattern-either:
+          - pattern: DocumentBuilderFactory.newInstance()
+          - pattern: SAXParserFactory.newInstance()
+          - pattern: XMLInputFactory.newInstance()
+      - pattern-not-inside: |
+          $RET $METHOD(...) {
+            ...
+            $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            ...
+          }
+      - pattern-not-inside: |
+          $RET $METHOD(...) {
+            ...
+            $F.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+            ...
+          }
+      - pattern-not-inside: |
+          $RET $METHOD(...) {
+            ...
+            $F.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            ...
+          }
+    message: "An XML parser is created without disabling DTDs, which allows XML external entity (XXE) attacks. Set disallow-doctype-decl to true."
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-611: XML External Entity Reference"
+
+  - id: java-trust-all-certificates
+    pattern-either:
+      - pattern: |
+          public void checkServerTrusted(...) {}
+      - pattern: |
+          public boolean verify(String $HOST, SSLSession $SESSION) { return true; }
+    message: "Certificate or hostname verification accepts everything. Use the platform default TrustManager and HostnameVerifier."
+    languages: [java]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+
+  - id: java-weak-hash
+    pattern-either:
+      - pattern: MessageDigest.getInstance("MD5")
+      - pattern: MessageDigest.getInstance("md5")
+    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or stronger; for passwords use bcrypt, scrypt, or Argon2."
+    languages: [java]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-328: Use of Weak Hash"

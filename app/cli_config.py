@@ -250,7 +250,13 @@ def apply_suppressions(
             results = semgrep.get("results", [])
             semgrep["results"] = [
                 item for item in results
-                if not suppress_item("Semgrep", item, rule_keys=("check_id",), path_keys=("path",))
+                if not suppress_item(
+                    "Semgrep",
+                    # Match the bare rule ID too; check_id carries a machine-specific path prefix.
+                    {**item, "rule_id": str(item.get("check_id") or "").rsplit(".", 1)[-1]},
+                    rule_keys=("check_id", "rule_id"),
+                    path_keys=("path",),
+                )
             ]
             write_json_fn(semgrep_path, semgrep, safe_output=safe_output)
 

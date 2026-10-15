@@ -55,7 +55,6 @@ from .scanners import (
     configure_semgrep_environment,
     find_runtime_executable,
     run_yara_scan as shared_run_yara_scan,
-    write_semgrep_rules,
 )
 from .source_attestation import (
     SourceSnapshot,
@@ -482,20 +481,20 @@ def _execute_scan(
                 return_code=ruff_return_code,
             )
 
-    # 3. Python SAST (Semgrep)
+    # 3. Multi-language SAST (Semgrep)
     print("🔍 [SAST] Running Semgrep rule-based scans...")
     semgrep_report_path = safe_output.file("semgrep-report.json")
-    rules_dir = PROJECT_ROOT / "rules"
-    rules_dir.mkdir(exist_ok=True)
-    semgrep_rules_path = rules_dir / "semgrep_rules.yaml"
-    if not semgrep_rules_path.exists():
-        write_semgrep_rules(semgrep_rules_path)
+    semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
 
     semgrep_bin = find_runtime_executable("semgrep")
     if fast:
         print("ℹ️  [SAST:Semgrep] Fast mode enabled, skipping Semgrep rule check.")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
         mark_tool("Semgrep", "skipped", detail="fast mode")
+    elif not semgrep_rules_path.is_file():
+        print("  [SAST Error] Aegis Semgrep rules are missing; reinstall Aegis.")
+        record_timing(timings, "Semgrep", time.perf_counter(), "failed")
+        mark_tool("Semgrep", "failed", detail="rules file missing")
     elif semgrep_bin:
         with timed_step(timings, "Semgrep"):
             configure_semgrep_environment()

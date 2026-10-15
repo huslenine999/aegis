@@ -22,8 +22,8 @@ include accepted risk and exclude resolved/false-positive findings; blockers
 also exclude BAC research findings. Finding reconciliation serializes each
 project's writes and loads prior coverage once per relevant scan.
 
-Quick runs Ruff security rules and detect-secrets. Standard adds Semgrep and
-OSV. YARA is optional. CodeQL is the opt-in Deep source analyzer for Python and
+Quick runs Ruff security rules and detect-secrets. Standard adds Semgrep, with
+Aegis-owned rules for Python, JavaScript/TypeScript, Go, and Java, and OSV. YARA is optional. CodeQL is the opt-in Deep source analyzer for Python and
 JavaScript/TypeScript. A dedicated Compose worker streams admitted source into
 an offline, unprivileged CodeQL child container; the child receives no host
 filesystem mount or application credentials. Removed

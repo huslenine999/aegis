@@ -189,7 +189,7 @@ The web application turns one-off scanner output into an operational workflow:
 | Preset | Intended use | Runtime expectation |
 | --- | --- | --- |
 | **Quick** | Developer feedback | Ruff security rules for Python and detect-secrets |
-| **Standard** | Pull requests and branch gates | Quick plus Python Semgrep rules and OSV dependency audit |
+| **Standard** | Pull requests and branch gates | Quick plus Aegis Semgrep rules (Python, JavaScript/TypeScript, Go, Java) and OSV dependency audit |
 | **Deep** | Controlled release audit | Standard plus CodeQL for Python and JavaScript/TypeScript |
 
 Deep scans are unavailable in the default local topology. `make codeql-setup`
@@ -201,12 +201,22 @@ Deep worker. An unavailable runtime is an operational error, never a pass.
 | Area | Implementation |
 | --- | --- |
 | Python security analysis | Ruff security rules |
-| Pattern analysis | Semgrep and Aegis rules |
+| Pattern and taint analysis | Semgrep with Aegis-owned rules for Python, JavaScript/TypeScript, Go, and Java |
 | Dependency vulnerabilities | OSV |
 | Secrets | detect-secrets |
 | Deeper source analysis | CodeQL in the isolated Deep profile |
 | Optional signatures | YARA, only when explicitly enabled |
 | Correlation and gating | Versioned severity policy and audited suppressions |
+
+The bundled Semgrep rules cover the high-impact classes for each language:
+injection (SQL, OS command, eval), request input reaching file paths, outbound
+URLs, or redirects, unescaped HTML sinks, unsafe deserialization, XML external
+entities, disabled TLS verification, hard-coded JWT secrets, and weak hashing.
+Every rule has labeled vulnerable and safe samples in
+`tests/fixtures/semgrep/`, and the test suite fails on any missed or extra
+match. They are a focused rule set, not a replacement for a full SAST
+ruleset; Deep scans add CodeQL data-flow analysis for Python and
+JavaScript/TypeScript.
 
 Infrastructure, container-image, live-endpoint, and malware detection are
 outside the current default scanner coverage. Optional YARA reports signature

@@ -18,6 +18,11 @@ from .scan_status import ToolStatusTracker
 # Persist this alongside run results so historical Deep runs remain distinct.
 SCAN_PROFILE_VERSION = 2
 
+# File types covered by rules/semgrep_rules.yaml.
+SEMGREP_SOURCE_EXTENSIONS = frozenset({
+    ".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".go", ".java",
+})
+
 
 def exclude_files_pattern(
     ignored_dirs: Iterable[str] | None = None,

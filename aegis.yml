@@ -129,3 +129,10 @@ scan:
       approved_by: security-owner
       ticket: AEGIS-UPSTREAM-SEMGRP-004
       expires_at: 2026-10-20
+    - tool: Semgrep
+      rule: javascript-xss-html-sink
+      path: app/static/enhanced-dashboard.js
+      reason: Dependency topology SVG is assembled from computed numeric coordinates, fixed class names, and escapeHtml() labels; no raw response text reaches innerHTML.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-013
+      expires_at: 2027-07-20

@@ -284,6 +284,17 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
     }
 
 
+def semgrep_rule_id(check_id: Any) -> str:
+    """Return the bare rule ID.
+
+    Semgrep prefixes ``check_id`` with the rules file's path relative to the
+    working directory (for example ``Users.alice.app.rules.python-eval``), so the
+    raw value differs between machines and can expose local paths. Aegis rule
+    IDs contain no dots.
+    """
+    return str(check_id or "").rsplit(".", 1)[-1]
+
+
 def analyze_semgrep(
     report: Dict[str, Any] | None,
     fail_on: set[str] | None = None,
@@ -312,7 +323,7 @@ def analyze_semgrep(
             
         issues.append(enrich_finding("Semgrep", {
             "severity": mapped_severity,
-            "test_id": r.get("check_id"),
+            "test_id": semgrep_rule_id(r.get("check_id")),
             "filename": r.get("path"),
             "line_number": r.get("start", {}).get("line"),
             "issue_text": extra.get("message"),

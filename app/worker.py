@@ -19,7 +19,7 @@ from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
-from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner, SCAN_PROFILE_VERSION
+from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner, SCAN_PROFILE_VERSION, SEMGREP_SOURCE_EXTENSIONS
 from .scan_engine import add_semgrep_excludes, build_ruff_command, exclude_files_pattern
 from .scan_status import ToolStatusTracker
 from .scanners import run_yara_scan as shared_run_yara_scan
@@ -27,7 +27,6 @@ from .scanners import DEFAULT_IGNORED_DIRS
 from .scanners import configure_semgrep_environment
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
-from .scanners import write_semgrep_rules
 from .codeql_scanner import (
     CodeQLScanError,
     operator_runtime_configuration,
@@ -800,11 +799,15 @@ def async_scan_task(
         # needs a separate runtime without the worker's database/signing keys.
         target_ext = Path(target_path).suffix.lower()
         is_dir = Path(target_path).is_dir()
-        has_python = target_ext == ".py" if not is_dir else any(
-            file.endswith(".py")
-            for _, _, files in os.walk(target_path)
-            for file in files
+        source_extensions = (
+            {target_ext} if not is_dir else {
+                Path(file).suffix.lower()
+                for _, _, files in os.walk(target_path)
+                for file in files
+            }
         )
+        has_python = ".py" in source_extensions
+        has_semgrep_source = bool(source_extensions & SEMGREP_SOURCE_EXTENSIONS)
 
         # 2. State: RUNNING -> ANALYZING
         runner.transition("analyzing", 30)
@@ -841,12 +844,11 @@ def async_scan_task(
 
         # SAST: Semgrep
         semgrep_report_path = safe_output.file("semgrep-report.json")
-        if has_python and not skip_external_scanners:
+        if has_semgrep_source and not skip_external_scanners:
             try:
                 semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
-                if not semgrep_rules_path.exists():
-                    semgrep_rules_path.parent.mkdir(exist_ok=True, parents=True)
-                    write_semgrep_rules(semgrep_rules_path)
+                if not semgrep_rules_path.is_file():
+                    raise FileNotFoundError("Aegis Semgrep rules are missing; reinstall Aegis.")
                 
                 semgrep_bin = find_runtime_executable("semgrep", python_bin)
                 if not semgrep_bin:
@@ -877,7 +879,7 @@ def async_scan_task(
                 mark_tool("Semgrep", "failed", detail=str(exc))
         else:
             write_json(semgrep_report_path, {"results": []})
-            reason = "scanner configuration" if skip_external_scanners else "no Python scripts found"
+            reason = "scanner configuration" if skip_external_scanners else "no supported source files found"
             mark_tool("Semgrep", "skipped", detail=reason)
             publish_job_event(job_id, "log", {"text": f"[SAST:Semgrep] Skipped ({reason}).", "color": "var(--text-muted)"})
 

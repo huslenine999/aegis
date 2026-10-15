@@ -42,57 +42,6 @@ SCANNER_ENV_ALLOWLIST = {
 }
 
 
-SEMGREP_RULES = """rules:
-  - id: python-sqli
-    mode: taint
-    pattern-sources:
-      - pattern: input(...)
-      - pattern: $REQUEST.query_params
-      - pattern: $REQUEST.path_params
-      - pattern: $REQUEST.form(...)
-      - pattern: $REQUEST.json(...)
-    pattern-sinks:
-      - patterns:
-          - pattern: $CURSOR.execute($QUERY, ...)
-          - focus-metavariable: $QUERY
-      - patterns:
-          - pattern: $CURSOR.executemany($QUERY, ...)
-          - focus-metavariable: $QUERY
-    message: "Untrusted request or input data reaches a database execution call. Use a parameterized query."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-rce
-    patterns:
-      - pattern-either:
-          - pattern: subprocess.check_output(..., shell=True)
-          - pattern: subprocess.run(..., shell=True)
-          - pattern: subprocess.Popen(..., shell=True)
-          - pattern: os.system(...)
-    message: "Detected command injection risk via subprocess/os.system with shell=True."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-eval
-    pattern: eval(...)
-    message: "Detected unsafe use of eval()."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-pickle
-    pattern: pickle.loads(...)
-    message: "Detected unsafe deserialization with pickle."
-    languages: [python]
-    severity: ERROR
-
-  - id: python-weak-hash
-    pattern: hashlib.md5(...)
-    message: "Detected weak MD5 hashing algorithm. Use SHA-256 or SHA-512 instead."
-    languages: [python]
-    severity: WARNING
-"""
-
-
 def scanner_subprocess_environment() -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items() if key in SCANNER_ENV_ALLOWLIST
@@ -134,11 +83,6 @@ def configure_semgrep_environment(environment: dict[str, str] | None = None):
         target.setdefault("SSL_CERT_FILE", certifi.where())
     except ImportError:
         pass
-
-
-def write_semgrep_rules(path: Path):
-    path.parent.mkdir(exist_ok=True, parents=True)
-    path.write_text(SEMGREP_RULES)
 
 
 def should_skip_path(path: Path, ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS) -> bool:
