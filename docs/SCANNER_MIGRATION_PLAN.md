@@ -98,7 +98,7 @@ Use SQL injection, command injection, path traversal, and cross-function taint e
 
 Release gates: the full applicable regression suite passes; changed code has at least 80% measured coverage with exclusions disclosed; live CodeQL and browser checks pass; historical evidence remains valid; adversarial failure cases cannot produce `ALLOWED`; benchmark results and coverage losses are documented. The capstone review's earlier approximately 70% project-wide coverage remains a separate baseline, not something this plan claims has improved.
 
-Update `docs/CAPSTONE_REVIEW.md`, `docs/THREAT_MODEL.md`, and `docs/ARCHITECTURE.md` with observed results and remaining limitations. Be ready to explain why these scanners were removed, which categories are no longer covered, what CodeQL misses, what prevents untrusted code from changing analysis, and what Aegis contributes beyond invoking scanners.
+Update `docs/research/CAPSTONE_REVIEW.md`, `docs/THREAT_MODEL.md`, and `docs/ARCHITECTURE.md` with observed results and remaining limitations. Be ready to explain why these scanners were removed, which categories are no longer covered, what CodeQL misses, what prevents untrusted code from changing analysis, and what Aegis contributes beyond invoking scanners.
 
 ## Delivery order and rollback
 

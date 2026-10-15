@@ -6,6 +6,22 @@ PostgreSQL stores identity, project, scan and audit metadata. Redis transports
 jobs. Scanner workers process hostile source and write signed evidence. A
 separate notifier worker owns outbound delivery credentials.
 
+PostgreSQL connections use a process-local native pool with at most four
+connections and five-second connection/acquisition limits. Transactions finish
+before connections return to the pool. Dashboard shutdown closes the pool;
+RQ forks close idle pooled connections before starting a job.
+
+Scan history reads compact summaries instead of complete scanner reports.
+Schema migration 22 adds those summaries and backfills existing results in
+batches of 100 without replacing the original results or signed artifacts.
+Upgrade the dashboard and workers together so completed scans write summaries.
+
+The findings endpoint returns bounded pages, filtered totals, and project-wide
+open/blocker counts. Search and filtering happen before pagination. Open counts
+include accepted risk and exclude resolved/false-positive findings; blockers
+also exclude BAC research findings. Finding reconciliation serializes each
+project's writes and loads prior coverage once per relevant scan.
+
 Quick runs Ruff security rules and detect-secrets. Standard adds Semgrep and
 OSV. YARA is optional. CodeQL is the opt-in Deep source analyzer for Python and
 JavaScript/TypeScript. A dedicated Compose worker streams admitted source into

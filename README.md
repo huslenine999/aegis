@@ -234,7 +234,7 @@ A vulnerable run normally exits `1` because a violation was confirmed; a
 complete fixed run exits `0`. Incomplete testing exits `2`. A benchmark exits
 `0` when the enhanced detector matches its seeded labels, even though vulnerable
 trials contain expected findings. These synthetic results do not establish
-real-world detection accuracy. See [the research protocol](docs/BAC_RESEARCH.md).
+real-world detection accuracy. See [the research protocol](docs/research/BAC_RESEARCH.md).
 BAC does not change Quick, Standard, or Deep scanner coverage.
 
 ## Project configuration
@@ -446,9 +446,9 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-09-23 recorded 313 passing Python tests, 2
-skipped Compose integration tests, 80.13% coverage over the configured modules,
-and passing Ruff and mypy checks. A live offline CodeQL scan found SQL injection
+The last local validation on 2026-10-15 recorded 925 passing Python tests, 2
+skipped Compose integration tests, and passing Ruff and mypy checks. Coverage was
+last measured at 80.13% over the configured modules on 2026-09-23. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture. The coverage percentage is not whole-project
 coverage.
 
@@ -456,7 +456,7 @@ The existing 30-case benchmark exercises the Quick Python scanner. Seven
 browser tests cover setup, access control, the dashboard, accessibility, and
 output escaping. An authenticated Deep browser flow, adversarial isolation
 checks, and a held-out CodeQL benchmark remain to be completed before claiming
-production assurance. See the [capstone review](docs/CAPSTONE_REVIEW.md) and
+production assurance. See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.
 
@@ -470,12 +470,18 @@ questions and release gates.
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Threat model](docs/THREAT_MODEL.md)
-- [Capstone review](docs/CAPSTONE_REVIEW.md)
 - [Scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md)
 - [Hardening baseline](docs/HARDENING.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
+
+Research (`docs/research/`):
+
+- [BAC research protocol](docs/research/BAC_RESEARCH.md)
+- [Thesis team guide](docs/research/THESIS_TEAM_GUIDE.md)
+- [Thesis outline](docs/research/THESIS_OUTLINE.md)
+- [Capstone review](docs/research/CAPSTONE_REVIEW.md)
 
 ## License
 

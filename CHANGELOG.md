@@ -4,8 +4,43 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added the Broken Access Control research workflow (`aegis bac`) with
+  vulnerable/fixed lab variants, evidence bundles, and a status-only baseline.
+- Added tenant-scoped finding queries with status, severity, and search filters.
+- BAC research v2: the instrumented oracle (`enhanced`) is now the reference,
+  and benchmarks also score two black-box methods (`differential`,
+  `content-leak`) alongside `http-status-only`. The lab adds `list` (unfiltered
+  collection), `export` (record leaked in a 403 body), and `rename` (write before
+  the ownership check). Corpus `aegis-bac-v2` (`rules/bac-matrix-v2.json`) has 40
+  cases; `case-results.csv` gains `differential_prediction` and
+  `content_leak_prediction`.
+
+### Changed
+
+- Retired Checkov, Safety, ClamAV, Trivy, and custom DAST probes from new scans;
+  Deep scans now use an offline, pinned CodeQL container on a dedicated worker.
+- Scan history returns compact summaries and project access uses a single
+  membership query.
+- Moved thesis and capstone material to `docs/research/`.
+- Split `docs/research/BAC_RESEARCH.md` into the research protocol and
+  `BAC_OPERATIONS.md`; retitled and reframed the thesis outline.
+
+### Removed
+
+- Removed the public `/welcome` landing page, `AEGIS_COMMERCIAL_CONTACT_URL`,
+  and the monetization, pilot offer, and SLA template documents.
+
 ### Fixed
 
+- Reject non-object JSON bodies, oversized identifiers, and unhashable roles
+  with `400` instead of server errors.
+- Kill scanner process trees on timeout or cancellation even after partial output.
+- Clean up S3 artifact staging files on failed, interrupted, or over-budget downloads.
+- Mark scans failed when the worker dies or the queue rejects the job, instead
+  of leaving them queued.
+- Stop Redis rate limiting from blocking other async work.
 - Initialize a pinned Docker Buildx builder before provenance-enabled image
   publication and provide a protected recovery workflow for immutable release tags.
 
