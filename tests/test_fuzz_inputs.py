@@ -4,11 +4,15 @@ Deeper runs: AEGIS_FUZZ_EXAMPLES=5000 pytest tests/test_fuzz_inputs.py (random, 
 local example database). The default run is small and derandomized for CI.
 """
 
+import hashlib
+import hmac
 import json
 import os
 import re
 import time
+import uuid
 
+import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 
 import policy_engine
@@ -185,3 +189,44 @@ def test_any_change_to_a_signed_manifest_breaks_its_signature(payload, data):
     field = data.draw(st.sampled_from(sorted(set(signed) - {"signature"})))
     replacement = data.draw(json_values.filter(lambda value: value != signed[field]))
     assert not verify_manifest({**signed, field: replacement}, key)
+
+
+# --- GitHub webhooks -------------------------------------------------------
+
+_WEBHOOK_SHAPES = st.fixed_dictionaries({}, optional={
+    "action": json_values, "repository": json_values | st.fixed_dictionaries(
+        {}, optional={"full_name": st.sampled_from(["example/api", "bad name", ""]) | json_values, "id": json_values}),
+    "installation": json_values | st.fixed_dictionaries({}, optional={"id": json_values}),
+    "pull_request": json_values | st.fixed_dictionaries({}, optional={
+        "number": json_values, "head": json_values | st.fixed_dictionaries({}, optional={"sha": json_values, "ref": json_values})}),
+})
+
+
+@pytest.fixture
+def webhook_database(tmp_path, monkeypatch):
+    from app import database, github_integration
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "webhook.db")
+    monkeypatch.setattr(database, "USING_POSTGRES", False)
+    monkeypatch.setattr(github_integration, "get_connection", database.get_connection)
+    monkeypatch.setenv("AEGIS_GITHUB_WEBHOOK_SECRET", "w" * 40)
+    database.initialize_database(reset=True)
+    return github_integration
+
+
+@fuzz
+@given(payload=_WEBHOOK_SHAPES, event_type=st.sampled_from(["pull_request", "installation", "push", "ping"]))
+def test_signed_webhook_payloads_parse_or_fail_cleanly(webhook_database, payload, event_type):
+    body = json.dumps(payload).encode()
+    try:
+        delivery = webhook_database.verify_and_record_webhook(
+            body,
+            signature_header="sha256=" + hmac.new(b"w" * 40, body, hashlib.sha256).hexdigest(),
+            delivery_id=str(uuid.uuid4()),
+            event_type=event_type,
+        )
+    except ValueError:
+        return
+    for key in ("repository_id", "installation_id", "pull_request"):
+        assert type(delivery[key]) is int
+    assert isinstance(delivery["head_sha"], str) and isinstance(delivery["head_ref"], str)

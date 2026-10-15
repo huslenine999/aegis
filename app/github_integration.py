@@ -259,7 +259,11 @@ def verify_and_record_webhook(
         raise ValueError("GitHub webhook body must be valid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("GitHub webhook body must be a JSON object.")
-    repository = payload.get("repository") or {}
+
+    def payload_object(value) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    repository = payload_object(payload.get("repository"))
     repository_name = str(repository.get("full_name") or "").strip()
     if len(repository_name) > 255 or (
         repository_name
@@ -298,10 +302,15 @@ def verify_and_record_webhook(
                 ),
             )
     def payload_integer(value) -> int:
+        if isinstance(value, bool):
+            return 0
         try:
             return int(value or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 0
+
+    pull_request = payload_object(payload.get("pull_request"))
+    head = payload_object(pull_request.get("head"))
 
     return {
         "delivery_id": delivery_id,
@@ -310,14 +319,10 @@ def verify_and_record_webhook(
         "payload_sha256": digest,
         "action": str(payload.get("action") or "")[:64],
         "repository_id": payload_integer(repository.get("id")),
-        "installation_id": payload_integer((payload.get("installation") or {}).get("id")),
-        "pull_request": payload_integer((payload.get("pull_request") or {}).get("number")),
-        "head_sha": str(
-            ((payload.get("pull_request") or {}).get("head") or {}).get("sha") or ""
-        )[:64],
-        "head_ref": str(
-            ((payload.get("pull_request") or {}).get("head") or {}).get("ref") or ""
-        )[:255],
+        "installation_id": payload_integer(payload_object(payload.get("installation")).get("id")),
+        "pull_request": payload_integer(pull_request.get("number")),
+        "head_sha": str(head.get("sha") or "")[:64],
+        "head_ref": str(head.get("ref") or "")[:255],
     }
 
 
