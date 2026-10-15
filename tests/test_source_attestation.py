@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,18 @@ def test_source_snapshot_rejects_mutating_or_unsupported_source(tmp_path):
     os.mkfifo(target / "pipe")
 
     with pytest.raises(SourceAttestationError, match="regular files"):
+        create_source_snapshot(target)
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS file systems require UTF-8 names")
+def test_source_snapshot_rejects_non_utf8_file_names(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "ok.py").write_text("value = 1\n")
+    with open(os.path.join(os.fsencode(target), b"\xff\xfe.py"), "wb") as stream:
+        stream.write(b"eval(value)\n")
+
+    with pytest.raises(SourceAttestationError, match="UTF-8"):
         create_source_snapshot(target)
 
 

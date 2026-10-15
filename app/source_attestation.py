@@ -125,8 +125,13 @@ def _collect_descriptor(
                     or any(parent in resolved_exclusions for parent in candidate.parents)
                 ):
                     continue
-                digest, size, mode = _sha256_file(candidate)
                 relative = candidate.relative_to(source).as_posix()
+                try:
+                    relative.encode("utf-8")
+                except UnicodeEncodeError as exc:
+                    # Linux allows any bytes; evidence and scanner reports need text paths.
+                    raise SourceAttestationError("Source file names must be valid UTF-8.") from exc
+                digest, size, mode = _sha256_file(candidate)
                 entries.append(
                     {"mode": mode, "path": relative, "sha256": digest, "size": size}
                 )

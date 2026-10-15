@@ -73,6 +73,9 @@ All notable changes to the Aegis project will be documented in this file.
   exceptions belong in the trusted config. Aegis's own repository now passes
   with real secrets coverage (`aegis.yml` excludes generated benchmark and
   Playwright output and records one reviewed public-key exception).
+- A repository with a non-UTF-8 file name (possible on Linux) crashed the source
+  snapshot with an encoding error instead of failing admission with a clear
+  reason.
 - A signed GitHub webhook whose `repository`, `installation`, or
   `pull_request` field was not an object crashed with a server error, in some
   cases after recording the delivery, so GitHub's redelivery was then refused
