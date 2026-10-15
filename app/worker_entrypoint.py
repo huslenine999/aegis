@@ -6,6 +6,7 @@ import socket
 from pathlib import Path
 
 from .evidence import evidence_public_key
+from .evidence_signer import remote_signing_enabled
 from .codeql_scanner import SUPPORTED_LANGUAGES, operator_runtime_configuration
 
 
@@ -14,6 +15,7 @@ FORBIDDEN_PRODUCTION_SECRETS = {
     "AEGIS_ADMIN_TOKEN",
     "AEGIS_AUDIT_HMAC_KEY",
     "AEGIS_BOOTSTRAP_ADMIN_PASSWORD",
+    "AEGIS_EVIDENCE_SIGNING_KEY",
     "AEGIS_METRICS_TOKEN",
     "AEGIS_SESSION_SECRET",
     "AEGIS_SETUP_TOKEN",
@@ -23,9 +25,15 @@ FORBIDDEN_PRODUCTION_SECRETS = {
 
 
 def validate_worker_configuration() -> None:
-    # Parsing the key proves that every production worker can sign evidence
-    # before it accepts a single untrusted repository.
-    evidence_public_key()
+    production = os.environ.get("AEGIS_ENV", "development").lower() == "production"
+    if production and not remote_signing_enabled():
+        raise RuntimeError(
+            "Production scanner workers must sign evidence through the evidence "
+            "signer: set AEGIS_EVIDENCE_SIGNER=remote and run the signer service."
+        )
+    if not remote_signing_enabled():
+        # A local signer must hold a valid key before accepting any repository.
+        evidence_public_key()
     allow_deep = os.environ.get("AEGIS_ALLOW_DEEP_SCANS", "false").lower() in TRUE_VALUES
     isolated = os.environ.get("AEGIS_ISOLATED_WORKER", "false").lower() in TRUE_VALUES
     if allow_deep and not isolated:
@@ -49,14 +57,14 @@ def validate_worker_configuration() -> None:
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RuntimeError("The pinned CodeQL image is unavailable to the Deep worker.") from exc
-    if os.environ.get("AEGIS_ENV", "development").lower() == "production":
+    if production:
         exposed = sorted(
             name for name in FORBIDDEN_PRODUCTION_SECRETS if os.environ.get(name)
         )
         if exposed:
             raise RuntimeError(
-                "Production scanner workers must not receive dashboard or notifier "
-                "secrets: " + ", ".join(exposed)
+                "Production scanner workers must not receive dashboard, notifier, "
+                "or evidence-signing secrets: " + ", ".join(exposed)
             )
 
 

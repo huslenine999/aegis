@@ -75,9 +75,10 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   current production topology remains one isolated Aegis stack per customer
   tenant.
 - Generate and protect a unique 32-byte Ed25519 seed for
-  `AEGIS_EVIDENCE_SIGNING_KEY`. Keep the private seed on workers only and pin
-  the public key used by `aegis verify-evidence` in the customer's trust
-  documentation.
+  `AEGIS_EVIDENCE_SIGNING_KEY`. Only the `signer` service receives it; scanner
+  workers refuse to start in production if they are given the key, and use
+  `AEGIS_EVIDENCE_SIGNER=remote` instead. Pin the public key used by
+  `aegis verify-evidence` in the customer's trust documentation.
 - When enabling OIDC, keep discovery, token, authorization, and JWKS endpoints
   on the issuer origin where possible. If the reviewed provider uses separate
   origins, list only their exact HTTPS origins in
@@ -143,7 +144,7 @@ publish the same `Dockerfile.codeql` through their reviewed image pipeline.
 to one hour. `AEGIS_SCANNER_TIMEOUT_SECONDS` bounds streamed scanner
 subprocesses. The CodeQL adapter runs an offline, unprivileged, read-only
 container with bounded output and temporary storage, but the current worker
-still owns database and signing credentials. Test credential access, egress,
+still owns database credentials. Test credential access, egress,
 cross-run reads, resource limits, and a real vulnerable fixture on the target
 host before production use. Provision CodeQL separately under its license;
 the published Aegis image does not contain it.
@@ -151,9 +152,11 @@ the published Aegis image does not contain it.
 ## Trust boundaries
 
 Aegis executes local scanner binaries on scanned source. The current worker
-still has database and evidence-signing access; a parser compromise therefore
-has a larger blast radius than the source repository. Keep this limitation in
-the deployment threat model until scanning and signing are separated.
+still has database access, so a parser compromise has a larger blast radius
+than the source repository. It no longer holds the evidence-signing key: the
+separate signer re-hashes stored artifacts and signs each in-progress run once.
+Keep the remaining database exposure in the deployment threat model until
+workers use a least-privilege database role.
 
 GitHub OAuth tokens, notification credentials, and webhook secrets are encrypted
 before persistence with `AEGIS_ENCRYPTION_KEY`. Losing this key makes those

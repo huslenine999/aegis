@@ -397,14 +397,17 @@ flowchart LR
     Redis --> Worker["Standard scan worker"]
     Redis --> Deep["Worker with isolated CodeQL child runtime"]
     Redis --> Notifier["Notifier worker"]
+    Redis --> Signer["Evidence signer (holds the signing key)"]
     Worker --> Evidence["Local or S3 evidence"]
     Deep --> Evidence
+    Signer -. reads, verifies .-> Evidence
     API --> Evidence
     Notifier --> Channels["Slack / Teams / Email / Webhooks"]
 ```
 
 The dashboard authorizes users and projects. Scanner workers process untrusted
-source. The notifier owns outbound notification credentials. PostgreSQL stores
+source. The notifier owns outbound notification credentials. The evidence
+signer alone holds the Ed25519 signing key. PostgreSQL stores
 identity, project, policy, finding, audit, and scan metadata. Redis contains
 bounded transient job state rather than authoritative evidence.
 
@@ -421,13 +424,17 @@ Important controls include:
 - request limits, scanner deadlines, workspace limits, and fail-closed evidence;
 - signed manifests, artifact hashes, and append-only audit-chain verification;
 - a separate notifier process that does not expose SMTP credentials to scanners;
+- a separate evidence signer: scanner workers never hold the signing key, and
+  the signer signs a manifest only for an in-progress run, once, after
+  re-hashing the stored artifacts and checking the source attestation;
 - production host and CORS allowlists with no wildcard defaults.
 
 Aegis still executes security tooling against untrusted source. The disposable
 CodeQL child has no application credentials, network, or host filesystem mounts.
-Its trusted Deep-worker supervisor still holds database and evidence-signing
-credentials and access to the local Docker socket. A compromise of that
-supervisor crosses the isolation boundary; review the
+Its trusted Deep-worker supervisor still holds database credentials and access
+to the local Docker socket, but no longer the evidence-signing key. A
+compromised worker could misreport a scan that is in progress; it cannot steal
+the key, re-sign finished scans, or get altered artifacts signed. Review the
 [threat model](docs/THREAT_MODEL.md) before deployment.
 
 ## Operations

@@ -41,7 +41,8 @@ from .projects import (
 )
 from .findings import project_baseline_fingerprints, sync_findings
 from .policies import get_policy
-from .evidence import canonical_json, sign_manifest
+from .evidence import canonical_json
+from .evidence_signer import sign_scan_manifest
 from .artifact_storage import (
     artifact_limits,
     publish_artifacts,
@@ -1139,7 +1140,7 @@ def async_scan_task(
         )
         write_json(
             report_dir / "scan-manifest.json",
-            sign_manifest({
+            sign_scan_manifest({
                 "schema_version": 3,
                 "job_id": job_id,
                 "project_id": project_id,

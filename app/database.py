@@ -1417,6 +1417,40 @@ def _migration_022_scan_result_summaries(cursor) -> None:
         last_id = rows[-1][0]
 
 
+def _migration_023_evidence_signature_ledger(cursor) -> None:
+    # The evidence signer records each signed scan run once. A second request
+    # for the same run is refused, so a completed run cannot be re-signed.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS evidence_signatures (
+            scan_run_id BIGINT PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+            job_id TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL,
+            key_id TEXT NOT NULL,
+            signed_at TEXT NOT NULL
+        )
+    """)
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_reject_signature_update()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'evidence_signatures are append-only';
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS evidence_signatures_no_update ON evidence_signatures")
+        cursor.execute("""
+            CREATE TRIGGER evidence_signatures_no_update BEFORE UPDATE ON evidence_signatures
+            FOR EACH ROW EXECUTE FUNCTION aegis_reject_signature_update()
+        """)
+    else:
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS evidence_signatures_no_update
+            BEFORE UPDATE ON evidence_signatures
+            BEGIN SELECT RAISE(ABORT, 'evidence_signatures are append-only'); END
+        """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1440,6 +1474,7 @@ MIGRATIONS = (
     Migration(20, "api_token_hash_version", _migration_020_api_token_hash_version),
     Migration(21, "github_oauth_session_binding", _migration_021_github_oauth_session_binding),
     Migration(22, "scan_result_summaries", _migration_022_scan_result_summaries),
+    Migration(23, "evidence_signature_ledger", _migration_023_evidence_signature_ledger),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

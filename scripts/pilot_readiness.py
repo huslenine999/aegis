@@ -31,7 +31,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TIMEOUT = 300
-REHEARSAL_SERVICES = {"postgres", "redis", "dashboard", "worker", "notifier", "proxy"}
+REHEARSAL_SERVICES = {"postgres", "redis", "dashboard", "worker", "signer", "notifier", "proxy"}
 
 
 @dataclass
@@ -315,7 +315,7 @@ def docker_rehearsal() -> list[CheckResult]:
 
             quiesce_check, _ = run_check(
                 "quiesce application services",
-                [*compose, "stop", "dashboard", "worker", "notifier"],
+                [*compose, "stop", "dashboard", "worker", "signer", "notifier"],
                 timeout=180,
             )
             results.append(quiesce_check)
@@ -353,7 +353,7 @@ def docker_rehearsal() -> list[CheckResult]:
 
             restart_check, _ = run_check(
                 "application recovery start",
-                [*compose, "up", "--detach", "dashboard", "worker", "notifier"],
+                [*compose, "up", "--detach", "dashboard", "worker", "signer", "notifier"],
                 timeout=180,
             )
             results.append(restart_check)

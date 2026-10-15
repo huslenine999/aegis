@@ -80,6 +80,7 @@ services:
       AEGIS_REQUIRE_REDIS: "true"
       AEGIS_REQUIRE_WORKER: "true"
       AEGIS_REQUIRE_NOTIFIER: "true"
+      AEGIS_REQUIRE_SIGNER: "true"
       AEGIS_MAX_UPLOAD_BYTES: ${AEGIS_MAX_UPLOAD_BYTES:-1048576}
       AEGIS_MAX_REQUEST_BYTES: ${AEGIS_MAX_REQUEST_BYTES:-1114112}
       AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
@@ -173,7 +174,8 @@ services:
       AEGIS_STREAM_CHUNK_BYTES: ${AEGIS_STREAM_CHUNK_BYTES:-65536}
       AEGIS_ALLOW_DEEP_SCANS: "false"
       AEGIS_ISOLATED_WORKER: "false"
-      AEGIS_EVIDENCE_SIGNING_KEY: ${AEGIS_EVIDENCE_SIGNING_KEY:?Set a URL-safe base64 Ed25519 seed}
+      # Workers never hold the evidence key; the signer service signs for them.
+      AEGIS_EVIDENCE_SIGNER: remote
       AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
       AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
       REDIS_HOST: redis
@@ -209,6 +211,44 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('deep' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+
+  signer:
+    # Holds the Ed25519 evidence key. Signs a scan manifest only for an in-flight
+    # run after re-hashing its stored artifacts; reads evidence read-only.
+    image: ${AEGIS_IMAGE:-aegis-local:latest}
+    build: .
+    entrypoint: ["python", "-m", "app.signer_entrypoint"]
+    command: ["--url", "redis://redis:6379/0", "--path", "/app/app"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AEGIS_ENV: production
+      AEGIS_DATA_DIR: /data
+      AEGIS_EVIDENCE_SIGNING_KEY: ${AEGIS_EVIDENCE_SIGNING_KEY:?Set a URL-safe base64 Ed25519 seed}
+      AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
+      AEGIS_MAX_PARSER_INPUT_BYTES: ${AEGIS_MAX_PARSER_INPUT_BYTES:-16777216}
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+    volumes:
+      - aegis-data:/data:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('evidence-signing' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   notifier:
     image: ${AEGIS_IMAGE:-aegis-local:latest}

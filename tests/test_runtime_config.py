@@ -36,6 +36,29 @@ def test_readiness_fails_when_required_redis_is_unavailable(monkeypatch):
     assert response.json()["detail"] == "Redis is required but unavailable."
 
 
+def test_readiness_requires_an_evidence_signer_when_configured(monkeypatch):
+    import rq
+    from types import SimpleNamespace
+
+    from app import health_routes
+
+    for name in ("AEGIS_REQUIRE_REDIS", "AEGIS_REQUIRE_WORKER", "AEGIS_REQUIRE_NOTIFIER"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AEGIS_REQUIRE_SIGNER", "true")
+    monkeypatch.setattr(health_routes, "REDIS_AVAILABLE", True)
+    workers = [SimpleNamespace(queue_names=lambda: ["default"])]
+    monkeypatch.setattr(rq.Worker, "all", staticmethod(lambda connection=None: workers))
+
+    missing = TestClient(app_main.app).get("/ready")
+    workers.append(SimpleNamespace(queue_names=lambda: ["evidence-signing"]))
+    ready = TestClient(app_main.app).get("/ready")
+
+    assert missing.status_code == 503
+    assert missing.json()["detail"] == "No evidence signer is available."
+    assert ready.status_code == 200
+    assert ready.json()["signer"] == "1 available"
+
+
 def test_security_txt_exposes_disclosure_policy_without_authentication(monkeypatch):
     monkeypatch.setenv("AEGIS_PUBLIC_URL", "https://aegis.example.com")
     response = TestClient(app_main.app).get("/.well-known/security.txt")
@@ -250,6 +273,19 @@ def test_container_runtime_is_hardened_and_persistent():
     assert "Worker.all" in services["worker"]["healthcheck"]["test"][-1]
     assert services["notifier"]["healthcheck"]["test"][0] == "CMD"
     assert "notifications" in services["notifier"]["healthcheck"]["test"][-1]
+    # Only the signer holds the evidence key, and it cannot modify evidence.
+    assert services["dashboard"]["environment"]["AEGIS_REQUIRE_SIGNER"] == "true"
+    assert services["worker"]["environment"]["AEGIS_EVIDENCE_SIGNER"] == "remote"
+    holders = [name for name, service in services.items()
+               if "AEGIS_EVIDENCE_SIGNING_KEY" in (service.get("environment") or {})]
+    assert holders == ["signer"]
+    assert services["signer"]["entrypoint"] == ["python", "-m", "app.signer_entrypoint"]
+    assert services["signer"]["volumes"] == ["aegis-data:/data:ro"]
+    assert services["signer"]["read_only"] is True
+    assert "evidence-signing" in services["signer"]["healthcheck"]["test"][-1]
+    assert not {"AEGIS_ENCRYPTION_KEY", "AEGIS_GITHUB_APP_PRIVATE_KEY_B64", "AEGIS_SESSION_SECRET"} & set(
+        services["signer"]["environment"]
+    )
     assert services["proxy"]["depends_on"]["dashboard"]["condition"] == "service_started"
 
 
@@ -299,6 +335,7 @@ def test_container_preflight_rejects_missing_production_configuration(monkeypatc
         "AEGIS_PUBLIC_URL",
         "AEGIS_REQUIRE_AUTH",
         "AEGIS_REQUIRE_NOTIFIER",
+        "AEGIS_REQUIRE_SIGNER",
         "AEGIS_REQUIRE_REDIS",
         "AEGIS_REQUIRE_WORKER",
         "AEGIS_SESSION_SECRET",
@@ -380,6 +417,7 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_REQUIRE_REDIS", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_WORKER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_NOTIFIER", "true")
+    monkeypatch.setenv("AEGIS_REQUIRE_SIGNER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_AUTH", "true")
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "s" * 32)
     monkeypatch.setenv("AEGIS_TOKEN_PEPPER", "p" * 32)

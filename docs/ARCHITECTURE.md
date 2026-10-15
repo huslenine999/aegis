@@ -40,11 +40,20 @@ flowchart LR
   D --> R["Redis queues"]
   R --> W["Scanner worker"]
   R --> N["Notifier worker"]
+  R --> S["Evidence signer"]
   W --> A["Tenant/project/run evidence"]
+  S -. read-only .-> A
   W --> G
   N --> O["Approved outbound channels"]
   D --> A
 ```
+
+Scanner workers do not hold the evidence-signing key. A worker submits the
+unsigned manifest to the `evidence-signing` queue; the signer process, which
+holds the key and mounts evidence read-only, signs only when the run exists and
+is still in progress, has never been signed before (an append-only
+`evidence_signatures` ledger), every artifact hash matches the stored bytes, and
+the source descriptor matches the manifest's attestation.
 
 Current scanner workers require database access and GitHub App credentials to
 clone private repositories and complete checks. The target regulated topology

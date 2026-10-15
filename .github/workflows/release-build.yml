@@ -98,6 +98,8 @@ jobs:
               "app/evidence.py",
               "app/worker_entrypoint.py",
               "app/notifier_entrypoint.py",
+              "app/signer_entrypoint.py",
+              "app/evidence_signer.py",
               "app/templates/index.html",
               "app/templates/report_template.html",
               "app/static/enhanced-dashboard.css",

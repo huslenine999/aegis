@@ -157,12 +157,34 @@ def readiness():
             )
         notifier_state = f"{len(notifier_workers)} available"
 
+    signer_state = "not-required"
+    if os.environ.get("AEGIS_REQUIRE_SIGNER", "false").lower() in {"1", "true", "yes", "on"}:
+        if not REDIS_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Signer readiness requires Redis.")
+        try:
+            from rq import Worker
+
+            from .evidence_signer import SIGNING_QUEUE
+
+            signers = [
+                worker for worker in Worker.all(connection=redis_client)
+                if SIGNING_QUEUE in worker.queue_names()
+            ]
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="Signer readiness could not be verified."
+            ) from exc
+        if not signers:
+            raise HTTPException(status_code=503, detail="No evidence signer is available.")
+        signer_state = f"{len(signers)} available"
+
     return {
         "status": "ready",
         "service": "aegis-security-console",
         "redis": redis_state,
         "worker": worker_state,
         "notifier": notifier_state,
+        "signer": signer_state,
     }
 
 

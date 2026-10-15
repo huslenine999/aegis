@@ -394,8 +394,25 @@ def test_artifact_paths_are_tenant_scoped_and_reject_unsafe_job_ids(tmp_path):
 def test_worker_fails_startup_for_invalid_signing_or_isolation_configuration(
     monkeypatch,
 ):
-    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.setenv("AEGIS_ENV", "development")
+    monkeypatch.delenv("AEGIS_EVIDENCE_SIGNER", raising=False)
     monkeypatch.setenv("AEGIS_EVIDENCE_SIGNING_KEY", "not-a-key")
+    with pytest.raises(RuntimeError, match="AEGIS_EVIDENCE_SIGNING_KEY"):
+        validate_worker_configuration()
+
+
+def test_production_workers_must_use_the_separate_evidence_signer(monkeypatch):
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    monkeypatch.delenv("AEGIS_EVIDENCE_SIGNER", raising=False)
+    monkeypatch.delenv("AEGIS_EVIDENCE_SIGNING_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="AEGIS_EVIDENCE_SIGNER=remote"):
+        validate_worker_configuration()
+
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNER", "remote")
+    validate_worker_configuration()
+
+    # The key itself must never reach a production scanner worker.
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNING_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
     with pytest.raises(RuntimeError, match="AEGIS_EVIDENCE_SIGNING_KEY"):
         validate_worker_configuration()
 
@@ -438,10 +455,8 @@ def test_isolated_worker_preflights_pinned_codeql_runtime(monkeypatch):
 
 def test_production_workers_reject_cross_boundary_secrets(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
-    monkeypatch.setenv(
-        "AEGIS_EVIDENCE_SIGNING_KEY",
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    )
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNER", "remote")
+    monkeypatch.delenv("AEGIS_EVIDENCE_SIGNING_KEY", raising=False)
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "must-not-reach-scanner")
     with pytest.raises(RuntimeError, match="AEGIS_SESSION_SECRET"):
         validate_worker_configuration()

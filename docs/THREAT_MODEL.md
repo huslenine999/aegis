@@ -68,11 +68,18 @@ and prevent one project from reading another project's results.
   images, live endpoints, or malware signatures. CodeQL cannot substitute for
   these removed categories. Optional YARA matches indicate a signature match,
   not confirmed malware.
-- The trusted Deep-worker supervisor has database, evidence-signing, and local
-  Docker-daemon access so it can launch disposable CodeQL children. The hostile
-  source and CodeQL process do not receive those capabilities, but compromise
-  of the Python supervisor would cross this boundary. A production design
-  should replace the socket with a narrow job broker and a separate signer.
+- The trusted Deep-worker supervisor has database and local Docker-daemon
+  access so it can launch disposable CodeQL children. The hostile source and
+  CodeQL process do not receive those capabilities, but compromise of the
+  Python supervisor would cross this boundary. A production design should
+  replace the socket with a narrow job broker.
+- Evidence signing runs in a separate signer process; workers never hold the
+  key. A compromised worker can still misreport a run that is in progress, and
+  because workers share the database role, it could reopen a finished run's
+  state before requesting a signature. The one-shot signature ledger blocks
+  re-signing, but closing the residual path needs a least-privilege database
+  role for workers that cannot write `scan_runs.state` for other runs or delete
+  ledger rows.
 - A database superuser can disable triggers or replace both audit data and the
   application-held audit key. Export chain heads and structured events to an
   independently administered SIEM before relying on them for regulated
