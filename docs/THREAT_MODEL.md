@@ -28,7 +28,7 @@ and prevent one project from reading another project's results.
 | Abuse case | Current control |
 | --- | --- |
 | Scanner crashes but project is approved | Worker and CLI share the policy contract; required tool failures produce an operational error. |
-| Scanned repository hides code from a scanner | Ruff runs `--isolated` with inline `noqa` ignored. detect-secrets ignores inline `pragma: allowlist secret` comments. Semgrep ignores `nosemgrep` comments and repository `.semgrepignore` files, has no file-size limit, and a timeout or fatal error marks Semgrep failed rather than complete. Unpinned, wildcard, or unparseable dependency declarations make the inventory incomplete. |
+| Scanned repository hides code from a scanner | Ruff runs `--isolated`, ignoring inline `noqa` comments and the target's `.gitignore` and `.ignore` files. detect-secrets ignores inline `pragma: allowlist secret` comments. Semgrep ignores `nosemgrep` comments and repository `.semgrepignore` files, has no file-size limit, and a timeout or fatal error marks Semgrep failed rather than complete. Unpinned, wildcard, or unparseable dependency declarations make the inventory incomplete. |
 | Viewer reads another project's report | Run-scoped artifact APIs require project membership; legacy shared reports are administrator-only. |
 | Disabled user keeps an old session | Opaque server-side sessions join the current active user and role and can be revoked. |
 | Oversized body exhausts WAF memory | A body-size middleware runs before WAF request buffering. |

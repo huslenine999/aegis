@@ -1,4 +1,8 @@
+import json
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
@@ -84,4 +88,18 @@ def test_ruff_command_ignores_target_policy_and_inline_suppressions():
     assert command[:4] == ["/usr/bin/python3", "-m", "ruff", "check"]
     assert "--isolated" in command
     assert "--ignore-noqa" in command
+    assert "--no-respect-gitignore" in command
     assert command[command.index("--exclude") + 1] == ".git,node_modules"
+
+
+def test_ruff_scans_files_the_target_lists_in_its_ignore_files(tmp_path):
+    (tmp_path / "sub").mkdir()
+    for path in (tmp_path / "hidden.py", tmp_path / "sub" / "also_hidden.py"):
+        path.write_text("def run(value):\n    return eval(value)\n")
+    (tmp_path / ".gitignore").write_text("hidden.py\n")
+    (tmp_path / "sub" / ".ignore").write_text("also_hidden.py\n")
+    (tmp_path / ".git").mkdir()  # .gitignore applies inside a git work tree
+    completed = subprocess.run(build_ruff_command(sys.executable, str(tmp_path)), capture_output=True, text=True,
+                               check=False, timeout=120)
+    found = {Path(item["filename"]).name for item in json.loads(completed.stdout)}
+    assert found == {"hidden.py", "also_hidden.py"}

@@ -95,6 +95,8 @@ def build_ruff_command(
         "check",
         "--isolated",
         "--ignore-noqa",
+        # .gitignore and .ignore files in the target would otherwise hide files.
+        "--no-respect-gitignore",
         "--no-cache",
         "--select",
         "S",

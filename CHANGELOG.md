@@ -71,6 +71,9 @@ All notable changes to the Aegis project will be documented in this file.
   exceptions belong in the trusted config. Aegis's own repository now passes
   with real secrets coverage (`aegis.yml` excludes generated benchmark and
   Playwright output and records one reviewed public-key exception).
+- Ruff honored the scanned repository's `.ignore` files (and `.gitignore` inside
+  a git work tree), so a repository could hide Python files from the SAST
+  gate. Ruff now runs with `--no-respect-gitignore`.
 - A scanned repository could hide code from Semgrep: `# nosemgrep` comments
   and its own `.semgrepignore` files were honored, files over 1 MB were
   skipped silently, and per-file timeouts still produced a "completed"
