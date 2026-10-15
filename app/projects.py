@@ -477,7 +477,12 @@ def scan_result_summary(result: dict | None) -> dict:
 
 def update_scan_run(
     run_id: int, *, state: str, progress: int, result: dict | None = None, connection=None
-) -> None:
+) -> bool:
+    """Advance a scan run. Returns False if the run had already finished.
+
+    A completed, failed, or cancelled run is final: its decision and result are
+    never rewritten (a database trigger enforces the same rule for raw SQL).
+    """
     with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         new_findings = 0
         result_json = None
@@ -510,18 +515,18 @@ def update_scan_run(
             # Avoid passing an untyped NULL through COALESCE/CASE. PostgreSQL
             # cannot infer that placeholder's type, which used to make the
             # worker's error handler fail and leave scan runs stuck as queued.
-            connection.execute(
+            cursor = connection.execute(
                 """UPDATE scan_runs SET state = ?, progress = ?,
                    completed_at = COALESCE(?, completed_at)
-                   WHERE id = ?""",
+                   WHERE id = ? AND state NOT IN ('completed', 'failed', 'cancelled')""",
                 (state, progress, completed_at, run_id),
             )
         else:
-            connection.execute(
+            cursor = connection.execute(
                 """UPDATE scan_runs SET state = ?, progress = ?,
                    result_json = ?, summary_json = ?, new_findings = ?,
                    completed_at = COALESCE(?, completed_at)
-                   WHERE id = ?""",
+                   WHERE id = ? AND state NOT IN ('completed', 'failed', 'cancelled')""",
                 (
                     state,
                     progress,
@@ -532,6 +537,8 @@ def update_scan_run(
                     run_id,
                 ),
             )
+        changed = cursor.rowcount > 0
+    return changed
 
 
 def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:

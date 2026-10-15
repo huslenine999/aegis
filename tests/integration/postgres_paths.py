@@ -115,6 +115,13 @@ try:
     check("completed runs refused", False)
 except SigningRefused:
     check("completed runs refused", True)
+check("finished runs stay final", projects.update_scan_run(run_id, state="reporting", progress=90) is False)
+try:
+    with database.get_connection() as connection:
+        connection.execute("UPDATE scan_runs SET state = 'reporting' WHERE id = ?", (run_id,))
+    check("finished-run trigger", False)
+except Exception as exc:  # noqa: BLE001
+    check("finished-run trigger", "immutable" in str(exc))
 with database.get_connection() as connection:
     connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     remaining = connection.execute("SELECT COUNT(*) FROM evidence_signatures").fetchone()[0]

@@ -120,11 +120,11 @@ def test_failure_update_does_not_send_an_untyped_null_parameter(monkeypatch):
 
         def execute(self, statement, parameters=()):
             statements.append((statement, parameters))
-            return SimpleNamespace()
+            return SimpleNamespace(rowcount=1)
 
     monkeypatch.setattr(projects, "get_connection", lambda: Connection())
 
-    projects.update_scan_run(7, state="failed", progress=100)
+    assert projects.update_scan_run(7, state="failed", progress=100) is True
 
     statement, parameters = statements[-1]
     assert "result_json" not in statement

@@ -1249,16 +1249,23 @@ def async_scan_task(
         raise
     except Exception as e:
         record_worker_failure()
+        failed_now = True
         if scan_run_id:
             public_error = (
                 str(e.__cause__)
                 if isinstance(e.__cause__, GitHubLifecycleError)
                 else "Scan failed. Check worker logs for details."
             )
-            update_scan_run(
+            # False when the run had already completed: a later error (for
+            # example a notification) must not turn a finished verdict into a
+            # failure or report one to GitHub.
+            failed_now = update_scan_run(
                 scan_run_id, state="failed", progress=100,
                 result={"error": public_error},
             )
+        if not failed_now:
+            publish_job_event(job_id, "log", {"text": f"[WARN] Post-completion step failed: {e}", "color": "var(--warning)"})
+            raise
         _complete_github_scan_check(scan_run_id, project, "failure", f"Scan execution failed: {str(e)[:500]}")
         runner.transition("failed", 100)
         publish_job_event(job_id, "log", {"text": f"[FATAL] Scan job execution failed: {e}", "color": "var(--danger)"})

@@ -1451,6 +1451,46 @@ def _migration_023_evidence_signature_ledger(cursor) -> None:
         """)
 
 
+def _migration_024_final_scan_runs(cursor) -> None:
+    # A finished run's decision is evidence: no role may reopen it or rewrite
+    # its result. Without this, a compromised worker could move a completed
+    # run back to an in-flight state and obtain a fresh signature for it.
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_reject_final_scan_change()
+            RETURNS trigger AS $$
+            BEGIN
+                IF OLD.state IN ('completed', 'failed', 'cancelled') AND (
+                    NEW.state IS DISTINCT FROM OLD.state
+                    OR NEW.result_json IS DISTINCT FROM OLD.result_json
+                    OR NEW.new_findings IS DISTINCT FROM OLD.new_findings
+                    OR NEW.completed_at IS DISTINCT FROM OLD.completed_at
+                ) THEN
+                    RAISE EXCEPTION 'finished scan runs are immutable';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS scan_runs_final_immutable ON scan_runs")
+        cursor.execute("""
+            CREATE TRIGGER scan_runs_final_immutable BEFORE UPDATE ON scan_runs
+            FOR EACH ROW EXECUTE FUNCTION aegis_reject_final_scan_change()
+        """)
+    else:
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS scan_runs_final_immutable
+            BEFORE UPDATE ON scan_runs
+            WHEN OLD.state IN ('completed', 'failed', 'cancelled') AND (
+                NEW.state IS NOT OLD.state
+                OR NEW.result_json IS NOT OLD.result_json
+                OR NEW.new_findings IS NOT OLD.new_findings
+                OR NEW.completed_at IS NOT OLD.completed_at
+            )
+            BEGIN SELECT RAISE(ABORT, 'finished scan runs are immutable'); END
+        """)
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1475,6 +1515,7 @@ MIGRATIONS = (
     Migration(21, "github_oauth_session_binding", _migration_021_github_oauth_session_binding),
     Migration(22, "scan_result_summaries", _migration_022_scan_result_summaries),
     Migration(23, "evidence_signature_ledger", _migration_023_evidence_signature_ledger),
+    Migration(24, "final_scan_runs", _migration_024_final_scan_runs),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

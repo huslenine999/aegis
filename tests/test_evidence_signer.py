@@ -13,7 +13,7 @@ from app.scan_engine import ScanJobPayload
 from tests.test_projects import configure_project_database
 
 
-def run_scan(tmp_path, monkeypatch, request_signature):
+def run_scan(tmp_path, monkeypatch, request_signature, **worker_overrides):
     """Run a real quick scan with remote signing routed to ``request_signature``."""
     configure_project_database(tmp_path, monkeypatch)
     source = tmp_path / "plain.txt"
@@ -34,6 +34,8 @@ def run_scan(tmp_path, monkeypatch, request_signature):
     monkeypatch.setattr(worker, "queue_project_notification", lambda *args: None)
     monkeypatch.setattr(worker, "_complete_github_scan_check", lambda *args: None)
     monkeypatch.setattr(evidence_signer, "_request_remote_signature", request_signature)
+    for name, value in worker_overrides.items():
+        monkeypatch.setattr(worker, name, value)
     worker.async_scan_task(ScanJobPayload(
         "signed-job", "project", custom_file_path=str(source), scan_run_id=run_id,
         project_id=project_id, requested_by=10, preset="quick",
@@ -51,9 +53,18 @@ def in_flight(tmp_path, monkeypatch):
         captured.append(json.loads(json.dumps(payload)))
         return sign_manifest(payload)
 
+    # Stop the worker before it finalizes, so the run stays in flight. (A
+    # finished run cannot be reopened: see test_finished_runs_cannot_be_reopened.)
+    advance = projects.update_scan_run
+
+    def stop_before_final(run_id, *, state, **kwargs):
+        if state in {"completed", "failed", "cancelled"}:
+            return False
+        return advance(run_id, state=state, **kwargs)
+
+    monkeypatch.setattr(worker, "update_scan_run", stop_before_final)
     run_id, report_dir = run_scan(tmp_path, monkeypatch, capture)
-    with database.get_connection() as connection:
-        connection.execute("UPDATE scan_runs SET state = 'reporting' WHERE id = ?", (run_id,))
+    assert projects.get_scan_run(run_id)["state"] == "reporting"
     return SimpleNamespace(payload=captured[0], run_id=run_id, report_dir=report_dir)
 
 
@@ -99,6 +110,21 @@ def test_ledger_rows_cannot_be_rewritten(in_flight):
     with pytest.raises(Exception, match="append-only"):
         with database.get_connection() as connection:
             connection.execute("UPDATE evidence_signatures SET manifest_sha256 = 'forged'")
+
+
+def test_finished_runs_cannot_be_reopened(in_flight):
+    """Closes the path a compromised worker had: reopen a finished run, then sign it."""
+    projects.update_scan_run(in_flight.run_id, state="completed", progress=100, result={"ok": True})
+
+    assert projects.update_scan_run(in_flight.run_id, state="reporting", progress=90) is False
+    with pytest.raises(Exception, match="finished scan runs are immutable"):
+        with database.get_connection() as connection:
+            connection.execute("UPDATE scan_runs SET state = 'reporting' WHERE id = ?", (in_flight.run_id,))
+    with pytest.raises(Exception, match="finished scan runs are immutable"):
+        with database.get_connection() as connection:
+            connection.execute("UPDATE scan_runs SET result_json = '{}' WHERE id = ?", (in_flight.run_id,))
+    with pytest.raises(SigningRefused, match="still in progress"):
+        validate_signing_request(in_flight.payload)
 
 
 @pytest.mark.parametrize("state", ["completed", "failed", "cancelled", "queued"])
@@ -257,3 +283,23 @@ def test_signer_holds_only_the_signing_key_in_production(monkeypatch):
         with pytest.raises(RuntimeError, match=secret):
             signer_entrypoint.validate_signer_configuration()
         monkeypatch.delenv(secret)
+
+
+def test_a_failure_after_completion_keeps_the_verdict(tmp_path, monkeypatch):
+    checks = []
+
+    def broken_notification(*args):
+        raise RuntimeError("notification queue unavailable")
+
+    with pytest.raises(RuntimeError, match="notification queue unavailable"):
+        run_scan(
+            tmp_path, monkeypatch, sign_requested_manifest,
+            queue_project_notification=broken_notification,
+            _complete_github_scan_check=lambda *args: checks.append(args[2]),
+        )
+
+    run = projects.get_scan_run(1)
+    assert run["state"] == "completed"
+    assert "error" not in run["result"]
+    # GitHub hears the real verdict once, never a "failure" for a finished scan.
+    assert checks == ["success"]
