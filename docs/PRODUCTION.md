@@ -93,6 +93,12 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   therefore cannot produce a clean result by hiding its finding.
 - OSV is the dependency advisory source. An incomplete inventory or failed
   required lookup produces an operational error rather than a clean result.
+- Dependency findings with CVE aliases are prioritized with the CISA Known
+  Exploited Vulnerabilities catalog and FIRST EPSS scores. Scanner workers need
+  HTTPS egress to `api.osv.dev`, `www.cisa.gov`, and `api.first.org`. Only CVE
+  identifiers are sent to FIRST; no source code or package inventory is. Both
+  feeds are cached for 24 hours; a copy older than 7 days is never trusted, so
+  a prolonged outage is an operational error rather than a pass.
 - Keep the resource budgets explicit and size them against the largest approved
   scan: `AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES` bounds scanner pipes,
   `AEGIS_MAX_SCANNER_REPORT_BYTES` and `AEGIS_MAX_SCANNER_FINDINGS` bound

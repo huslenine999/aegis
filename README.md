@@ -202,7 +202,7 @@ Deep worker. An unavailable runtime is an operational error, never a pass.
 | --- | --- |
 | Python security analysis | Ruff security rules |
 | Pattern and taint analysis | Semgrep with Aegis-owned rules for Python, JavaScript/TypeScript, Go, and Java |
-| Dependency vulnerabilities | OSV |
+| Dependency vulnerabilities | OSV, prioritized with CISA KEV and FIRST EPSS |
 | Secrets | detect-secrets |
 | Deeper source analysis | CodeQL in the isolated Deep profile |
 | Optional signatures | YARA, only when explicitly enabled |
@@ -217,6 +217,23 @@ Every rule has labeled vulnerable and safe samples in
 match. They are a focused rule set, not a replacement for a full SAST
 ruleset; Deep scans add CodeQL data-flow analysis for Python and
 JavaScript/TypeScript.
+
+### Exploit-aware dependency severity
+
+A CVSS score says how bad a vulnerability *could* be. Aegis also checks whether
+it is being exploited:
+
+| Evidence | Effect on severity |
+| --- | --- |
+| The CVE is in the [CISA Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) catalog | Raised to **CRITICAL** |
+| The [FIRST EPSS](https://www.first.org/epss/) probability of exploitation in the next 30 days is at least 10% | Raised to at least **HIGH** |
+| Neither | CVSS-based severity |
+
+Severity is only ever raised, never lowered. Each dependency finding records
+the KEV catalog version or EPSS score date it was judged on, and the report
+explains why a severity was raised. In strict mode, feed data older than 7 days
+is an operational error, so a known-exploited dependency cannot pass because a
+feed was unreachable.
 
 Infrastructure, container-image, live-endpoint, and malware detection are
 outside the current default scanner coverage. Optional YARA reports signature

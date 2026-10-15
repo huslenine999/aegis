@@ -122,6 +122,9 @@ class FakeOSV:
         self.batches = []
         self.fetched = []
         self.urls = []
+        self.kev = []  # CVE IDs in the CISA KEV catalog
+        self.epss = {}  # CVE ID -> EPSS probability
+        self.feed_failures = set()  # {"kev", "epss"}
 
     def add(self, ecosystem, name, version, *records):
         self.advisories.setdefault((ecosystem, name, version), []).extend(records)
@@ -134,6 +137,27 @@ class FakeOSV:
 
         url = request.full_url
         self.urls.append(url)
+        if url.startswith("https://www.cisa.gov/"):
+            if "kev" in self.feed_failures:
+                raise TimeoutError("offline")
+            return io.BytesIO(json.dumps({
+                "catalogVersion": "2026.10.14",
+                "dateReleased": "2026-10-14T16:00:00.000Z",
+                "count": len(self.kev),
+                "vulnerabilities": [
+                    {"cveID": cve, "dateAdded": "2026-01-02", "dueDate": "2026-01-23",
+                     "knownRansomwareCampaignUse": "Known" if cve.endswith("9") else "Unknown"}
+                    for cve in self.kev
+                ],
+            }).encode())
+        if url.startswith("https://api.first.org/"):
+            if "epss" in self.feed_failures:
+                raise TimeoutError("offline")
+            requested = urllib.parse.unquote(url.split("cve=", 1)[1]).split(",")
+            return io.BytesIO(json.dumps({"status": "OK", "data": [
+                {"cve": cve, "epss": f"{self.epss[cve]:.9f}", "percentile": "0.9", "date": "2026-10-14"}
+                for cve in requested if cve in self.epss
+            ]}).encode())
         if url.endswith("/v1/querybatch"):
             if self.batch_fails:
                 raise TimeoutError("offline")
@@ -171,4 +195,5 @@ def fake_osv(monkeypatch, tmp_path):
     fake = FakeOSV()
     monkeypatch.setattr(policy_engine.urllib.request, "urlopen", fake)
     monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
+    monkeypatch.setattr(policy_engine, "EXPLOIT_INTEL_CACHE_FILE", tmp_path / "exploit-intel-cache.json")
     return fake

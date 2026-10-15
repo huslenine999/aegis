@@ -75,6 +75,29 @@ def _severity_from_ruff(code: str) -> str:
     return "HIGH" if normalized in high else "MEDIUM" if normalized in medium else "LOW"
 
 
+# Probability of exploitation in the next 30 days at which a dependency
+# finding is treated as at least HIGH, regardless of its CVSS score.
+EPSS_ESCALATION_THRESHOLD = 0.1
+_SEVERITY_ORDER = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+
+def escalate_osv_severity(severity: str, item: dict) -> tuple[str, str | None]:
+    """Raise a dependency finding's severity from exploit evidence; never lower it.
+
+    CVSS describes how bad a flaw could be. CISA KEV records that it is being
+    exploited now, and EPSS estimates how likely exploitation is soon.
+    """
+    kev = item.get("kev")
+    if isinstance(kev, dict) and kev.get("cve"):
+        ransomware = ", used in ransomware campaigns" if kev.get("ransomware") else ""
+        return "CRITICAL", f"{kev['cve']} is in the CISA Known Exploited Vulnerabilities catalog (added {kev.get('date_added')}{ransomware})"
+    epss = item.get("epss")
+    if isinstance(epss, dict) and isinstance(epss.get("score"), (int, float)):
+        if epss["score"] >= EPSS_ESCALATION_THRESHOLD and _SEVERITY_ORDER.index(severity) < _SEVERITY_ORDER.index("HIGH"):
+            return "HIGH", f"EPSS gives {epss.get('cve')} a {epss['score']:.0%} probability of exploitation in the next 30 days"
+    return severity, None
+
+
 def extract_findings(result: dict | None) -> list[dict]:
     """Normalize raw scanner payloads into stable, durable finding records."""
     result = result or {}
@@ -168,7 +191,9 @@ def extract_findings(result: dict | None) -> list[dict]:
 
     for item in result.get("osv") or []:
         score = float(item.get("cvss") or 0)
-        severity = "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW"
+        severity, _ = escalate_osv_severity(
+            "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW", item
+        )
         add(
             "OSV",
             item.get("id"),

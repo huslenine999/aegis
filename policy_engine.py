@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 from jinja2 import Environment, select_autoescape
 
 from app.dependencies import DependencyManifest, DependencyPackage, discover_dependency_manifests, extract_packages_from_manifest
-from app.findings import BASELINE_FINGERPRINT_KEY, extract_findings, strip_baseline_findings
+from app.findings import BASELINE_FINGERPRINT_KEY, escalate_osv_severity, extract_findings, strip_baseline_findings
 from app.safe_output import SafeOutputRoot
 from app.version import get_package_version
 from app.resource_budgets import (
@@ -213,7 +213,10 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
     elif tool == "OSV Dependency Audit":
         fixed_versions = issue.get("fixed_versions") or issue.get("fixed") or issue.get("version")
         guidance.update({
-            "why": "The dependency version is associated with a published vulnerability advisory.",
+            "why": " ".join(filter(None, [
+                "The dependency version is associated with a published vulnerability advisory.",
+                f"Severity raised: {issue['severity_reason']}." if issue.get("severity_reason") else "",
+            ])),
             "fix": "Upgrade to a fixed version, verify compatibility, and commit the lockfile or requirements change.",
             "suggestion": _format_dependency_fix(package_name, fixed_versions),
         })
@@ -362,12 +365,18 @@ def analyze_osv(
     findings = []
     for f in report:
         cvss_score = f.get("cvss") or 0.0
+        severity, reason = escalate_osv_severity(
+            "HIGH" if cvss_score >= 7.0 else ("MEDIUM" if cvss_score >= 4.0 else "LOW"), f
+        )
         findings.append(enrich_finding("OSV Dependency Audit", {
-            "severity": "HIGH" if cvss_score >= 7.0 else ("MEDIUM" if cvss_score >= 4.0 else "LOW"),
+            "severity": severity,
             "id": f.get("id"),
             "package_name": f.get("package"),
             "version": f.get("version"),
             "cvss": f.get("cvss"),
+            "epss": f.get("epss"),
+            "kev": f.get("kev"),
+            "severity_reason": reason,
             "summary": f.get("summary"),
             "details": f.get("details"),
         }))
@@ -687,6 +696,13 @@ OSV_BATCH_SIZE = 1000  # queries per querybatch request
 OSV_MAX_PAGES = 20
 OSV_HYDRATION_WORKERS = 4
 OSV_ADVISORY_CACHE_PREFIX = "osv-advisory:"
+EXPLOIT_INTEL_CACHE_FILE = SCAN_DIR / "exploit-intel-cache.json"
+KEV_FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+EPSS_API_URL = "https://api.first.org/data/v1/epss"
+EPSS_BATCH_SIZE = 100  # the EPSS API returns at most 100 rows per page by default
+EXPLOIT_INTEL_TTL_SECONDS = 86400  # both feeds publish daily
+EXPLOIT_INTEL_MAX_STALE_SECONDS = 7 * 86400  # oldest copy a strict gate may rely on
+EXPLOIT_INTEL_DEADLINE_SECONDS = 20.0
 LOCKFILE_KINDS = {
     "uv.lock",
     "poetry.lock",
@@ -982,7 +998,191 @@ def query_osv_vulnerabilities(
             + ", ".join(failed_queries)
         )
 
-    return findings
+    return enrich_exploit_intelligence(findings, raise_on_error=raise_on_error)
+
+
+def _exploit_intel_cache() -> dict[str, Any]:
+    if EXPLOIT_INTEL_CACHE_FILE.exists():
+        try:
+            loaded = load_bounded_json(EXPLOIT_INTEL_CACHE_FILE)
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            pass
+    return {}
+
+
+def _fetch_json(url: str) -> Any:
+    request = urllib.request.Request(url, headers={"User-Agent": "Aegis-Scanner/2.0", "Accept": "application/json"})
+    deadline = time.monotonic() + EXPLOIT_INTEL_DEADLINE_SECONDS
+    limit = resource_budgets().max_parser_input_bytes
+    body = b""
+    with urllib.request.urlopen(request, timeout=EXPLOIT_INTEL_DEADLINE_SECONDS) as response:
+        while chunk := response.read1(64 * 1024):
+            body += chunk
+            if len(body) > limit:
+                raise ResourceLimitError(f"Feed response exceeds the configured limit of {limit} bytes.")
+            if time.monotonic() > deadline:
+                raise TimeoutError("Feed response exceeded its deadline.")
+    return json.loads(body.decode("utf-8"))
+
+
+def _load_kev(cache: dict[str, Any], now: float) -> tuple[dict[str, Any] | None, str | None]:
+    """Return the KEV catalog (CVE -> entry) and an error if no usable copy exists."""
+    cached = cache.get("kev")
+    age = None
+    if isinstance(cached, dict) and isinstance(cached.get("entries"), dict):
+        try:
+            age = now - float(cached.get("fetched_at", 0))
+        except (TypeError, ValueError):
+            age = None
+    if age is not None and 0 <= age < EXPLOIT_INTEL_TTL_SECONDS:
+        return cached, None
+    try:
+        feed = _fetch_json(KEV_FEED_URL)
+        vulnerabilities = feed.get("vulnerabilities") if isinstance(feed, dict) else None
+        if not isinstance(vulnerabilities, list) or not feed.get("catalogVersion"):
+            raise ValueError("KEV feed is missing catalogVersion or vulnerabilities.")
+        entries = {
+            str(item["cveID"]).upper(): {
+                "date_added": item.get("dateAdded"),
+                "due_date": item.get("dueDate"),
+                "ransomware": item.get("knownRansomwareCampaignUse") == "Known",
+            }
+            for item in vulnerabilities
+            if isinstance(item, dict) and str(item.get("cveID", "")).upper().startswith("CVE-")
+        }
+        catalog = {
+            "fetched_at": now,
+            "catalog_version": str(feed["catalogVersion"]),
+            "date_released": feed.get("dateReleased"),
+            "entries": entries,
+        }
+        cache["kev"] = catalog
+        return catalog, None
+    except Exception as exc:
+        if age is not None and 0 <= age < EXPLOIT_INTEL_MAX_STALE_SECONDS:
+            print(f"[WARN] CISA KEV refresh failed; using catalog cached {age / 3600:.0f}h ago: {exc}")
+            return cached, None
+        return None, f"CISA KEV catalog unavailable: {exc}"
+
+
+def _load_epss(cves: list[str], cache: dict[str, Any], now: float) -> tuple[dict[str, Any], list[str]]:
+    """Return CVE -> EPSS record for the given CVEs and the CVEs with no usable score."""
+    store = cache.setdefault("epss", {})
+    if not isinstance(store, dict):
+        store = cache["epss"] = {}
+
+    def age_of(cve: str) -> float | None:
+        entry = store.get(cve)
+        if not isinstance(entry, dict):
+            return None
+        try:
+            return now - float(entry.get("fetched_at", 0))
+        except (TypeError, ValueError):
+            return None
+
+    def within(cve: str, limit: float) -> bool:
+        age = age_of(cve)
+        return age is not None and 0 <= age < limit
+
+    refresh = [cve for cve in cves if not within(cve, EXPLOIT_INTEL_TTL_SECONDS)]
+    failed: set[str] = set()
+    for start in range(0, len(refresh), EPSS_BATCH_SIZE):
+        chunk = refresh[start:start + EPSS_BATCH_SIZE]
+        try:
+            response = _fetch_json(f"{EPSS_API_URL}?cve={urllib.parse.quote(','.join(chunk), safe=',')}")
+            rows = response.get("data") if isinstance(response, dict) else None
+            if not isinstance(rows, list):
+                raise ValueError("EPSS response has no data array.")
+            scored = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                cve = str(row.get("cve", "")).upper()
+                if cve in chunk:
+                    store[cve] = {
+                        "fetched_at": now,
+                        "score": float(row["epss"]),
+                        "percentile": float(row["percentile"]),
+                        "date": row.get("date"),
+                    }
+                    scored.add(cve)
+            # FIRST has no score yet for some new or rejected CVEs; record that
+            # explicitly so the absence is evidence, not a lookup failure.
+            for cve in set(chunk) - scored:
+                store[cve] = {"fetched_at": now, "score": None, "percentile": None, "date": None}
+        except Exception as exc:
+            print(f"[WARN] EPSS lookup failed for {len(chunk)} CVEs: {exc}")
+            failed.update(chunk)
+    unavailable = []
+    scores = {}
+    for cve in cves:
+        if not within(cve, EXPLOIT_INTEL_MAX_STALE_SECONDS):
+            unavailable.append(cve)
+            continue
+        if cve in failed:
+            print(f"[WARN] Using a cached EPSS score for {cve}.")
+        scores[cve] = store[cve]
+    return scores, unavailable
+
+
+def enrich_exploit_intelligence(
+    findings: List[Dict[str, Any]],
+    *,
+    raise_on_error: bool = False,
+) -> List[Dict[str, Any]]:
+    """Attach CISA KEV and FIRST EPSS evidence to OSV findings by CVE alias.
+
+    Severity is never lowered here; escalate_osv_severity() applies the policy.
+    In strict mode, missing or too-stale intelligence is an operational error,
+    because a known-exploited dependency must not pass for lack of data.
+    """
+    cves_by_finding = [
+        sorted({
+            str(alias).upper()
+            for alias in [finding.get("id"), *(finding.get("aliases") or [])]
+            if str(alias or "").upper().startswith("CVE-")
+        })
+        for finding in findings
+    ]
+    all_cves = sorted({cve for cves in cves_by_finding for cve in cves})
+    if not all_cves:
+        return findings
+
+    cache = _exploit_intel_cache()
+    now = time.time()
+    kev, kev_error = _load_kev(cache, now)
+    epss, epss_unavailable = _load_epss(all_cves, cache, now)
+    try:
+        EXPLOIT_INTEL_CACHE_FILE.write_text(json.dumps(cache))
+    except Exception as exc:
+        print(f"[WARN] Failed to write exploit intelligence cache: {exc}")
+
+    errors = [kev_error] if kev_error else []
+    if epss_unavailable:
+        errors.append("EPSS scores unavailable for: " + ", ".join(epss_unavailable))
+    if errors:
+        if raise_on_error:
+            raise RuntimeError("Exploit intelligence unavailable: " + "; ".join(errors))
+        print("[WARN] " + "; ".join(errors))
+
+    enriched = []
+    for finding, cves in zip(findings, cves_by_finding):
+        item = dict(finding)
+        if kev is not None:
+            listed = next((cve for cve in cves if cve in kev["entries"]), None)
+            item["kev"] = {
+                **kev["entries"][listed],
+                "cve": listed,
+                "catalog_version": kev["catalog_version"],
+            } if listed else None
+        scored = [epss[cve] | {"cve": cve} for cve in cves if cve in epss and epss[cve].get("score") is not None]
+        if scored:
+            best = max(scored, key=lambda entry: entry["score"])
+            item["epss"] = {key: best[key] for key in ("cve", "score", "percentile", "date")}
+        enriched.append(item)
+    return enriched
 
 
 def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: bool) -> float:
