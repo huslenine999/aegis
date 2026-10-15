@@ -297,35 +297,34 @@ def hmac_compare_digest(first: str, second: str) -> bool:
     return hmac.compare_digest(first, second)
 
 
-def run_verify_evidence(
-    manifest_path: str,
+def verify_evidence_manifest(
+    manifest_path: str | Path,
     public_key: str | None = None,
     *,
     trust_embedded_key: bool = False,
-) -> int:
+) -> tuple[bool, str]:
+    """Verify a signed manifest and every artifact beside it.
+
+    Returns ``(True, summary)`` or ``(False, reason)``.
+    """
     path = Path(manifest_path).expanduser().resolve()
     try:
         manifest = load_bounded_json(path)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError) as exc:
-        print(f"Evidence verification failed: {exc}", file=sys.stderr)
-        return EXIT_OPERATIONAL_ERROR
+        return False, str(exc)
     if not public_key and not trust_embedded_key:
-        print(
-            "Evidence verification failed: --public-key is required. "
-            "Use --trust-embedded-key only for non-authoritative local checks.",
-            file=sys.stderr,
+        return False, (
+            "--public-key is required. "
+            "Use --trust-embedded-key only for non-authoritative local checks."
         )
-        return EXIT_OPERATIONAL_ERROR
     if not isinstance(manifest, dict) or not verify_manifest(
         manifest, public_key, allow_embedded_key=trust_embedded_key
     ):
-        print("Evidence verification failed: manifest signature is invalid.", file=sys.stderr)
-        return EXIT_OPERATIONAL_ERROR
+        return False, "manifest signature is invalid."
     for artifact in manifest.get("artifacts", []):
         name = str(artifact.get("name", ""))
         if Path(name).name != name:
-            print("Evidence verification failed: unsafe artifact name.", file=sys.stderr)
-            return EXIT_OPERATIONAL_ERROR
+            return False, "unsafe artifact name."
         artifact_path = path.parent / name
         try:
             content = b"".join(
@@ -336,43 +335,81 @@ def run_verify_evidence(
                 )
             )
         except (OSError, ResourceLimitError):
-            print(f"Evidence verification failed: missing artifact {name}.", file=sys.stderr)
-            return EXIT_OPERATIONAL_ERROR
+            return False, f"missing artifact {name}."
         if len(content) != int(artifact.get("size", -1)) or not hmac_compare_digest(
             hashlib.sha256(content).hexdigest(), str(artifact.get("sha256", ""))
         ):
-            print(f"Evidence verification failed: artifact mismatch for {name}.", file=sys.stderr)
-            return EXIT_OPERATIONAL_ERROR
+            return False, f"artifact mismatch for {name}."
     source_status = classify_source_attestation(manifest)
     if source_status == "invalid":
-        print("Evidence verification failed: source attestation is invalid.", file=sys.stderr)
-        return EXIT_OPERATIONAL_ERROR
+        return False, "source attestation is invalid."
     if source_status == "source-bound":
         if not any(
             isinstance(artifact, dict)
             and artifact.get("name") == "source-descriptor.json"
             for artifact in manifest.get("artifacts", [])
         ):
-            print(
-                "Evidence verification failed: source descriptor is not attested as an artifact.",
-                file=sys.stderr,
-            )
-            return EXIT_OPERATIONAL_ERROR
-        descriptor_path = path.parent / "source-descriptor.json"
+            return False, "source descriptor is not attested as an artifact."
         try:
-            descriptor = load_bounded_json(descriptor_path)
+            descriptor = load_bounded_json(path.parent / "source-descriptor.json")
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError):
-            print(
-                "Evidence verification failed: source descriptor is missing or invalid.",
-                file=sys.stderr,
-            )
-            return EXIT_OPERATIONAL_ERROR
+            return False, "source descriptor is missing or invalid."
         if not isinstance(descriptor, dict) or not verify_source_descriptor(manifest, descriptor):
-            print("Evidence verification failed: source descriptor mismatch.", file=sys.stderr)
-            return EXIT_OPERATIONAL_ERROR
-    print(
-        "Evidence verified: Ed25519 signature and "
+            return False, "source descriptor mismatch."
+    return True, (
+        "Ed25519 signature and "
         f"{len(manifest.get('artifacts', []))} artifact hashes are valid; "
         f"source attestation: {source_status}."
     )
+
+
+def run_verify_evidence(
+    manifest_path: str,
+    public_key: str | None = None,
+    *,
+    trust_embedded_key: bool = False,
+) -> int:
+    verified, message = verify_evidence_manifest(
+        manifest_path, public_key, trust_embedded_key=trust_embedded_key
+    )
+    if not verified:
+        print(f"Evidence verification failed: {message}", file=sys.stderr)
+        return EXIT_OPERATIONAL_ERROR
+    print(f"Evidence verified: {message}")
     return EXIT_ALLOWED
+
+
+def verify_evidence_tree(scans_root: Path, public_key: str) -> dict:
+    """Verify every signed scan run under a scans directory.
+
+    Runs without a manifest were still in progress, or failed before signing,
+    when the files were copied; they are listed but carry no evidence claim.
+    """
+    root = Path(scans_root).resolve()
+    runs: list[dict[str, str | None]] = []
+    for manifest in sorted(root.rglob("scan-manifest.json")):
+        if manifest.is_symlink():
+            runs.append({"run": manifest.parent.relative_to(root).as_posix(), "status": "failed",
+                         "detail": "manifest is a symbolic link."})
+            continue
+        verified, message = verify_evidence_manifest(manifest, public_key)
+        runs.append({
+            "run": manifest.parent.relative_to(root).as_posix(),
+            "status": "verified" if verified else "failed",
+            "detail": None if verified else message,
+            "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        })
+    signed = {item["run"] for item in runs}
+    unsigned = sorted(
+        directory.relative_to(root).as_posix()
+        for directory in root.rglob("*")
+        if directory.is_dir() and directory.parent.name == "runs"
+        and directory.relative_to(root).as_posix() not in signed
+    )
+    return {
+        "schema_version": 1,
+        "verified": sum(item["status"] == "verified" for item in runs),
+        "failed": sum(item["status"] == "failed" for item in runs),
+        "unsigned": unsigned,
+        "runs": runs,
+    }

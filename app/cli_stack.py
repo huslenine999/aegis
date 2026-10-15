@@ -69,6 +69,25 @@ def write_environment_file(path: Path, values: dict[str, str]) -> None:
     os.chmod(path, 0o600)
 
 
+def evidence_public_key_from_env(env_file: Path) -> str | None:
+    """Derive the evidence public key from a local stack's signing seed."""
+    seed = read_environment_file(env_file).get("AEGIS_EVIDENCE_SIGNING_KEY", "") if env_file.exists() else ""
+    if not seed:
+        return None
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    try:
+        raw = base64.urlsafe_b64decode(seed + "=" * (-len(seed) % 4))
+        public = Ed25519PrivateKey.from_private_bytes(raw).public_key().public_bytes_raw()
+    except ValueError:
+        return None
+    return base64.urlsafe_b64encode(public).decode().rstrip("=")
+
+
+def _empty_inventory() -> dict:
+    return {"schema_version": 1, "verified": 0, "failed": 0, "unsigned": [], "runs": []}
+
+
 def docker_compose_command(project_root: Path, env_file: Path, *arguments: str) -> list[str]:
     return [
         "docker",
@@ -196,7 +215,7 @@ def run_start(
     )
     if not foreground:
         command.append("-d")
-    print("Starting PostgreSQL, Redis, worker, dashboard, and reverse proxy...")
+    print("Starting PostgreSQL, Redis, worker, evidence signer, notifier, dashboard, and reverse proxy...")
     result = subprocess_module.run(command, cwd=project_root, check=False)
     if result.returncode != 0:
         return result.returncode
@@ -306,8 +325,13 @@ def run_backup(
     shutil_module,
     package_version: str,
     output: str | None = None,
+    public_key: str | None = None,
 ) -> int:
     if not require_local_stack(local_env_file=local_env_file, shutil_module=shutil_module):
+        return EXIT_OPERATIONAL_ERROR
+    public_key = public_key or evidence_public_key_from_env(local_env_file)
+    if not public_key:
+        print("Backup needs the evidence public key: pass --public-key.", file=sys.stderr)
         return EXIT_OPERATIONAL_ERROR
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     destination = Path(output or f"aegis-backup-{timestamp}.zip").expanduser().resolve()
@@ -345,16 +369,36 @@ def run_backup(
         if copy.returncode != 0:
             print("Report backup failed.", file=sys.stderr)
             return EXIT_OPERATIONAL_ERROR
+        # The database is dumped before evidence is copied, so a scan finishing
+        # in between appears here without a matching database row, and a scan
+        # in progress has no signed manifest. The inventory states exactly
+        # which runs this backup vouches for.
+        from .cli_reports import verify_evidence_tree
+
+        scans = root / "scans"
+        inventory = verify_evidence_tree(scans, public_key) if scans.is_dir() else _empty_inventory()
+        (root / "evidence-inventory.json").write_text(json.dumps(inventory, indent=2))
         (root / "manifest.json").write_text(
             json.dumps(
                 {
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "version": package_version,
                     "database_format": "plain-sql",
+                    "evidence": {
+                        "verified_runs": inventory["verified"],
+                        "failed_runs": inventory["failed"],
+                        "unsigned_runs": len(inventory["unsigned"]),
+                    },
                 },
                 indent=2,
             )
         )
+        if inventory["failed"]:
+            print(
+                f"Warning: {inventory['failed']} signed scan run(s) failed verification; "
+                "see evidence-inventory.json in the backup.",
+                file=sys.stderr,
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         # The dump holds password hashes and encrypted credentials: private before any byte is written.
         destination.touch(mode=0o600)
@@ -363,8 +407,52 @@ def run_backup(
             for path in root.rglob("*"):
                 if path.is_file():
                     archive.write(path, path.relative_to(root))
-    print(f"Backup created: {destination}")
+    print(
+        f"Backup created: {destination} ({inventory['verified']} signed runs verified, "
+        f"{inventory['failed']} failed, {len(inventory['unsigned'])} unsigned)"
+    )
     return 0
+
+
+def _restored_evidence_is_trustworthy(
+    root: Path, public_key: str | None, *, allow_evidence_failures: bool
+) -> bool:
+    """Verify a backup's evidence before anything is restored from it."""
+    if not public_key:
+        print("Restore needs the pinned evidence public key: pass --public-key.", file=sys.stderr)
+        return False
+    from .cli_reports import verify_evidence_tree
+
+    scans = root / "scans"
+    current = verify_evidence_tree(scans, public_key) if scans.is_dir() else _empty_inventory()
+    problems = [f"{item['run']}: {item['detail']}" for item in current["runs"] if item["status"] == "failed"]
+    recorded_path = root / "evidence-inventory.json"
+    if recorded_path.is_file():
+        recorded = json.loads(recorded_path.read_text())
+        verified_now = {item["run"] for item in current["runs"] if item["status"] == "verified"}
+        problems.extend(
+            f"{item['run']}: verified when backed up but missing or invalid now"
+            for item in recorded.get("runs", [])
+            if item.get("status") == "verified" and item.get("run") not in verified_now
+        )
+    else:
+        print("This backup predates evidence inventories; checking its signed runs now.")
+    print(
+        f"Evidence check: {current['verified']} signed runs verified, "
+        f"{current['failed']} failed, {len(current['unsigned'])} unsigned."
+    )
+    if problems:
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        if not allow_evidence_failures:
+            print(
+                "Restore refused: evidence in this backup does not verify. Check --public-key, "
+                "or pass --allow-evidence-failures to restore anyway.",
+                file=sys.stderr,
+            )
+            return False
+        print("Restoring despite evidence failures (--allow-evidence-failures).", file=sys.stderr)
+    return True
 
 
 def run_restore(
@@ -375,6 +463,8 @@ def run_restore(
     subprocess_module,
     shutil_module,
     confirmed: bool = False,
+    public_key: str | None = None,
+    allow_evidence_failures: bool = False,
 ) -> int:
     if not confirmed:
         print("Restore replaces database and report state. Rerun with --yes.", file=sys.stderr)
@@ -397,6 +487,12 @@ def run_restore(
                     print("Invalid Aegis backup: unsafe archive path.", file=sys.stderr)
                     return EXIT_OPERATIONAL_ERROR
             source.extractall(root)
+        if not _restored_evidence_is_trustworthy(
+            root,
+            public_key or evidence_public_key_from_env(local_env_file),
+            allow_evidence_failures=allow_evidence_failures,
+        ):
+            return EXIT_OPERATIONAL_ERROR
         subprocess_module.run(
             docker_compose_command(project_root, local_env_file, "stop", "dashboard", "worker"),
             cwd=project_root,

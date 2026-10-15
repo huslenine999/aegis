@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import json
@@ -729,11 +730,17 @@ def test_hook_commands_leave_foreign_pre_push_hooks_alone(tmp_path, monkeypatch)
     assert foreign.read_text() == "#!/bin/sh\nmake lint\n"
 
 
+# The deterministic development evidence seed, as `aegis start` would store it.
+DEVELOPMENT_SEED = base64.urlsafe_b64encode(
+    hashlib.sha256(b"aegis-development-evidence-key").digest()
+).decode().rstrip("=")
+
+
 def _stack_stub(tmp_path):
     from types import SimpleNamespace
 
     env_file = tmp_path / ".env.aegis"
-    env_file.write_text("")
+    env_file.write_text(f"AEGIS_EVIDENCE_SIGNING_KEY={DEVELOPMENT_SEED}\n")
     calls = []
 
     def run(command, **kwargs):

@@ -238,7 +238,7 @@ def run_upgrade(*, no_start: bool = False) -> int:
     )
 
 
-def run_backup(output: str | None = None) -> int:
+def run_backup(output: str | None = None, public_key: str | None = None) -> int:
     return cli_stack.run_backup(
         project_root=PROJECT_ROOT,
         local_env_file=LOCAL_ENV_FILE,
@@ -246,10 +246,17 @@ def run_backup(output: str | None = None) -> int:
         shutil_module=shutil,
         package_version=get_package_version(),
         output=output,
+        public_key=public_key,
     )
 
 
-def run_restore(archive_path: str, *, confirmed: bool = False) -> int:
+def run_restore(
+    archive_path: str,
+    *,
+    confirmed: bool = False,
+    public_key: str | None = None,
+    allow_evidence_failures: bool = False,
+) -> int:
     return cli_stack.run_restore(
         archive_path,
         project_root=PROJECT_ROOT,
@@ -257,6 +264,8 @@ def run_restore(archive_path: str, *, confirmed: bool = False) -> int:
         subprocess_module=subprocess,
         shutil_module=shutil,
         confirmed=confirmed,
+        public_key=public_key,
+        allow_evidence_failures=allow_evidence_failures,
     )
 
 
@@ -308,9 +317,15 @@ def main():
     upgrade_parser.add_argument("--no-start", action="store_true", help="Upgrade without restarting")
     backup_parser = subparsers.add_parser("backup", help="Back up PostgreSQL and generated reports")
     backup_parser.add_argument("--output", help="Backup zip path")
+    backup_parser.add_argument("--public-key", help="Evidence public key (default: derived from the local stack)")
     restore_parser = subparsers.add_parser("restore", help="Restore a backup archive")
     restore_parser.add_argument("archive", help="Backup zip path")
     restore_parser.add_argument("--yes", action="store_true", help="Confirm replacement of current state")
+    restore_parser.add_argument("--public-key", help="Pinned evidence public key (default: derived from the local stack)")
+    restore_parser.add_argument(
+        "--allow-evidence-failures", action="store_true",
+        help="Restore even if signed evidence in the backup fails verification",
+    )
     evidence_parser = subparsers.add_parser(
         "verify-evidence", help="Verify a signed scan manifest and its artifacts"
     )
@@ -422,9 +437,14 @@ def main():
     elif args.command == "upgrade":
         return run_upgrade(no_start=args.no_start)
     elif args.command == "backup":
-        return run_backup(args.output)
+        return run_backup(args.output, public_key=args.public_key)
     elif args.command == "restore":
-        return run_restore(args.archive, confirmed=args.yes)
+        return run_restore(
+            args.archive,
+            confirmed=args.yes,
+            public_key=args.public_key,
+            allow_evidence_failures=args.allow_evidence_failures,
+        )
     elif args.command == "verify-evidence":
         return run_verify_evidence(
             args.manifest,

@@ -21,6 +21,38 @@ configuration as one recovery set.
 
 ## Backup and restore
 
+### Evidence-verified local backups
+
+`aegis backup` dumps PostgreSQL first and then copies the evidence volume. A
+scan can finish between those two steps, and a scan that is running has no
+signed manifest yet, so the backup does not claim more than it can show.
+It verifies every signed run it copied (Ed25519 signature and every artifact
+hash) and writes `evidence-inventory.json` into the archive:
+
+- `verified`: runs whose signature and artifacts verified at backup time. These
+  are the runs the backup vouches for.
+- `failed`: signed runs that did not verify. The backup still completes and
+  warns.
+- `unsigned`: run directories without a manifest (in progress, or failed
+  before signing). They carry no evidence claim.
+
+`aegis restore` repeats the check on the archive before it touches the
+database. It refuses to restore if any signed run fails, or if a run that
+verified at backup time is now missing or invalid. Pass the deployment's pinned
+public key with `--public-key`; for a local stack it defaults to the key in
+`.env.aegis`. `--allow-evidence-failures` restores anyway and lists what failed.
+
+Recovery objectives for this procedure: the recovery point is the backup's
+`created_at`, and evidence for scans that were in progress is lost. The restore
+time is dominated by `psql` replay plus evidence verification, which re-hashes
+every artifact; measure both in each drill.
+
+Key escrow: the evidence public key is needed to verify any restore, and the
+signing seed is needed to sign new scans afterwards. Escrow the seed with the
+other keys below. Losing it does not invalidate old evidence, which stays
+verifiable with the public key, but new scans need a new key and a new pinned
+public key.
+
 - PostgreSQL: use encrypted, automated snapshots plus the plain SQL dump created
   by `aegis backup` (`pg_dump --format=plain --clean --if-exists`). Restore it
   with `psql` after quiescing dashboard, worker, and notifier services, start one
