@@ -49,6 +49,8 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Changed
 
+- `aegis doctor` reports scanner versions, requires detect-secrets, and warns
+  when Semgrep differs from the release Aegis is tested with.
 - A dependency audit has a five-minute overall budget, and the KEV catalog
   falls back to CISA's GitHub mirror.
 - Opt-in PostgreSQL integration checks (`AEGIS_TEST_POSTGRES_URL`).

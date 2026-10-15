@@ -702,6 +702,15 @@ def test_doctor_and_version_commands(monkeypatch, capsys):
     assert payload["status"] in {"ok", "degraded"}
     assert any(check["name"] == "python" for check in payload["checks"])
 
+
+def test_semgrep_version_constant_matches_the_pinned_scanner_extra():
+    import tomllib
+
+    from app.scan_engine import SEMGREP_VERSION
+
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    assert f"semgrep=={SEMGREP_VERSION}" in pyproject["project"]["optional-dependencies"]["scanner"]
+
 def test_print_ascii_report(capsys):
     from app.cli import print_ascii_report
     results = [

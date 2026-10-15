@@ -27,6 +27,7 @@ from .resource_budgets import (
     load_bounded_json,
 )
 from .safe_output import SafeOutputRoot
+from .scan_engine import SEMGREP_VERSION
 from .scanners import find_runtime_executable
 
 
@@ -155,18 +156,30 @@ def run_doctor(json_output: bool = False) -> int:
 
     add_check("python", True, sys.version.split()[0])
     add_check("project_root", PROJECT_ROOT.exists(), str(PROJECT_ROOT))
-    add_check("ruff", True, "python module available")
-    try:
-        importlib.metadata.version("ruff")
-    except importlib.metadata.PackageNotFoundError:
-        checks[-1] = {"name": "ruff", "ok": False, "detail": "python module missing"}
+    def package_version(name):
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+
+    for name in ("ruff", "detect-secrets"):
+        version = package_version(name)
+        add_check(name, version is not None, version or "python module missing")
 
     semgrep_bin = find_runtime_executable("semgrep")
-    add_check("semgrep", semgrep_bin is not None, semgrep_bin or "not found")
+    semgrep_version = package_version("semgrep")
+    if not semgrep_bin:
+        add_check("semgrep", False, "not found")
+    elif semgrep_version != SEMGREP_VERSION:
+        # Aegis relies on Semgrep flags (for example --x-ignore-semgrepignore-files) checked on this release.
+        add_check("semgrep", False, f"{semgrep_version or 'unknown version'} at {semgrep_bin}; Aegis is tested with {SEMGREP_VERSION}")
+    else:
+        add_check("semgrep", True, f"{semgrep_version} at {semgrep_bin}")
     codeql_bin = find_runtime_executable("codeql")
     add_check("codeql", False, f"{codeql_bin or 'not found'}; isolated runtime not provisioned")
 
-    ok = all(check["ok"] for check in checks if check["name"] in {"python", "project_root", "ruff"})
+    required = {"python", "project_root", "ruff", "detect-secrets"}
+    ok = all(check["ok"] for check in checks if check["name"] in required)
     payload = {"status": "ok" if ok else "degraded", "checks": checks}
 
     if json_output:

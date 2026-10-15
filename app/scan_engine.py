@@ -50,6 +50,8 @@ def detect_secrets_target(target_path: str | Path) -> tuple[Path, str]:
     return (target, ".") if target.is_dir() else (target.parent, target.name)
 
 
+# The Semgrep release pinned in pyproject.toml (scanner extra); `aegis doctor` warns on others.
+SEMGREP_VERSION = "1.179.0"
 # The scanned repository must not choose what Semgrep skips: ignore its
 # ``nosemgrep`` comments and ``.semgrepignore`` files, and do not silently skip
 # large files (a slow file becomes a Timeout error instead; see
