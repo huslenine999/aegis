@@ -109,3 +109,66 @@ def mock_rq_and_redis(monkeypatch):
     
     with redis_mock, queue_mock:
         yield
+
+
+class FakeOSV:
+    """In-process stand-in for the OSV querybatch and advisory endpoints."""
+
+    def __init__(self):
+        self.advisories = {}  # (ecosystem, name, version) -> list of advisory records
+        self.failing = set()  # advisory IDs whose GET fails
+        self.batch_fails = False
+        self.page_size = None
+        self.batches = []
+        self.fetched = []
+        self.urls = []
+
+    def add(self, ecosystem, name, version, *records):
+        self.advisories.setdefault((ecosystem, name, version), []).extend(records)
+
+    def __call__(self, request, **kwargs):
+        import io
+        import json
+        import urllib.error
+        import urllib.parse
+
+        url = request.full_url
+        self.urls.append(url)
+        if url.endswith("/v1/querybatch"):
+            if self.batch_fails:
+                raise TimeoutError("offline")
+            queries = json.loads(request.data)["queries"]
+            self.batches.append(queries)
+            results = []
+            for query in queries:
+                package = query["package"]
+                records = self.advisories.get((package["ecosystem"], package["name"], query["version"]), [])
+                start = int(query.get("page_token", 0))
+                end = len(records) if self.page_size is None else start + self.page_size
+                item = {"vulns": [
+                    {"id": record["id"], "modified": record.get("modified", "2026-01-01T00:00:00Z")}
+                    for record in records[start:end]
+                ]}
+                if end < len(records):
+                    item["next_page_token"] = str(end)
+                results.append(item)
+            return io.BytesIO(json.dumps({"results": results}).encode())
+        advisory_id = urllib.parse.unquote(url.rsplit("/", 1)[1])
+        self.fetched.append(advisory_id)
+        if advisory_id in self.failing:
+            raise TimeoutError("offline")
+        for records in self.advisories.values():
+            for record in records:
+                if record["id"] == advisory_id:
+                    return io.BytesIO(json.dumps(record).encode())
+        raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+
+
+@pytest.fixture
+def fake_osv(monkeypatch, tmp_path):
+    import policy_engine
+
+    fake = FakeOSV()
+    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
+    return fake

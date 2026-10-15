@@ -1,4 +1,3 @@
-import io
 import json
 from pathlib import Path
 
@@ -68,19 +67,13 @@ def test_codeql_error_cannot_be_ignored_by_legacy_error_toggle():
     assert evaluate_policy_results([analyze_codeql(None)], fail_on_errors=False)["status"] == "ERROR"
 
 
-def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
-    body = json.dumps({
-        "vulns": [{
-            "id": "PYSEC-2099-1",
-            "aliases": ["GHSA-example"],
-            "summary": "Example advisory",
-            "details": "Example details",
-        }],
-    }).encode()
-
-    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(body))
-    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
-    monkeypatch.setattr(policy_engine.time, "sleep", lambda _seconds: None)
+def test_osv_query_preserves_advisory_aliases(fake_osv):
+    fake_osv.add("PyPI", "scanner-helper", "1.0.0", {
+        "id": "PYSEC-2099-1",
+        "aliases": ["GHSA-example"],
+        "summary": "Example advisory",
+        "details": "Example details",
+    })
     manifest = DependencyManifest(
         path=Path("requirements.txt"),
         kind="requirements.txt",
@@ -92,6 +85,7 @@ def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
 
     assert findings[0]["id"] == "PYSEC-2099-1"
     assert findings[0]["aliases"] == ["GHSA-example"]
+    assert findings[0]["summary"] == "Example advisory"
 
 
 def test_osv_strict_mode_rejects_stale_clean_cache_on_outage(tmp_path, monkeypatch):

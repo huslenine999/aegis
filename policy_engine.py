@@ -2,9 +2,10 @@ import json
 import os
 import sys
 import math
-from collections import Counter, deque
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -680,7 +681,12 @@ def parse_cvss_vector(vector_str: str) -> float:
 
 
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
-OSV_REQUEST_DEADLINE_SECONDS = 5.0
+OSV_API_URL = "https://api.osv.dev"
+OSV_REQUEST_DEADLINE_SECONDS = 10.0
+OSV_BATCH_SIZE = 1000  # queries per querybatch request
+OSV_MAX_PAGES = 20
+OSV_HYDRATION_WORKERS = 4
+OSV_ADVISORY_CACHE_PREFIX = "osv-advisory:"
 LOCKFILE_KINDS = {
     "uv.lock",
     "poetry.lock",
@@ -725,16 +731,13 @@ def _dependency_inventory_errors(manifests: list[DependencyManifest]) -> list[st
     return errors
 
 
-def _fetch_osv_response(package: DependencyPackage) -> bytes:
-    payload = {
-        "version": package.version,
-        "package": {"name": package.name, "ecosystem": package.ecosystem},
-    }
+def _osv_request(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call one OSV endpoint with a byte budget and a wall-clock deadline."""
     request = urllib.request.Request(
-        "https://api.osv.dev/v1/query",
-        data=json.dumps(payload).encode("utf-8"),
+        f"{OSV_API_URL}{path}",
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "User-Agent": "Aegis-Scanner/2.0"},
-        method="POST",
+        method="GET" if payload is None else "POST",
     )
     deadline = time.monotonic() + OSV_REQUEST_DEADLINE_SECONDS
     limit = resource_budgets().max_parser_input_bytes
@@ -747,43 +750,120 @@ def _fetch_osv_response(package: DependencyPackage) -> bytes:
                 raise ResourceLimitError(f"OSV response exceeds the configured limit of {limit} bytes.")
             if time.monotonic() > deadline:
                 raise TimeoutError("OSV response exceeded its deadline.")
-    return body
+    decoded = json.loads(body.decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise ValueError("OSV returned a non-object response.")
+    return decoded
 
 
-def _iter_osv_queries(
-    packages: list[DependencyPackage], cache: dict[str, Any], current_time: float, cache_ttl: int
-):
-    max_pending = 4
-    pending: deque[tuple[DependencyPackage, str, list[dict] | None, float | None, Future[bytes] | None]] = deque()
-    dispatched = False
-    executor = ThreadPoolExecutor(max_workers=max_pending)
+def _osv_batch_advisory_ids(packages: list[DependencyPackage]) -> list[dict[str, str]]:
+    """Map each package to {advisory id: modified} with one querybatch call per page.
+
+    The batch endpoint returns only advisory IDs. Results whose advisories do
+    not fit on one page carry a next_page_token and are queried again.
+    """
+    queries = [
+        {"version": package.version, "package": {"name": package.name, "ecosystem": package.ecosystem}}
+        for package in packages
+    ]
+    advisories: list[dict[str, str]] = [{} for _ in packages]
+    pending = list(range(len(packages)))
+    tokens: dict[int, str] = {}
+    for _page in range(OSV_MAX_PAGES):
+        if not pending:
+            return advisories
+        response = _osv_request("/v1/querybatch", {
+            "queries": [
+                {**queries[index], **({"page_token": tokens[index]} if index in tokens else {})}
+                for index in pending
+            ],
+        })
+        results = response.get("results")
+        if not isinstance(results, list) or len(results) != len(pending):
+            raise ValueError("OSV batch response does not match the submitted queries.")
+        next_pending = []
+        for index, result in zip(pending, results):
+            if not isinstance(result, dict):
+                raise ValueError("OSV batch response contains a malformed result.")
+            for vuln in result.get("vulns") or []:
+                if isinstance(vuln, dict) and vuln.get("id"):
+                    advisories[index][str(vuln["id"])] = str(vuln.get("modified") or "")
+            if result.get("next_page_token"):
+                tokens[index] = str(result["next_page_token"])
+                next_pending.append(index)
+        pending = next_pending
+    raise ValueError("OSV pagination exceeded the page limit.")
+
+
+def _normalize_osv_advisory(vuln: dict[str, Any]) -> dict[str, Any]:
+    cvss_score = None
+    vector = None
+    db_spec = vuln.get("database_specific", {})
+    if isinstance(db_spec, dict):
+        cvss_data = db_spec.get("cvss")
+        if isinstance(cvss_data, dict):
+            cvss_score = cvss_data.get("score")
+            vector = cvss_data.get("vector")
+    if cvss_score is None:
+        for sev in vuln.get("severity", []):
+            if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
+                vector = sev.get("score")
+                cvss_score = parse_cvss_vector(str(vector or ""))
+                break
+    return {
+        "id": vuln.get("id"),
+        "aliases": [str(alias) for alias in vuln.get("aliases", []) if alias],
+        "cvss": cvss_score,
+        "vector": vector,
+        "summary": vuln.get("summary", "No summary provided."),
+        "details": vuln.get("details", "No details provided."),
+    }
+
+
+def _hydrate_osv_advisories(
+    wanted: dict[str, str], cache: dict[str, Any]
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Fetch full advisory records, reusing cached ones whose modified time is unchanged."""
+    records: dict[str, dict[str, Any]] = {}
+    to_fetch = []
+    for advisory_id, modified in wanted.items():
+        entry = cache.get(f"{OSV_ADVISORY_CACHE_PREFIX}{advisory_id}")
+        if (
+            modified
+            and isinstance(entry, dict)
+            and entry.get("modified") == modified
+            and isinstance(entry.get("record"), dict)
+        ):
+            records[advisory_id] = entry["record"]
+        else:
+            to_fetch.append(advisory_id)
+    failed: set[str] = set()
+    if not to_fetch:
+        return records, failed
+    executor = ThreadPoolExecutor(max_workers=OSV_HYDRATION_WORKERS)
     try:
-        for package in packages:
-            cache_key = f"{package.ecosystem}:{package.name.lower()}@{package.version}"
-            entry = cache.get(cache_key)
-            cached_vulns: list[dict] | None = None
-            entry_age: float | None = None
-            if isinstance(entry, dict) and isinstance(entry.get("vulns"), list):
-                cached_vulns = entry["vulns"]
-                try:
-                    entry_age = current_time - float(entry.get("timestamp", 0))
-                except (TypeError, ValueError):
-                    pass
-            fresh = cached_vulns is not None and entry_age is not None and 0 <= entry_age < cache_ttl
-            future: Future[bytes] | None = None
-            if not fresh:
-                # Pace globally while overlapping I/O; never queue an unbounded batch.
-                if dispatched:
-                    time.sleep(0.1)
-                future = executor.submit(_fetch_osv_response, package)
-                dispatched = True
-            pending.append((package, cache_key, cached_vulns, entry_age, future))
-            if len(pending) == max_pending:
-                yield pending.popleft()
-        yield from pending
+        futures = {
+            advisory_id: executor.submit(
+                _osv_request, f"/v1/vulns/{urllib.parse.quote(advisory_id, safe='')}"
+            )
+            for advisory_id in to_fetch
+        }
+        for advisory_id, future in futures.items():
+            try:
+                record = _normalize_osv_advisory(future.result())
+            except Exception as exc:
+                print(f"[WARN] Failed to fetch OSV advisory {advisory_id}: {exc}")
+                failed.add(advisory_id)
+                continue
+            records[advisory_id] = record
+            cache[f"{OSV_ADVISORY_CACHE_PREFIX}{advisory_id}"] = {
+                "modified": wanted[advisory_id],
+                "record": record,
+            }
     finally:
         # Do not wait for in-flight requests on cancel or error; each one ends at its deadline.
         executor.shutdown(wait=False, cancel_futures=True)
+    return records, failed
 
 
 def query_osv_vulnerabilities(
@@ -824,68 +904,71 @@ def query_osv_vulnerabilities(
     cache_dirty = False
     CACHE_TTL = 86400  # 24 hours
 
-    for pkg, cache_key, cached_vulns, entry_age, future in _iter_osv_queries(
-        packages, cache, current_time, CACHE_TTL
-    ):
-        pkg_name = pkg.name
-        pkg_ver = pkg.version
-        ecosystem = pkg.ecosystem
-        if future is None:
-            findings.extend(cached_vulns)
-            continue
-        
+    # 1. Split packages into fresh cache hits and packages that need a query.
+    cached: dict[str, tuple[list[dict] | None, float | None]] = {}
+    stale_packages = []
+    for package in packages:
+        cache_key = f"{package.ecosystem}:{package.name.lower()}@{package.version}"
+        entry = cache.get(cache_key)
+        cached_vulns: list[dict] | None = None
+        entry_age: float | None = None
+        if isinstance(entry, dict) and isinstance(entry.get("vulns"), list):
+            cached_vulns = entry["vulns"]
+            try:
+                entry_age = current_time - float(entry.get("timestamp", 0))
+            except (TypeError, ValueError):
+                pass
+        cached[cache_key] = (cached_vulns, entry_age)
+        if not (cached_vulns is not None and entry_age is not None and 0 <= entry_age < CACHE_TTL):
+            stale_packages.append(package)
+
+    # 2. Ask OSV which advisories affect each stale package, in batches.
+    package_advisories: dict[str, dict[str, str] | None] = {}
+    for start in range(0, len(stale_packages), OSV_BATCH_SIZE):
+        batch = stale_packages[start:start + OSV_BATCH_SIZE]
+        keys = [f"{p.ecosystem}:{p.name.lower()}@{p.version}" for p in batch]
         try:
-            resp_data = json.loads(future.result().decode("utf-8"))
-            vuln_list = []
-            for vuln in resp_data.get("vulns", []):
-                cvss_score = None
-                vector = None
+            for cache_key, advisories in zip(keys, _osv_batch_advisory_ids(batch)):
+                package_advisories[cache_key] = advisories
+        except Exception as exc:
+            print(f"[WARN] OSV batch query failed for {len(batch)} packages: {exc}")
+            package_advisories.update(dict.fromkeys(keys))
 
-                db_spec = vuln.get("database_specific", {})
-                if isinstance(db_spec, dict):
-                    cvss_data = db_spec.get("cvss")
-                    if isinstance(cvss_data, dict):
-                        cvss_score = cvss_data.get("score")
-                        vector = cvss_data.get("vector")
+    # 3. Fetch each distinct advisory once, however many packages share it.
+    wanted: dict[str, str] = {}
+    for package_ids in package_advisories.values():
+        wanted.update(package_ids or {})
+    records, failed_advisories = _hydrate_osv_advisories(wanted, cache)
 
-                if cvss_score is None:
-                    for sev in vuln.get("severity", []):
-                        if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
-                            vector = sev.get("score")
-                            cvss_score = parse_cvss_vector(str(vector or ""))
-                            break
-
-                vuln_list.append({
-                    "id": vuln.get("id"),
-                    "aliases": [
-                        str(alias) for alias in vuln.get("aliases", []) if alias
-                    ],
-                    "package": pkg_name,
-                    "version": pkg_ver,
-                    "ecosystem": ecosystem,
-                    "cvss": cvss_score,
-                    "vector": vector,
-                    "summary": vuln.get("summary", "No summary provided."),
-                    "details": vuln.get("details", "No details provided.")
-                })
-
-            cache[cache_key] = {
-                "timestamp": current_time,
-                "vulns": vuln_list
-            }
+    # 4. Assemble results in package order, falling back to cache on failure.
+    for package in packages:
+        cache_key = f"{package.ecosystem}:{package.name.lower()}@{package.version}"
+        cached_vulns, _ = cached[cache_key]
+        if cache_key not in package_advisories:
+            findings.extend(cached_vulns or [])
+            continue
+        affecting = package_advisories[cache_key]
+        if affecting is not None and not (set(affecting) & failed_advisories):
+            vuln_list = [
+                {
+                    **records[advisory_id],
+                    "aliases": list(records[advisory_id].get("aliases") or []),
+                    "package": package.name,
+                    "version": package.version,
+                    "ecosystem": package.ecosystem,
+                }
+                for advisory_id in affecting
+            ]
+            cache[cache_key] = {"timestamp": current_time, "vulns": vuln_list}
             cache_dirty = True
             findings.extend(vuln_list)
-        except Exception as e:
-            print(f"[WARN] Failed to query OSV API for {cache_key}: {e}")
-            if cached_vulns is not None and entry_age is not None and 0 <= entry_age < CACHE_TTL:
-                findings.extend(cached_vulns)
-            elif cached_vulns is not None:
-                # A stale result may be useful for a best-effort report, but it
-                # must remain an operational failure for strict release gates.
-                findings.extend(cached_vulns)
-                failed_queries.append(cache_key)
-            else:
-                failed_queries.append(cache_key)
+            continue
+        print(f"[WARN] Failed to query OSV API for {cache_key}")
+        if cached_vulns is not None:
+            # A stale result may be useful for a best-effort report, but it
+            # must remain an operational failure for strict release gates.
+            findings.extend(cached_vulns)
+        failed_queries.append(cache_key)
 
     if cache_dirty:
         try:

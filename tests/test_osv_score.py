@@ -1,6 +1,5 @@
 import json
 import io
-import threading
 import time
 from pathlib import Path
 
@@ -82,84 +81,117 @@ def test_app_exploitability_score_calculation(tmp_path):
     assert score_waf_on == 87.5
 
 
-def test_osv_requests_overlap_with_bounded_concurrency_and_ordered_results(tmp_path, monkeypatch):
-    barrier = threading.Barrier(4)
-    lock = threading.Lock()
-    active = 0
-    peak = 0
-    owner_thread = threading.get_ident()
-    pacing_threads = []
-
-    class Response(io.BytesIO):
-        def __exit__(self, *args):
-            nonlocal active
-            with lock:
-                active -= 1
-            self.close()
-
-    def request(req, **kwargs):
-        nonlocal active, peak
-        name = json.loads(req.data)["package"]["name"]
-        index = int(name.rsplit("-", 1)[1])
-        with lock:
-            active += 1
-            peak = max(peak, active)
-        if index < 4:
-            barrier.wait(timeout=1)
-        return Response(json.dumps({"vulns": [{"id": f"OSV-{index}"}]}).encode())
-
-    def pace(seconds):
-        assert seconds == 0.1
-        pacing_threads.append(threading.get_ident())
-
-    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", request)
-    monkeypatch.setattr(policy_engine.time, "sleep", pace)
-    cache = tmp_path / "osv-cache.json"
-    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", cache)
-    packages = tuple(DependencyPackage(f"package-{i}", "1.0.0", "npm") for i in range(8))
-    manifest = DependencyManifest(Path("package-lock.json"), "package-lock.json", "npm", packages)
-
-    findings = policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
-
-    assert peak == 4
-    assert [finding["id"] for finding in findings] == [f"OSV-{i}" for i in range(8)]
-    assert pacing_threads == [owner_thread] * 7
-    saved = json.loads(cache.read_text())
-    assert set(saved) == {f"npm:package-{i}@1.0.0" for i in range(8)}
+def npm_manifest(*names):
+    packages = tuple(DependencyPackage(name, "1.0.0", "npm") for name in names)
+    return DependencyManifest(Path("package-lock.json"), "package-lock.json", "npm", packages)
 
 
-def test_osv_concurrent_merge_preserves_cache_ttl_stale_fallback_and_strict_failures(tmp_path, monkeypatch):
-    cache = tmp_path / "osv-cache.json"
-    cache.write_text(json.dumps({
+def test_osv_batches_packages_and_fetches_each_advisory_once(fake_osv):
+    names = [f"package-{i}" for i in range(8)]
+    for i, name in enumerate(names[:6]):
+        fake_osv.add("npm", name, "1.0.0", {"id": f"OSV-{i}", "aliases": [f"CVE-2026-{i}"]})
+    shared = {"id": "OSV-shared"}
+    fake_osv.add("npm", "package-6", "1.0.0", shared)
+    fake_osv.add("npm", "package-7", "1.0.0", shared)
+
+    findings = policy_engine.query_osv_vulnerabilities([npm_manifest(*names)], raise_on_error=True)
+
+    assert len(fake_osv.batches) == 1 and len(fake_osv.batches[0]) == 8
+    assert sorted(fake_osv.fetched) == sorted([f"OSV-{i}" for i in range(6)] + ["OSV-shared"])
+    assert [(f["id"], f["package"]) for f in findings] == [
+        *[(f"OSV-{i}", f"package-{i}") for i in range(6)],
+        ("OSV-shared", "package-6"),
+        ("OSV-shared", "package-7"),
+    ]
+    assert findings[0]["aliases"] == ["CVE-2026-0"]
+    saved = json.loads(policy_engine.OSV_CACHE_FILE.read_text())
+    assert {f"npm:{name}@1.0.0" for name in names} <= set(saved)
+    assert "osv-advisory:OSV-shared" in saved
+
+
+def test_osv_splits_large_inventories_into_bounded_batches(fake_osv, monkeypatch):
+    monkeypatch.setattr(policy_engine, "OSV_BATCH_SIZE", 3)
+
+    policy_engine.query_osv_vulnerabilities([npm_manifest(*[f"p{i}" for i in range(7)])], raise_on_error=True)
+
+    assert [len(batch) for batch in fake_osv.batches] == [3, 3, 1]
+
+
+def test_osv_follows_pagination_for_packages_with_many_advisories(fake_osv):
+    fake_osv.page_size = 1
+    fake_osv.add("npm", "busy", "1.0.0", {"id": "A"}, {"id": "B"}, {"id": "C"})
+    fake_osv.add("npm", "quiet", "1.0.0", {"id": "D"})
+
+    findings = policy_engine.query_osv_vulnerabilities([npm_manifest("busy", "quiet")], raise_on_error=True)
+
+    assert [f["id"] for f in findings] == ["A", "B", "C", "D"]
+    assert [len(batch) for batch in fake_osv.batches] == [2, 1, 1]
+    assert fake_osv.batches[1][0]["page_token"] == "1"
+
+
+def test_osv_reuses_cached_advisories_that_are_unmodified(fake_osv, monkeypatch):
+    fake_osv.add("npm", "lib", "1.0.0", {"id": "OSV-1", "modified": "2026-05-01T00:00:00Z"})
+    monkeypatch.setattr(policy_engine.time, "time", lambda: 1000)
+    policy_engine.query_osv_vulnerabilities([npm_manifest("lib")], raise_on_error=True)
+    # The package entry expires, so the batch query runs again ...
+    monkeypatch.setattr(policy_engine.time, "time", lambda: 1000 + 90000)
+
+    findings = policy_engine.query_osv_vulnerabilities([npm_manifest("lib")], raise_on_error=True)
+
+    # ... but the unchanged advisory is not downloaded a second time.
+    assert len(fake_osv.batches) == 2
+    assert fake_osv.fetched == ["OSV-1"]
+    assert findings[0]["id"] == "OSV-1"
+
+
+def test_osv_advisory_ids_from_responses_cannot_change_the_request_path(fake_osv):
+    fake_osv.add("npm", "lib", "1.0.0", {"id": "../../v1/admin?x=1"})
+
+    policy_engine.query_osv_vulnerabilities([npm_manifest("lib")], raise_on_error=True)
+
+    assert fake_osv.urls[-1] == "https://api.osv.dev/v1/vulns/..%2F..%2Fv1%2Fadmin%3Fx%3D1"
+
+
+def test_osv_batch_merge_preserves_cache_ttl_stale_fallback_and_strict_failures(fake_osv, monkeypatch):
+    policy_engine.OSV_CACHE_FILE.write_text(json.dumps({
         "npm:fresh@1.0.0": {"timestamp": 199999, "vulns": [{"id": "fresh"}]},
         "npm:stale@1.0.0": {"timestamp": 0, "vulns": [{"id": "stale"}]},
     }))
-    requested = []
-
-    def request(req, **kwargs):
-        name = json.loads(req.data)["package"]["name"]
-        requested.append(name)
-        if name != "available":
-            raise TimeoutError("offline")
-        return io.BytesIO(json.dumps({"vulns": [{"id": "available"}]}).encode())
-
-    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", cache)
+    fake_osv.add("npm", "stale", "1.0.0", {"id": "stale-new"})
+    fake_osv.add("npm", "unavailable", "1.0.0", {"id": "down"})
+    fake_osv.add("npm", "available", "1.0.0", {"id": "available"})
+    fake_osv.failing = {"stale-new", "down"}
     monkeypatch.setattr(policy_engine.time, "time", lambda: 200000)
-    monkeypatch.setattr(policy_engine.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", request)
-    packages = tuple(DependencyPackage(name, "1.0.0", "npm") for name in ("fresh", "stale", "unavailable", "available"))
-    manifest = DependencyManifest(Path("package-lock.json"), "package-lock.json", "npm", packages)
+    manifest = npm_manifest("fresh", "stale", "unavailable", "available")
 
     findings = policy_engine.query_osv_vulnerabilities([manifest])
 
     assert [finding["id"] for finding in findings] == ["fresh", "stale", "available"]
-    assert "fresh" not in requested
-    saved = json.loads(cache.read_text())
+    assert [query["package"]["name"] for query in fake_osv.batches[0]] == ["stale", "unavailable", "available"]
+    saved = json.loads(policy_engine.OSV_CACHE_FILE.read_text())
     assert saved["npm:fresh@1.0.0"]["timestamp"] == 199999
     assert saved["npm:stale@1.0.0"]["timestamp"] == 0
     assert saved["npm:available@1.0.0"]["timestamp"] == 200000
     with pytest.raises(RuntimeError, match="npm:stale@1.0.0, npm:unavailable@1.0.0"):
         policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
+
+
+def test_osv_batch_outage_fails_every_uncached_package(fake_osv):
+    fake_osv.batch_fails = True
+
+    with pytest.raises(RuntimeError, match="npm:a@1.0.0, npm:b@1.0.0"):
+        policy_engine.query_osv_vulnerabilities([npm_manifest("a", "b")], raise_on_error=True)
+    assert fake_osv.fetched == []
+
+
+def test_osv_batch_response_with_wrong_result_count_is_rejected(fake_osv, monkeypatch):
+    monkeypatch.setattr(
+        policy_engine.urllib.request, "urlopen",
+        lambda *args, **kwargs: io.BytesIO(b'{"results": [{"vulns": []}]}'),
+    )
+
+    with pytest.raises(RuntimeError, match="OSV queries failed"):
+        policy_engine.query_osv_vulnerabilities([npm_manifest("a", "b")], raise_on_error=True)
 
 
 @pytest.mark.parametrize("payload", [b"{", b"x" * 33])
@@ -179,10 +211,10 @@ def test_osv_concurrent_response_errors_still_fail_strict_gates(tmp_path, monkey
     assert not cache.exists()
 
 
-def test_osv_interrupt_does_not_wait_for_in_flight_requests(tmp_path, monkeypatch):
+def test_osv_interrupt_does_not_wait_for_in_flight_advisory_downloads(fake_osv, monkeypatch):
     sync_sleep = time.sleep
-    started = []
-    pauses = 0
+    for i in range(4):
+        fake_osv.add("npm", f"package-{i}", "1.0.0", {"id": f"OSV-{i}"})
 
     class SlowResponse(io.BytesIO):
         def read1(self, size=-1):
@@ -190,27 +222,23 @@ def test_osv_interrupt_does_not_wait_for_in_flight_requests(tmp_path, monkeypatc
             return super().read1(size)
 
     def request(req, **kwargs):
-        started.append(json.loads(req.data)["package"]["name"])
-        return SlowResponse(b'{"vulns": []}')
+        response = fake_osv(req, **kwargs)
+        if req.full_url.endswith(("OSV-1", "OSV-2", "OSV-3")):
+            return SlowResponse(response.getvalue())
+        return response
 
-    def pace(seconds):
-        nonlocal pauses
-        pauses += 1
-        if pauses == 3:
-            raise KeyboardInterrupt
+    def interrupt(_vuln):
+        raise KeyboardInterrupt
 
     monkeypatch.setattr(policy_engine.urllib.request, "urlopen", request)
-    monkeypatch.setattr(policy_engine.time, "sleep", pace)
-    monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
-    packages = tuple(DependencyPackage(f"package-{i}", "1.0.0", "npm") for i in range(4))
-    manifest = DependencyManifest(Path("package-lock.json"), "package-lock.json", "npm", packages)
+    monkeypatch.setattr(policy_engine, "_normalize_osv_advisory", interrupt)
 
     began = time.monotonic()
     with pytest.raises(KeyboardInterrupt):
-        policy_engine.query_osv_vulnerabilities([manifest])
+        policy_engine.query_osv_vulnerabilities([npm_manifest(*[f"package-{i}" for i in range(4)])])
 
-    assert time.monotonic() - began < 0.3
-    assert len(started) >= 2
+    assert time.monotonic() - began < 0.4
+    assert len(fake_osv.fetched) >= 2
 
 
 def test_osv_overall_deadline_stops_a_dribbling_response(tmp_path, monkeypatch):
