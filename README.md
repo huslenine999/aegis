@@ -489,7 +489,7 @@ python scripts/pilot_readiness.py \
 
 The last local validation on 2026-10-16 recorded 1,013 passing Python tests, 2
 skipped Compose integration tests, and passing Ruff and mypy checks. Coverage was
-last measured at 80.13% over the configured modules on 2026-09-23. A live offline CodeQL scan found SQL injection
+last measured at 88.8% over the configured modules on 2026-10-16. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture. The coverage percentage is not whole-project
 coverage.
 

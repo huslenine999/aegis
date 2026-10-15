@@ -41,7 +41,7 @@ names what is still open; the dated observations below are kept as history.
 | F13 small synthetic benchmark | Partly addressed | Held-out CodeQL corpus run (CodeQL 2.27.0: 4/4, one unrelated alert). Aegis Semgrep rules scored 1/4 held-out, which exposed three rule defects, now fixed with fixtures. Results in `benchmarks/results/`. | Eight cases; a larger, fresh held-out corpus and real-repository evaluation are still needed. |
 | F14 search covers first 200 | Fixed | Server-side filtering and search, stable ordering, totals, "N of M" display; tested with 201 findings. | None. |
 | F15 recovery of trusted evidence | Fixed for local backups | Backups store an evidence inventory; restores re-verify every signature and artifact hash and refuse on failure or missing runs. | S3-backed artifact recovery and a live Compose restore drill were not exercised. |
-| F16 serial OSV queries | Fixed | `/v1/querybatch` with per-advisory caching. | No overall wall-clock budget across batches. |
+| F16 serial OSV queries | Fixed | `/v1/querybatch` with per-advisory caching, and a five-minute overall budget; packages left unqueried fail strict gates. | None. |
 
 ## Verification and limits
 

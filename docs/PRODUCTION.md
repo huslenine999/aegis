@@ -96,7 +96,10 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   required lookup produces an operational error rather than a clean result.
 - Dependency findings with CVE aliases are prioritized with the CISA Known
   Exploited Vulnerabilities catalog and FIRST EPSS scores. Scanner workers need
-  HTTPS egress to `api.osv.dev`, `www.cisa.gov`, and `api.first.org`. Only CVE
+  HTTPS egress to `api.osv.dev`, `www.cisa.gov`, and `api.first.org`
+  (`raw.githubusercontent.com` is used as CISA's KEV mirror when
+  `www.cisa.gov` fails). One dependency audit has a five-minute overall
+  budget; packages not queried in time are an operational error. Only CVE
   identifiers are sent to FIRST; no source code or package inventory is. Both
   feeds are cached for 24 hours; a copy older than 7 days is never trusted, so
   a prolonged outage is an operational error rather than a pass.

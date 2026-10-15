@@ -137,8 +137,9 @@ class FakeOSV:
 
         url = request.full_url
         self.urls.append(url)
-        if url.startswith("https://www.cisa.gov/"):
-            if "kev" in self.feed_failures:
+        if url.startswith(("https://www.cisa.gov/", "https://raw.githubusercontent.com/cisagov/")):
+            mirror = url.startswith("https://raw.githubusercontent.com/")
+            if "kev" in self.feed_failures or ("kev-primary" in self.feed_failures and not mirror):
                 raise TimeoutError("offline")
             return io.BytesIO(json.dumps({
                 "catalogVersion": "2026.10.14",

@@ -692,12 +692,18 @@ def parse_cvss_vector(vector_str: str) -> float:
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
 OSV_API_URL = "https://api.osv.dev"
 OSV_REQUEST_DEADLINE_SECONDS = 10.0
+# Wall-clock budget for one complete dependency audit (all batches and advisories).
+OSV_TOTAL_DEADLINE_SECONDS = 300.0
 OSV_BATCH_SIZE = 1000  # queries per querybatch request
 OSV_MAX_PAGES = 20
 OSV_HYDRATION_WORKERS = 4
 OSV_ADVISORY_CACHE_PREFIX = "osv-advisory:"
 EXPLOIT_INTEL_CACHE_FILE = SCAN_DIR / "exploit-intel-cache.json"
-KEV_FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+# CISA's catalog, then CISA's own GitHub mirror of the same file.
+KEV_FEED_URLS = (
+    "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "https://raw.githubusercontent.com/cisagov/kev-data/develop/known_exploited_vulnerabilities.json",
+)
 EPSS_API_URL = "https://api.first.org/data/v1/epss"
 EPSS_BATCH_SIZE = 100  # the EPSS API returns at most 100 rows per page by default
 EXPLOIT_INTEL_TTL_SECONDS = 86400  # both feeds publish daily
@@ -837,7 +843,7 @@ def _normalize_osv_advisory(vuln: dict[str, Any]) -> dict[str, Any]:
 
 
 def _hydrate_osv_advisories(
-    wanted: dict[str, str], cache: dict[str, Any]
+    wanted: dict[str, str], cache: dict[str, Any], deadline: float | None = None
 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Fetch full advisory records, reusing cached ones whose modified time is unchanged."""
     records: dict[str, dict[str, Any]] = {}
@@ -866,7 +872,8 @@ def _hydrate_osv_advisories(
         }
         for advisory_id, future in futures.items():
             try:
-                record = _normalize_osv_advisory(future.result())
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                record = _normalize_osv_advisory(future.result(timeout=remaining))
             except Exception as exc:
                 print(f"[WARN] Failed to fetch OSV advisory {advisory_id}: {exc}")
                 failed.add(advisory_id)
@@ -940,9 +947,14 @@ def query_osv_vulnerabilities(
 
     # 2. Ask OSV which advisories affect each stale package, in batches.
     package_advisories: dict[str, dict[str, str] | None] = {}
+    deadline = time.monotonic() + OSV_TOTAL_DEADLINE_SECONDS
     for start in range(0, len(stale_packages), OSV_BATCH_SIZE):
         batch = stale_packages[start:start + OSV_BATCH_SIZE]
         keys = [f"{p.ecosystem}:{p.name.lower()}@{p.version}" for p in batch]
+        if time.monotonic() > deadline:
+            print(f"[WARN] OSV audit time budget exhausted; {len(batch)} packages not queried.")
+            package_advisories.update(dict.fromkeys(keys))
+            continue
         try:
             for cache_key, advisories in zip(keys, _osv_batch_advisory_ids(batch)):
                 package_advisories[cache_key] = advisories
@@ -954,7 +966,7 @@ def query_osv_vulnerabilities(
     wanted: dict[str, str] = {}
     for package_ids in package_advisories.values():
         wanted.update(package_ids or {})
-    records, failed_advisories = _hydrate_osv_advisories(wanted, cache)
+    records, failed_advisories = _hydrate_osv_advisories(wanted, cache, deadline)
 
     # 4. Assemble results in package order, falling back to cache on failure.
     for package in packages:
@@ -1038,8 +1050,18 @@ def _load_kev(cache: dict[str, Any], now: float) -> tuple[dict[str, Any] | None,
             age = None
     if age is not None and 0 <= age < EXPLOIT_INTEL_TTL_SECONDS:
         return cached, None
+    last_error: Exception = RuntimeError("no KEV sources configured")
     try:
-        feed = _fetch_json(KEV_FEED_URL)
+        feed = None
+        for url in KEV_FEED_URLS:
+            try:
+                feed = _fetch_json(url)
+                break
+            except Exception as exc:
+                print(f"[WARN] CISA KEV source {url} failed: {exc}")
+                last_error = exc
+        if feed is None:
+            raise last_error
         vulnerabilities = feed.get("vulnerabilities") if isinstance(feed, dict) else None
         if not isinstance(vulnerabilities, list) or not feed.get("catalogVersion"):
             raise ValueError("KEV feed is missing catalogVersion or vulnerabilities.")

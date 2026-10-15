@@ -266,3 +266,13 @@ def test_osv_overall_deadline_stops_a_dribbling_response(tmp_path, monkeypatch):
         policy_engine.query_osv_vulnerabilities([manifest], raise_on_error=True)
     assert time.monotonic() - began < 0.3
     assert closed == [True]
+
+
+def test_osv_total_budget_fails_closed_instead_of_running_forever(fake_osv, monkeypatch):
+    fake_osv.add("npm", "a", "1.0.0", {"id": "OSV-A"})
+    monkeypatch.setattr(policy_engine, "OSV_BATCH_SIZE", 1)
+    monkeypatch.setattr(policy_engine, "OSV_TOTAL_DEADLINE_SECONDS", -1.0)
+
+    with pytest.raises(RuntimeError, match="npm:a@1.0.0, npm:b@1.0.0"):
+        policy_engine.query_osv_vulnerabilities([npm_manifest("a", "b")], raise_on_error=True)
+    assert fake_osv.batches == []
