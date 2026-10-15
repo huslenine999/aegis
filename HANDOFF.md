@@ -84,9 +84,11 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
 4. **Deep-scan assurance.** Authenticated Deep browser flow and Docker-level
    adversarial isolation checks. The held-out CodeQL benchmark is done
    (`benchmarks/results/`); a larger fresh corpus is the next step.
-5. **Least-privilege worker database role.** The last open piece of F06: the
-   evidence key is already out of the worker (separate `signer` service), but
-   workers still share the database role. See the 2026-10-16 follow-up table in
+5. **Per-job OS sandbox.** The last open piece of F06. Signing key, GitHub
+   credentials, and database roles are split out (signer, `github-broker`,
+   per-service PostgreSQL logins), but scanner subprocesses still run as the
+   worker's user. Next step: gVisor or a seccomp profile per job, tested on the
+   target host. See the 2026-10-16 follow-up table in
    `docs/research/CAPSTONE_REVIEW.md`.
 6. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.

@@ -41,9 +41,11 @@ flowchart LR
   R --> W["Scanner worker"]
   R --> N["Notifier worker"]
   R --> S["Evidence signer"]
+  R --> B["GitHub credential broker"]
   W --> A["Tenant/project/run evidence"]
   S -. read-only .-> A
   W --> G
+  B --> G
   N --> O["Approved outbound channels"]
   D --> A
 ```
@@ -55,9 +57,14 @@ is still in progress, has never been signed before (an append-only
 `evidence_signatures` ledger), every artifact hash matches the stored bytes, and
 the source descriptor matches the manifest's attestation.
 
-Current scanner workers require database access and GitHub App credentials to
-clone private repositories and complete checks. The target regulated topology
-replaces this with a credential broker and ephemeral scanner runtime receiving
-only a short-lived source lease and evidence-upload capability. Immutable object
+Scanner workers hold neither the GitHub App key nor the OAuth-token encryption
+key. They ask the `github-credentials` queue's broker for a clone token for one
+in-flight run (an installation token limited to `contents: read` on that run's
+repository, or the recorded requester's OAuth token) and ask it to complete that
+run's own check run. Each service uses its own PostgreSQL login with only the
+grants it needs, and triggers keep finished runs and their artifact records
+immutable. The target regulated topology adds a per-job sandboxed scanner
+runtime receiving only a short-lived source lease and evidence-upload
+capability. Immutable object
 storage, KMS keys, OIDC, and external SIEM are also target-state controls, not
 features of the local backend.

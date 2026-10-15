@@ -60,8 +60,13 @@ and prevent one project from reading another project's results.
   object store with per-tenant keys, encryption, quotas, and lifecycle rules.
 - GitHub OAuth still requests repository scope for interactive imports. The
   GitHub App uses narrower installation permissions for automated pull-request
-  checks, but its private key is currently present in both dashboard and worker;
-  a production scanner fleet should obtain clone tokens from a broker instead.
+  checks. Its private key and the OAuth-token encryption key live only in the
+  dashboard and a separate `github-broker` service; production workers refuse
+  both. A worker asks the broker for a clone token for one in-flight run and
+  receives a read-only installation token scoped to that run's repository, or
+  the recorded requester's OAuth token, and asks it to complete that run's own
+  check run. A compromised worker can still read the source of a run it is
+  processing.
 - TOTP MFA is implemented. Self-service password recovery, WebAuthn, and
   enterprise identity federation still require a reviewed identity workflow.
 - The active scanner set does not test infrastructure configuration, container
@@ -74,12 +79,20 @@ and prevent one project from reading another project's results.
   Python supervisor would cross this boundary. A production design should
   replace the socket with a narrow job broker.
 - Evidence signing runs in a separate signer process; workers never hold the
-  key. A compromised worker can still misreport a run that is in progress, and
-  because workers share the database role, it could reopen a finished run's
-  state before requesting a signature. The one-shot signature ledger blocks
-  re-signing, but closing the residual path needs a least-privilege database
-  role for workers that cannot write `scan_runs.state` for other runs or delete
-  ledger rows.
+  key. Each production service connects to PostgreSQL with its own login
+  (`aegis_worker`, `aegis_signer`, `aegis_github_broker`, `aegis_notifier`)
+  holding only the table and column grants it needs, and refuses to start under
+  a superuser, role-creating, RLS-bypassing, or schema-owning login. Database
+  triggers make finished scan runs and their artifact records immutable, so
+  even the worker login cannot reopen a finished run. A compromised worker can
+  still misreport a run that is in progress, and its login can still write
+  scan state for any in-flight run, because PostgreSQL grants are per column,
+  not per row.
+- Scanner subprocesses run as the worker's user. The worker marks itself
+  non-dumpable (`PR_SET_DUMPABLE=0`) so they cannot read its environment or
+  memory through `/proc`, but there is no per-job OS sandbox (gVisor, seccomp,
+  or a separate user per job). A scanner exploit runs with the worker's
+  database login and network access.
 - A database superuser can disable triggers or replace both audit data and the
   application-held audit key. Aegis exports chain-head checkpoints
   (`/api/admin/audit/checkpoint`) that detect truncation and rollback when

@@ -12,6 +12,13 @@ All notable changes to the Aegis project will be documented in this file.
   records it in an append-only `evidence_signatures` ledger. Production
   workers require `AEGIS_EVIDENCE_SIGNER=remote`, and the dashboard requires a
   live signer (`AEGIS_REQUIRE_SIGNER`).
+- A `github-broker` service holds the GitHub App key and encryption key.
+  Workers get read-only clone tokens scoped to one in-flight run's repository
+  and ask the broker to complete that run's check; production workers refuse
+  both keys (`AEGIS_GITHUB_BROKER=remote`, `AEGIS_REQUIRE_GITHUB_BROKER`).
+- Least-privilege PostgreSQL logins for the worker, signer, broker, and
+  notifier (`AEGIS_DB_*_PASSWORD`), created by the dashboard after migrations.
+  Production services refuse superuser or schema-owning logins.
 - Audit-chain checkpoints (`GET /api/admin/audit/checkpoint`,
   `POST /api/admin/audit/verify`) that detect deleted recent events and
   restored older databases.
@@ -23,6 +30,11 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Security
 
+- Finished scan runs and their artifact records are immutable at the database
+  level (migrations 24 and 25), and scan-state updates no longer touch
+  finished runs.
+- Scanner workers mark themselves non-dumpable so scanner subprocesses cannot
+  read their environment or memory through `/proc`.
 - Upgraded PyJWT 2.13.0 to 2.15.0, urllib3 2.7.0 to 2.8.0, and Werkzeug 3.1.8
   to 3.1.9 to clear open advisories, and Semgrep 1.173.0 to 1.179.0, which
   pins fixed MCP (1.29.0), Click (8.4.2), and PyJWT releases. The seven

@@ -79,6 +79,15 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
   workers refuse to start in production if they are given the key, and use
   `AEGIS_EVIDENCE_SIGNER=remote` instead. Pin the public key used by
   `aegis verify-evidence` in the customer's trust documentation.
+- Set `AEGIS_DB_WORKER_PASSWORD`, `AEGIS_DB_SIGNER_PASSWORD`,
+  `AEGIS_DB_BROKER_PASSWORD`, and `AEGIS_DB_NOTIFIER_PASSWORD` (at least 24
+  random characters each). After migrations the dashboard creates or updates
+  the `aegis_worker`, `aegis_signer`, `aegis_github_broker`, and
+  `aegis_notifier` logins with only the grants each service needs, and Compose
+  points each service's `DATABASE_URL` at its own login. Those services refuse
+  to start under a superuser or schema-owning login. If you run PostgreSQL
+  outside Compose, give the dashboard's login `CREATEROLE` or create the roles
+  yourself and rerun the dashboard.
 - When enabling OIDC, keep discovery, token, authorization, and JWKS endpoints
   on the issuer origin where possible. If the reviewed provider uses separate
   origins, list only their exact HTTPS origins in
@@ -87,6 +96,9 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Configure `AEGIS_GITHUB_WEBHOOK_SECRET` with at least 32 random characters.
   Set `AEGIS_PUBLIC_URL`, `AEGIS_GITHUB_APP_ID`, and the base64-encoded
   `AEGIS_GITHUB_APP_PRIVATE_KEY_B64` to enable exact-head pull-request checks.
+  Only the dashboard and the `github-broker` service receive the App key and
+  `AEGIS_ENCRYPTION_KEY`; workers use `AEGIS_GITHUB_BROKER=remote`, and the
+  dashboard requires a live broker (`AEGIS_REQUIRE_GITHUB_BROKER`).
   Follow `docs/GITHUB.md`, test known safe and vulnerable pull requests, and
   rotate the App key through the deployment secret manager.
 - Review `suppressions-report.json` in every release. Any exception without an
@@ -154,12 +166,16 @@ the published Aegis image does not contain it.
 
 ## Trust boundaries
 
-Aegis executes local scanner binaries on scanned source. The current worker
-still has database access, so a parser compromise has a larger blast radius
-than the source repository. It no longer holds the evidence-signing key: the
-separate signer re-hashes stored artifacts and signs each in-progress run once.
-Keep the remaining database exposure in the deployment threat model until
-workers use a least-privilege database role.
+Aegis executes local scanner binaries on scanned source. The worker holds no
+evidence-signing key, GitHub App key, or encryption key: the signer and the
+GitHub credential broker hold those. It connects as `aegis_worker`, which can
+read projects and write scan results but cannot read password hashes, stored
+tokens, notification secrets, or the audit and signature ledgers, and cannot
+change a finished run. It can still write results for any in-flight run.
+Scanner subprocesses share the worker's user; the worker is non-dumpable so
+they cannot read its memory or environment, but there is no per-job OS
+sandbox. Run workers on a dedicated host or VM, and add gVisor or a seccomp
+profile where the deployment requires one.
 
 GitHub OAuth tokens, notification credentials, and webhook secrets are encrypted
 before persistence with `AEGIS_ENCRYPTION_KEY`. Losing this key makes those
