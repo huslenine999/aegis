@@ -59,10 +59,10 @@ def test_generate_fallback_tree():
     tree = generate_fallback_tree()
     assert isinstance(tree, list)
     if len(tree) > 0:
-        # Check Flask is listed from requirements
-        flask_pkg = [p for p in tree if p["package_name"].lower() == "flask"]
-        assert len(flask_pkg) > 0
-        assert flask_pkg[0]["installed_version"] != ""
+        # Check FastAPI is listed from requirements
+        fastapi_pkg = [p for p in tree if p["package_name"].lower() == "fastapi"]
+        assert len(fastapi_pkg) > 0
+        assert fastapi_pkg[0]["installed_version"] != ""
 
 
 def test_get_dependency_graph_route():

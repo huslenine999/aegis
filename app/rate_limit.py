@@ -2,6 +2,8 @@ import json
 import os
 import time
 
+from starlette.concurrency import run_in_threadpool
+
 
 SENSITIVE_PATHS = frozenset(
     {
@@ -72,6 +74,9 @@ class RateLimitMiddleware:
             self.redis.expire(key, 61)
         return count
 
+    def _counts(self, aggregate_key: str, route_key: str) -> tuple[int, int]:
+        return self._increment(aggregate_key), self._increment(route_key)
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope.get("path") in {"/health", "/ready", "/metrics"}:
             await self.app(scope, receive, send)
@@ -82,9 +87,10 @@ class RateLimitMiddleware:
         bucket = int(time.time() // 60)
         limit = self._limit(path)
         try:
-            aggregate_count = self._increment(f"rate:client:{address}:{bucket}")
-            route_count = self._increment(
-                f"rate:route:{route_class(path)}:{address}:{bucket}"
+            aggregate_count, route_count = await run_in_threadpool(
+                self._counts,
+                f"rate:client:{address}:{bucket}",
+                f"rate:route:{route_class(path)}:{address}:{bucket}",
             )
         except Exception:
             method = scope.get("method", "GET").upper()

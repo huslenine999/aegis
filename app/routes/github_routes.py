@@ -27,7 +27,7 @@ from ..github_lifecycle import (
     revoke_github_capabilities,
 )
 from ..projects import create_project, get_project
-from ..web_common import require_access, require_recent_access
+from ..web_common import json_object, require_access, require_recent_access
 from .project_routes import _enqueue_project_scan
 
 router = APIRouter()
@@ -266,9 +266,12 @@ def github_disconnect(principal=Depends(require_recent_access("viewer"))):
 async def github_import(
     request: Request, principal=Depends(require_access("operator"))
 ):
-    body = await request.json()
+    body = await json_object(request)
     full_name = str(body.get("full_name", ""))
-    repositories = await asyncio.to_thread(list_repositories, principal.user_id)
+    try:
+        repositories = await asyncio.to_thread(list_repositories, principal.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     repository = next((repo for repo in repositories if repo["full_name"] == full_name), None)
     if not repository:
         raise HTTPException(status_code=404, detail="GitHub repository not found.")

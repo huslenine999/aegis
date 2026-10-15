@@ -206,13 +206,23 @@ def _parse_document(document: object, source: Path, language: str) -> list[dict]
     return findings
 
 
-def parse_codeql_sarif(report: Path, source: Path, *, language: str) -> list[dict]:
-    """Read every completed run; reject external paths and incomplete results."""
+def _read_codeql_sarif(report: Path, source: Path, *, language: str) -> tuple[dict, list[dict]]:
     if language not in SUPPORTED_LANGUAGES:
         raise CodeQLScanError("Unsupported CodeQL language.")
     try:
-        return _parse_document(load_bounded_json(Path(report)), Path(source), language)
+        document = load_bounded_json(Path(report))
+        return document, _parse_document(document, Path(source), language)
+    except FileNotFoundError:
+        raise
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError, ResourceLimitError, AttributeError, TypeError, KeyError) as exc:
+        raise CodeQLScanError("CodeQL SARIF is missing, oversized, or malformed.") from exc
+
+
+def parse_codeql_sarif(report: Path, source: Path, *, language: str) -> list[dict]:
+    """Read every completed run; reject external paths and incomplete results."""
+    try:
+        return _read_codeql_sarif(report, source, language=language)[1]
+    except FileNotFoundError as exc:
         raise CodeQLScanError("CodeQL SARIF is missing, oversized, or malformed.") from exc
 
 
@@ -306,8 +316,8 @@ def run_codeql_scan(
                 if run_bounded_subprocess_to_file(analyze, output_path=sarif, env=env, timeout=600).returncode != 0:
                     raise CodeQLScanError(f"CodeQL analysis failed for {language}.")
                 try:
-                    document = load_bounded_json(sarif)
-                    findings.extend(parse_codeql_sarif(sarif, source_root, language=language))
+                    document, language_findings = _read_codeql_sarif(sarif, source_root, language=language)
+                    findings.extend(language_findings)
                     if len(findings) > resource_budgets().max_scanner_findings:
                         raise CodeQLScanError("CodeQL findings exceed the configured limit.")
                     all_runs.extend(document["runs"])
@@ -433,11 +443,11 @@ def run_codeql_scan_isolated(
                 raise CodeQLScanError("Pinned CodeQL image has no identifiable CLI version.")
         finally:
             _remove_container(docker, version_name, docker_env)
+        archive = workspace / "source.tar"
+        _source_tar(source_root, archive)
         for language in languages:
             name = f"aegis-codeql-{uuid.uuid4().hex}"
             sarif = workspace / f"{language}.sarif"
-            archive = workspace / f"{language}-source.tar"
-            _source_tar(source_root, archive)
             script = (
                 "mkdir /work/source; cat > /work/source.tar; "
                 "tar -xf /work/source.tar -C /work/source; rm /work/source.tar; "
@@ -457,10 +467,10 @@ def run_codeql_scan_isolated(
                 if completed.returncode != 0:
                     raise CodeQLScanError(f"Isolated CodeQL analysis failed for {language}.")
                 try:
-                    document = load_bounded_json(sarif)
+                    document, language_findings = _read_codeql_sarif(sarif, source_root, language=language)
                 except FileNotFoundError as exc:
                     raise CodeQLScanError(f"CodeQL analysis produced missing SARIF for {language}.") from exc
-                findings.extend(parse_codeql_sarif(sarif, source_root, language=language))
+                findings.extend(language_findings)
                 if len(findings) > resource_budgets().max_scanner_findings:
                     raise CodeQLScanError("CodeQL findings exceed the configured limit.")
                 all_runs.extend(document["runs"])

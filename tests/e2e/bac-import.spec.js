@@ -158,8 +158,7 @@ test("BAC outcomes and findings stay separate from source release evidence and a
   await expect(page.locator("[data-retry='11']")).toBeVisible();
   await expect(researchRows.nth(0).getByRole("link", { name: "Open report" })).toHaveAttribute("href", "/api/projects/7/scans/21/artifacts/report.html");
   await expect(researchRows.nth(0).getByRole("link", { name: "Download evidence" })).toHaveAttribute("href", "/api/projects/7/scans/21/artifacts/report-bundle.zip");
-  expect(observed.detailRequests()).toContain(11);
-  expect(observed.detailRequests()).not.toContain(21);
+  expect(observed.detailRequests()).toEqual([]);
   await page.getByRole("tab", { name: "Findings", exact: true }).click();
   const finding = page.locator(".finding-row");
   await expect(finding).toContainText("BAC research");
@@ -199,8 +198,7 @@ test("bounded history preserves the pinned source decision, onboarding, and poll
   await expect(page.locator("#summary-new")).toHaveText("2");
   await expect(page.locator("#summary-last-note")).toHaveText("standard · completed");
   await expect(page.locator("#onboarding")).toBeHidden();
-  expect(observed.detailRequests()).toContain(11);
-  expect(observed.detailRequests().every((id) => id === 11)).toBeTruthy();
+  expect(observed.detailRequests()).toEqual([]);
   latestSource = { ...sourceScan, state: "analyzing", decision: null, progress: 50 };
   await page.reload();
   await expect(page.locator("#release-decision")).toHaveText("Scan in progress");
@@ -240,22 +238,16 @@ test("a stale scan response cannot replace another project's source context", as
     await waiting;
     return route.fulfill({ json: { scans: [sourceScan], latest_source_scan: sourceScan } });
   });
-  await page.route("**/api/projects/7/scans/11", async (route) => {
-    await waiting;
-    return route.fulfill({ json: { result: { policy: { status: "ALLOWED" } } } });
-  });
   const pendingRequest = page.waitForRequest("**/api/projects/7/scans");
-  const pendingSummary = page.waitForRequest("**/api/projects/7/scans/11");
   await page.evaluate(() => {
     window.staleScanLoad = loadScans();
-    window.staleSummaryLoad = updateProjectSummary();
   });
-  await Promise.all([pendingRequest, pendingSummary]);
+  await pendingRequest;
   await page.locator("[data-project='8']").click();
   await expect(page.locator("#project-name")).toHaveText("Second project");
   await expect(page.locator("#release-decision")).toHaveText("Not evaluated");
   releaseScans();
-  await page.evaluate(() => Promise.all([window.staleScanLoad, window.staleSummaryLoad]));
+  await page.evaluate(() => window.staleScanLoad);
   await expect(page.locator("#scan-history .scan")).toHaveCount(0);
   await expect(page.locator("#release-decision")).toHaveText("Not evaluated");
 });

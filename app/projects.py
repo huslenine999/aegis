@@ -201,6 +201,10 @@ def get_project(project_id: int, tenant_id: int | None = None) -> dict | None:
         row = connection.execute(sql, parameters).fetchone()
     if not row:
         return None
+    return _project_record(row)
+
+
+def _project_record(row) -> dict:
     return {
         "id": int(row[0]),
         "name": row[1],
@@ -211,6 +215,26 @@ def get_project(project_id: int, tenant_id: int | None = None) -> dict | None:
         "created_by": int(row[6]),
         "tenant_id": int(row[7]),
     }
+
+
+def get_authorized_project(
+    project_id: int, user_id: int, global_role: str, minimum: str, tenant_id: int
+) -> dict | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """SELECT p.id, p.name, p.repository_url, p.github_full_name,
+                      p.default_branch, p.scan_preset, p.created_by, p.tenant_id, m.role
+               FROM projects p
+               LEFT JOIN project_members m ON m.project_id = p.id AND m.user_id = ?
+               WHERE p.id = ? AND p.tenant_id = ?""",
+            (user_id, project_id, tenant_id),
+        ).fetchone()
+    if not row:
+        return None
+    role = "admin" if global_role == "admin" else row[8]
+    if not role or PROJECT_ROLE_LEVEL.get(role, 0) < PROJECT_ROLE_LEVEL[minimum]:
+        raise PermissionError("Project access denied.")
+    return _project_record(row)
 
 
 def update_project(
@@ -437,12 +461,27 @@ def _fingerprints(result: dict | None) -> set[str]:
     return values
 
 
+def scan_result_summary(result: dict | None) -> dict:
+    if not isinstance(result, dict):
+        return {}
+    summary = {"error": result["error"]} if "error" in result else {}
+    for section, fields in (
+        ("policy", ("status", "reason")),
+        ("bac_report", ("status", "exit_code", "mode")),
+    ):
+        value = result.get(section)
+        if isinstance(value, dict):
+            summary[section] = {field: value[field] for field in fields if field in value}
+    return summary
+
+
 def update_scan_run(
     run_id: int, *, state: str, progress: int, result: dict | None = None, connection=None
 ) -> None:
     with (nullcontext(connection) if connection is not None else get_connection()) as connection:
         new_findings = 0
         result_json = None
+        summary_json = None
         completed_at = None
         if result is not None:
             finding_sync = result.get("finding_sync")
@@ -463,8 +502,8 @@ def update_scan_run(
                 ).fetchone()
                 previous_result = json.loads(previous[0]) if previous and previous[0] else {}
                 new_findings = len(_fingerprints(result) - _fingerprints(previous_result))
-            result["new_findings"] = new_findings
-            result_json = json.dumps(result, separators=(",", ":"))
+            result_json = json.dumps({**result, "new_findings": new_findings}, separators=(",", ":"))
+            summary_json = json.dumps(scan_result_summary(result), separators=(",", ":"))
         if state in {"completed", "failed", "cancelled"}:
             completed_at = _now()
         if result_json is None:
@@ -480,13 +519,14 @@ def update_scan_run(
         else:
             connection.execute(
                 """UPDATE scan_runs SET state = ?, progress = ?,
-                   result_json = ?, new_findings = ?,
+                   result_json = ?, summary_json = ?, new_findings = ?,
                    completed_at = COALESCE(?, completed_at)
                    WHERE id = ?""",
                 (
                     state,
                     progress,
                     result_json,
+                    summary_json,
                     new_findings,
                     completed_at,
                     run_id,
@@ -540,7 +580,7 @@ def list_scan_runs(project_id: int, limit: int = 50, *, source_only: bool = Fals
             f"""SELECT id, job_id, project_id, requested_by, target, preset,
                       state, progress, new_findings, created_at, completed_at,
                       CASE WHEN state IN ('failed', 'completed')
-                           THEN result_json ELSE NULL END,
+                           THEN summary_json ELSE NULL END,
                       EXISTS(SELECT 1 FROM scan_artifacts a
                              WHERE a.scan_run_id = scan_runs.id AND a.name = 'report.html')
                FROM scan_runs WHERE project_id = ? {source_filter}
@@ -549,7 +589,10 @@ def list_scan_runs(project_id: int, limit: int = 50, *, source_only: bool = Fals
         ).fetchall()
     scans = []
     for row in rows:
-        result = json.loads(row[11]) if row[11] else {}
+        try:
+            result = scan_result_summary(json.loads(row[11])) if row[11] else {}
+        except (TypeError, ValueError):
+            result = {}
         scans.append({
             "id": int(row[0]),
             "job_id": row[1],
@@ -567,7 +610,7 @@ def list_scan_runs(project_id: int, limit: int = 50, *, source_only: bool = Fals
             "decision": (
                 None if row[4] == "bac-research"
                 else "ERROR" if row[6] == "failed"
-                else (result.get("policy") or {}).get("status", "ERROR")
+                else (result.get("policy") or {}).get("status") or "ERROR"
                 if row[6] == "completed" else None
             ),
             "has_report": bool(row[12]),

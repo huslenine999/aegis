@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -11,6 +12,7 @@ from .database import (
     BASE_DIR,
     DOWNLOAD_DIR,
     SCANS_DIR,
+    close_database_pool,
     initialize_database,
     get_application_state,
     redis_client,
@@ -85,14 +87,17 @@ async def lifespan(application: FastAPI):
     if not sample_file.exists():
         sample_file.write_text("This is a safe sample file.\n")
 
-    initialize_database()
-    ensure_bootstrap_admin()
-    ensure_development_admin()
-    web_common.WAF_ENABLED = bool(
-        get_application_state("waf_enabled", web_common.WAF_ENABLED)
-    )
-    application.state.secret_key = os.environ.get("SECRET_KEY")
-    yield
+    try:
+        initialize_database()
+        ensure_bootstrap_admin()
+        ensure_development_admin()
+        web_common.WAF_ENABLED = bool(
+            get_application_state("waf_enabled", web_common.WAF_ENABLED)
+        )
+        application.state.secret_key = os.environ.get("SECRET_KEY")
+        yield
+    finally:
+        close_database_pool()
 
 
 def create_app() -> FastAPI:
@@ -122,6 +127,11 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
     application.include_router(router)
     application.include_router(health_router)
+    # SQLite cannot bind integers wider than 64 bits (for example a huge path ID).
+    application.add_exception_handler(
+        OverflowError,
+        lambda request, exc: JSONResponse({"detail": "Numeric value is out of range."}, status_code=400),
+    )
     return application
 
 app = create_app()

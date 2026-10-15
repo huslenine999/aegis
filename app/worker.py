@@ -13,6 +13,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from rq import Worker
+
 from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
@@ -160,24 +162,29 @@ def _source_revision(target_path: str | Path) -> str:
 def publish_job_event(job_id: str, event_type: str, data: dict):
     channel = f"job_channel:{job_id}"
     payload = {"type": event_type, **data}
+    event_client = redis_client.pipeline() if hasattr(redis_client, "pipeline") else redis_client
     
     if event_type == "state":
-        redis_client.hset(f"job:{job_id}", "state", data.get("state", ""))
-        redis_client.hset(f"job:{job_id}", "progress", data.get("progress", 0))
+        event_client.hset(
+            f"job:{job_id}",
+            mapping={"state": data.get("state", ""), "progress": data.get("progress", 0)},
+        )
     elif event_type == "result":
-        redis_client.hset(f"job:{job_id}", "result", json.dumps(data.get("result", {})))
+        event_client.hset(f"job:{job_id}", "result", json.dumps(data.get("result", {})))
         
     if event_type == "log":
         log_key = f"job_logs:{job_id}"
-        redis_client.rpush(log_key, json.dumps(data))
-        if hasattr(redis_client, "ltrim"):
-            redis_client.ltrim(log_key, -JOB_LOG_LIMIT, -1)
+        event_client.rpush(log_key, json.dumps(data))
+        if hasattr(event_client, "ltrim"):
+            event_client.ltrim(log_key, -JOB_LOG_LIMIT, -1)
         
-    redis_client.publish(channel, json.dumps(payload))
+    event_client.publish(channel, json.dumps(payload))
     if event_type == "state" and data.get("state") in {"completed", "failed", "cancelled"}:
         for key in (f"job:{job_id}", f"job_logs:{job_id}"):
-            if hasattr(redis_client, "expire"):
-                redis_client.expire(key, JOB_RETENTION_SECONDS)
+            if hasattr(event_client, "expire"):
+                event_client.expire(key, JOB_RETENTION_SECONDS)
+    if event_client is not redis_client:
+        event_client.execute()
 
 
 def job_log_callback(job_id: str):
@@ -412,6 +419,33 @@ def _complete_github_scan_check(
         )
 
 
+def fail_unfinished_scan(scan_run_id: int | None, project_id: int | None, reason: str) -> None:
+    """Mark a scan failed unless it already reached a final state."""
+    if not scan_run_id:
+        return
+    run = get_scan_run(scan_run_id)
+    if not run or run["state"] in {"completed", "failed", "cancelled"}:
+        return
+    update_scan_run(scan_run_id, state="failed", progress=100, result={"error": reason})
+    project = get_project(project_id) if project_id else None
+    _complete_github_scan_check(scan_run_id, project, "failure", reason)
+
+
+def mark_scan_failed(job, connection=None, *exc_info) -> None:
+    """RQ failure callback; also runs for jobs abandoned by a dead worker."""
+    payload = job.args[0] if job.args else None
+    if isinstance(payload, ScanJobPayload):
+        fail_unfinished_scan(
+            payload.scan_run_id, payload.project_id, "Scan worker stopped before the scan finished."
+        )
+
+
+class ScanWorker(Worker):
+    def handle_work_horse_killed(self, job, retpid, ret_val, rusage):
+        # RQ runs no failure callback when the work horse is killed (for example out of memory).
+        mark_scan_failed(job)
+
+
 def _github_annotation_path(filename: object, target_path: str | Path) -> str | None:
     if not filename:
         return None
@@ -548,12 +582,13 @@ def _cleanup_expired_artifacts(current_job_id: str) -> None:
             if not run_dir.is_dir() or run_dir.name == current_job_id:
                 continue
             try:
+                if run_dir.stat().st_mtime >= cutoff:
+                    continue
                 state = redis_client.hget(f"job:{run_dir.name}", "state")
                 state_text = state.decode() if isinstance(state, bytes) else str(state or "")
                 if state_text and state_text not in {"completed", "failed", "cancelled"}:
                     continue
-                if run_dir.stat().st_mtime < cutoff:
-                    shutil.rmtree(run_dir, ignore_errors=True)
+                shutil.rmtree(run_dir, ignore_errors=True)
             except OSError:
                 continue
 
@@ -996,7 +1031,6 @@ def async_scan_task(
             update_scan_run(scan_run_id, state="reporting", progress=90)
         _check_cancelled(job_id)
         publish_job_event(job_id, "log", {"text": "[SYSTEM] Exporting static dossier reports and CycloneDX SBOM...", "color": "var(--text-muted)"})
-        time.sleep(1.0) # Visual transition pause
 
         raw_results = {
             "ruff": load_json_report(report_dir / "ruff-report.json"),
@@ -1144,7 +1178,12 @@ def async_scan_task(
 
         # 5. State: REPORTING -> COMPLETED
         if scan_run_id:
-            result_payload["finding_sync"] = sync_findings(scan_run_id, result_payload)
+            finding_sync = sync_findings(scan_run_id, result_payload)
+            result_payload = {
+                **result_payload,
+                "finding_sync": finding_sync,
+                "new_findings": int(finding_sync.get("created", 0)) + int(finding_sync.get("reopened", 0)),
+            }
             update_scan_run(
                 scan_run_id, state="completed", progress=100, result=result_payload
             )

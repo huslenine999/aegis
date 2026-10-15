@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -68,25 +69,16 @@ def test_codeql_error_cannot_be_ignored_by_legacy_error_toggle():
 
 
 def test_osv_query_preserves_advisory_aliases(tmp_path, monkeypatch):
-    class Response:
-        def __enter__(self):
-            return self
+    body = json.dumps({
+        "vulns": [{
+            "id": "PYSEC-2099-1",
+            "aliases": ["GHSA-example"],
+            "summary": "Example advisory",
+            "details": "Example details",
+        }],
+    }).encode()
 
-        def __exit__(self, *args):
-            return False
-
-        @staticmethod
-        def read():
-            return json.dumps({
-                "vulns": [{
-                    "id": "PYSEC-2099-1",
-                    "aliases": ["GHSA-example"],
-                    "summary": "Example advisory",
-                    "details": "Example details",
-                }],
-            }).encode()
-
-    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(policy_engine.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(body))
     monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
     monkeypatch.setattr(policy_engine.time, "sleep", lambda _seconds: None)
     manifest = DependencyManifest(

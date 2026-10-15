@@ -108,6 +108,11 @@
                   <div class="section-heading"><div><h2>Actionable findings</h2><p>Prioritize release blockers, assign ownership, and record the outcome.</p></div></div>
                   <div class="toolbar"><input id="findings-search" type="search" aria-label="Search findings" placeholder="Search rule, file, scanner, or title"><select id="findings-severity" aria-label="Filter by severity"><option value="all">All severities</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option></select><select id="findings-status" aria-label="Filter by status"><option value="active">Open and acknowledged</option><option value="all">All statuses</option><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="accepted">Accepted risk</option><option value="false_positive">False positive</option><option value="resolved">Resolved</option></select></div>
                   <div id="findings"><div class="empty-state"><strong>No durable findings yet</strong>Complete a scan to populate the remediation queue.</div></div>
+                  <nav class="row spread" aria-label="Findings pages">
+                    <button id="findings-previous" type="button" aria-label="Previous findings page" disabled>Previous</button>
+                    <p id="findings-page-status" role="status" aria-live="polite"></p>
+                    <button id="findings-next" type="button" aria-label="Next findings page" disabled>Next</button>
+                  </nav>
                 </section>
               </div>
 
@@ -183,6 +188,13 @@
     let cachedLatestSourceScan = null;
     let currentMembers = [];
     let scanRefreshTimer = null;
+    let projectGeneration = 0;
+    let findingsGeneration = 0;
+    let findingsOffset = 0;
+    let findingsTotal = 0;
+    let findingsSummary = null;
+    let findingsSearchTimer = null;
+    const findingsPageSize = 200;
     const presetNotes = {
       quick: "Quick runs Ruff security rules for Python and checks for possible secrets.",
       standard: "Standard adds Semgrep source checks and OSV dependency checks where applicable.",
@@ -241,17 +253,21 @@
       clearTimeout(scanRefreshTimer);
       scanRefreshTimer = null;
       const projectId = selected?.id;
+      const generation = projectGeneration;
       const latest = cachedLatestSourceScan;
       if (!projectId || !latest || ["completed", "failed", "cancelled"].includes(latest.state)) return;
       scanRefreshTimer = setTimeout(async () => {
-        if (selected?.id !== projectId) return;
+        if (projectGeneration !== generation || selected?.id !== projectId) return;
         try {
           await loadScans();
-          if (selected?.id !== projectId) return;
+          if (projectGeneration !== generation || selected?.id !== projectId) return;
           if (["completed", "failed", "cancelled"].includes(cachedLatestSourceScan?.state)) await Promise.all([loadFindings(), loadPolicies()]);
         } catch (error) {
           console.warn("Scan status refresh failed", error);
-          if (selected?.id === projectId) scheduleScanRefresh();
+          if (projectGeneration === generation && selected?.id === projectId) {
+            message("Scan status could not be refreshed. Retrying…", true);
+            scheduleScanRefresh();
+          }
         }
       }, 3000);
     }
@@ -295,10 +311,21 @@
     async function selectProject(id) {
       selected = projects.find((project) => project.id === id);
       if (!selected) return;
+      const generation = ++projectGeneration;
+      clearTimeout(scanRefreshTimer);
+      clearTimeout(findingsSearchTimer);
       document.dispatchEvent(new Event("aegis:project-change"));
       cachedScans = [];
       cachedLatestSourceScan = null;
       cachedFindings = [];
+      currentMembers = [];
+      findingsOffset = 0;
+      findingsTotal = 0;
+      findingsSummary = null;
+      ["scan-history", "findings", "members", "policies", "notifications"].forEach((name) => byId(name).textContent = "Loading…");
+      byId("findings-page-status").textContent = "";
+      byId("findings-previous").disabled = true;
+      byId("findings-next").disabled = true;
       byId("empty-project").hidden = true;
       byId("project-detail").hidden = false;
       byId("project-name").textContent = selected.name;
@@ -310,23 +337,32 @@
       byId("scan-preset").value = selected.scan_preset;
       byId("save-project").hidden = selected.role !== "admin";
       byId("delete-project").hidden = selected.role !== "admin";
+      ["policy-form", "member-form", "notification-form"].forEach((name) => byId(name).hidden = selected.role !== "admin");
       byId("bac-import").hidden = !["operator", "admin"].includes(selected.role);
       byId("bac-import-form").reset();
       byId("bac-import-status").textContent = "";
       updatePresetNote();
       updateOnboarding();
+      updateProjectSummary();
       const url = new URL(location.href);
       url.searchParams.set("project", selected.id);
       history.replaceState(null, "", url);
       await loadProjects();
-      await Promise.all([loadScans(), loadFindings(), loadPolicies(), loadMembers(), loadNotifications()]);
+      if (projectGeneration !== generation) return;
+      try {
+        await Promise.all([loadScans(), loadFindings(), loadPolicies(), loadMembers(), loadNotifications()]);
+      } catch (error) {
+        if (projectGeneration === generation) message(error.message || "Project data could not be loaded.", true);
+      }
     }
     async function loadScans() {
       const projectId = selected?.id;
       if (!projectId) return;
+      const generation = projectGeneration;
       const response = await api(`/api/projects/${projectId}/scans`);
+      if (!response.ok) throw new Error("Scan history could not be loaded.");
       const data = await response.json();
-      if (selected?.id !== projectId) return;
+      if (projectGeneration !== generation || selected?.id !== projectId) return;
       cachedScans = data.scans || [];
       cachedLatestSourceScan = data.latest_source_scan === undefined
         ? cachedScans.find((scan) => !isResearchScan(scan)) || null
@@ -350,18 +386,16 @@
       document.querySelectorAll("[data-cancel]").forEach((button) => button.onclick = () => scanAction(button.dataset.cancel, "cancel"));
       document.querySelectorAll("[data-retry]").forEach((button) => button.onclick = () => scanAction(button.dataset.retry, "retry"));
       updateOnboarding();
-      await updateProjectSummary();
-      if (selected?.id !== projectId) return;
+      updateProjectSummary();
       scheduleScanRefresh();
     }
-    async function updateProjectSummary() {
+    function updateProjectSummary() {
       if (!selected) return;
-      const projectId = selected.id;
       const active = cachedFindings.filter((finding) => !["resolved", "false_positive"].includes(finding.status));
-      const blockers = active.filter((finding) => finding.tool !== "BAC" && ["HIGH", "CRITICAL"].includes(finding.severity));
+      const blockers = findingsSummary?.blockers ?? active.filter((finding) => finding.tool !== "BAC" && ["HIGH", "CRITICAL"].includes(finding.severity)).length;
       const latest = cachedLatestSourceScan;
-      byId("summary-open").textContent = active.length;
-      byId("summary-blockers").textContent = blockers.length;
+      byId("summary-open").textContent = findingsSummary?.open ?? active.length;
+      byId("summary-blockers").textContent = blockers;
       byId("summary-new").textContent = Number(latest?.new_findings || 0);
       byId("summary-last").textContent = latest ? formatDate(latest.completed_at || latest.created_at, true) : "—";
       byId("summary-last-note").textContent = latest ? `${latest.preset} · ${latest.state}` : "No evidence yet";
@@ -380,22 +414,11 @@
         byId("release-reason").textContent = `The latest scan ${latest.state}; no release approval should be inferred.`;
         return;
       }
-      let decision = null;
-      let reason = "";
-      try {
-        const detailResponse = await api(`/api/projects/${projectId}/scans/${latest.id}`);
-        if (detailResponse.ok) {
-          const detail = await detailResponse.json();
-          decision = detail.result?.policy?.status || (typeof detail.result?.is_blocked === "boolean" ? (detail.result.is_blocked ? "BLOCKED" : "ALLOWED") : null);
-          reason = detail.result?.policy?.reason || "";
-        }
-      } catch (_) {
-        // A missing policy decision cannot approve a release.
-      }
-      if (selected?.id !== projectId || cachedLatestSourceScan !== latest) return;
+      const decision = latest.decision;
+      const reason = latest.failure_reason || "";
       byId("release-decision").textContent = decision === "ALLOWED" ? "Allowed" : decision === "BLOCKED" ? "Blocked" : "Scan incomplete";
       byId("release-reason").textContent = decision === "ALLOWED" ? "The latest completed evidence does not contain a policy blocker."
-        : decision === "BLOCKED" ? (reason || `${blockers.length || "Policy"} blocking finding${blockers.length === 1 ? "" : "s"} require an outcome before release.`)
+        : decision === "BLOCKED" ? (reason || `${blockers || "Policy"} blocking finding${blockers === 1 ? "" : "s"} require an outcome before release.`)
         : (reason || "A complete policy decision is unavailable; no release approval should be inferred.");
     }
     async function scanAction(id, action) {
@@ -406,26 +429,48 @@
       message(action === "retry" ? "Retry queued." : "Cancellation requested.");
       await loadScans();
     }
-    async function loadFindings() {
-      const response = await api(`/api/projects/${selected.id}/findings`);
-      if (!response.ok) return;
-      cachedFindings = (await response.json()).findings || [];
-      renderFindings();
-      await updateProjectSummary();
-    }
-    function filteredFindings() {
-      const query = byId("findings-search").value.trim().toLowerCase();
+    async function loadFindings(offset = 0) {
+      const projectId = selected?.id;
+      if (!projectId) return;
+      const generation = projectGeneration;
+      const requestGeneration = ++findingsGeneration;
+      clearTimeout(findingsSearchTimer);
+      const params = new URLSearchParams({status: byId("findings-status").value, limit: String(findingsPageSize), offset: String(offset)});
       const severity = byId("findings-severity").value;
-      const status = byId("findings-status").value;
-      return cachedFindings.filter((finding) => {
-        const haystack = [finding.title, finding.tool, finding.rule_id, finding.path, finding.owner].join(" ").toLowerCase();
-        const statusMatch = status === "all" || (status === "active" ? ["open", "acknowledged"].includes(finding.status) : finding.status === status);
-        return (!query || haystack.includes(query)) && (severity === "all" || finding.severity === severity) && statusMatch;
-      });
+      const search = byId("findings-search").value.trim();
+      if (severity !== "all") params.set("severity", severity);
+      if (search) params.set("search", search);
+      byId("findings").setAttribute("aria-busy", "true");
+      byId("findings-previous").disabled = true;
+      byId("findings-next").disabled = true;
+      try {
+        const response = await api(`/api/projects/${projectId}/findings?${params}`);
+        if (!response.ok) throw new Error("Findings could not be loaded. Try again.");
+        const data = await response.json();
+        if (projectGeneration !== generation || selected?.id !== projectId || findingsGeneration !== requestGeneration) return;
+        if (data.total !== undefined && offset > 0 && offset >= data.total) return loadFindings(Math.max(0, Math.floor((data.total - 1) / findingsPageSize) * findingsPageSize));
+        cachedFindings = data.findings || [];
+        findingsOffset = data.offset ?? offset;
+        findingsTotal = data.total ?? cachedFindings.length;
+        findingsSummary = data.summary || null;
+        byId("findings").setAttribute("aria-busy", "false");
+        renderFindings();
+        updateProjectSummary();
+      } catch (error) {
+        if (projectGeneration !== generation || selected?.id !== projectId || findingsGeneration !== requestGeneration) return;
+        byId("findings").setAttribute("aria-busy", "false");
+        renderFindings();
+        message(error.message || "Findings could not be loaded. Try again.", true);
+      }
     }
     function renderFindings() {
+      if (!selected) return;
       const canOperate = selected.role !== "viewer";
-      const findings = filteredFindings();
+      const findings = cachedFindings;
+      const loading = byId("findings").getAttribute("aria-busy") === "true";
+      byId("findings-page-status").textContent = findingsTotal ? `${findingsOffset + 1}–${findingsOffset + findings.length} of ${findingsTotal} findings` : "0 findings";
+      byId("findings-previous").disabled = loading || findingsOffset === 0;
+      byId("findings-next").disabled = loading || findingsOffset + findingsPageSize >= findingsTotal;
       byId("findings").innerHTML = findings.map(finding => `<article class="finding-row" data-finding="${Number(finding.id)}">
         <div class="finding-head"><div><h3 class="finding-title">${escapeHtml(finding.title)}</h3><div class="finding-meta">${escapeHtml(finding.tool)} · ${escapeHtml(finding.rule_id || "unclassified")} · ${escapeHtml(finding.path || "no path")}${finding.line_number ? `:${Number(finding.line_number)}` : ""}</div></div><div class="finding-context">${finding.tool === "BAC" ? '<span class="badge">BAC research · synthetic lab</span>' : ""}<span class="badge severity-${escapeHtml(finding.severity.toLowerCase())}">${escapeHtml(finding.severity)}</span><span class="badge">${escapeHtml(finding.status.replaceAll("_", " "))}</span></div></div>
         <div class="finding-context"><span class="badge">Owner: ${escapeHtml(finding.owner || "unassigned")}</span><span class="badge">Due: ${escapeHtml(finding.due_at ? formatDate(finding.due_at, true) : "not set")}</span><span class="badge">Seen ${Number(finding.occurrence_count)}×</span>${finding.accepted_until ? `<span class="badge">Risk expires ${escapeHtml(formatDate(finding.accepted_until, true))}</span>` : ""}</div>
@@ -478,9 +523,13 @@
       });
     }
     async function loadPolicies() {
-      const response = await api(`/api/projects/${selected.id}/policies`);
+      const projectId = selected?.id;
+      if (!projectId) return;
+      const generation = projectGeneration;
+      const response = await api(`/api/projects/${projectId}/policies`);
       if (!response.ok) return;
       const data = await response.json();
+      if (projectGeneration !== generation || selected?.id !== projectId) return;
       const canAdmin = selected.role === "admin";
       byId("policy-form").hidden = !canAdmin;
       byId("policies").innerHTML = (data.policies || []).map(policy => `<div class="scan row spread">
@@ -495,9 +544,13 @@
       });
     }
     async function loadMembers() {
-      const response = await api(`/api/projects/${selected.id}/members`);
+      const projectId = selected?.id;
+      if (!projectId) return;
+      const generation = projectGeneration;
+      const response = await api(`/api/projects/${projectId}/members`);
       if (!response.ok) return;
       const members = (await response.json()).members || [];
+      if (projectGeneration !== generation || selected?.id !== projectId) return;
       currentMembers = members;
       const canAdmin = selected.role === "admin";
       byId("member-form").hidden = !canAdmin;
@@ -518,9 +571,12 @@
         return;
       }
       byId("notification-form").hidden = false;
-      const response = await api(`/api/projects/${selected.id}/notifications`);
+      const projectId = selected.id;
+      const generation = projectGeneration;
+      const response = await api(`/api/projects/${projectId}/notifications`);
       if (!response.ok) return;
       const channels = (await response.json()).channels || [];
+      if (projectGeneration !== generation || selected?.id !== projectId) return;
       byId("notifications").innerHTML = channels.map(channel => `<div class="scan row spread"><span>${escapeHtml(channel.name)} <small>${escapeHtml(channel.channel_type)} · ${escapeHtml(channel.events.join(", "))}</small></span><span class="row"><button data-test-channel="${channel.id}">Test</button><button class="danger" data-delete-channel="${channel.id}">Delete</button></span></div>`).join("") || "<p class='muted'>No channels configured.</p>";
       document.querySelectorAll("[data-test-channel]").forEach(button => button.onclick = () => channelAction(button.dataset.testChannel, "test"));
       document.querySelectorAll("[data-delete-channel]").forEach(button => button.onclick = () => channelAction(button.dataset.deleteChannel, "delete"));
@@ -701,7 +757,14 @@
         activateWorkspaceTab(workspaceTabs[nextIndex].dataset.workspaceTab);
       };
     });
-    ["findings-search", "findings-severity", "findings-status"].forEach((id) => byId(id).addEventListener("input", renderFindings));
+    ["findings-severity", "findings-status"].forEach((id) => byId(id).addEventListener("change", () => loadFindings()));
+    byId("findings-search").addEventListener("input", () => {
+      clearTimeout(findingsSearchTimer);
+      findingsGeneration += 1;
+      findingsSearchTimer = setTimeout(() => loadFindings(), 200);
+    });
+    byId("findings-previous").onclick = () => loadFindings(Math.max(0, findingsOffset - findingsPageSize));
+    byId("findings-next").onclick = () => loadFindings(findingsOffset + findingsPageSize);
     (async () => {
       await loadIdentity();
       await Promise.all([loadProjects(), loadGitHub()]);

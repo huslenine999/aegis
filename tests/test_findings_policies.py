@@ -2,12 +2,17 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 import hashlib
+import json
 import sys
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, local
 
 import pytest
 from cryptography.fernet import Fernet
 
 from app import artifact_storage, database, findings, oidc, policies, projects, reporting
+from app.routes import project_routes
 
 
 def configure_database(tmp_path, monkeypatch):
@@ -180,6 +185,257 @@ def test_out_of_order_scan_cannot_reopen_newer_finding(tmp_path, monkeypatch):
     findings.sync_findings(older, ruff_result())
     assert findings.list_findings(project_id)[0]["last_seen_run_id"] == newer
     assert findings.list_findings(project_id)[0]["occurrence_count"] == finding["occurrence_count"]
+
+
+def test_findings_pagination_counts_and_filters_cover_the_whole_project(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, "many-findings")
+    result = ruff_result()
+    result["ruff"] = [
+        {**result["ruff"][0], "filename": f"src/{index}.py"}
+        for index in range(200)
+    ] + [{**result["ruff"][0], "code": "S310", "filename": "src/hidden.py"}]
+    findings.sync_findings(run_id, result)
+    with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE security_findings SET status = 'resolved' WHERE severity = 'HIGH'"
+        )
+    principal = SimpleNamespace(user_id=10, role="operator", tenant_id=1)
+    active = project_routes.project_findings(project_id, status="active", principal=principal)
+    assert active["total"] == 1
+    assert active["findings"][0]["path"] == "src/hidden.py"
+    assert active["summary"] == {"open": 1, "blockers": 0}
+
+    last_page = project_routes.project_findings(
+        project_id, status="all", limit=200, offset=200, principal=principal,
+    )
+    assert last_page["total"] == 201
+    assert last_page["limit"] == 200 and last_page["offset"] == 200
+    assert [item["path"] for item in last_page["findings"]] == ["src/hidden.py"]
+    assert last_page["summary"] == active["summary"]
+
+
+def test_findings_search_escapes_wildcards_and_pages_have_stable_order(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, "literal-search")
+    findings.sync_findings(run_id, {
+        "ruff": [ruff_result(path)["ruff"][0] for path in ("src/100%_safe.py", "src/100XXsafe.py", "src/other.py")],
+    })
+    matched = findings.list_findings(project_id, search="100%_SAFE")
+    assert [row["path"] for row in matched] == ["src/100%_safe.py"]
+    ordered = findings.list_findings(project_id)
+    assert [item["id"] for item in ordered] == sorted(item["id"] for item in ordered)
+    assert findings.list_findings(project_id, limit=1, offset=1) == ordered[1:2]
+    with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE security_findings SET rule_id = NULL, path = NULL WHERE id = ?", (ordered[-1]["id"],),
+        )
+    assert len(findings.list_findings(project_id, search="eval")) == 3
+    with database.get_connection() as connection:
+        connection.execute("UPDATE auth_users SET username = 'member%_special' WHERE id = 11")
+        connection.execute("UPDATE security_findings SET owner_id = 11 WHERE id = ?", (ordered[-1]["id"],))
+    owner_page = findings.list_findings_page(project_id, search="MEMBER%_SPECIAL")
+    assert owner_page["total"] == 1
+    assert owner_page["findings"][0]["id"] == ordered[-1]["id"]
+
+
+@pytest.mark.parametrize("field", ("path", "title", "rule_id", "tool", "owner"))
+def test_findings_unicode_search_keeps_filtered_counts_and_pagination(tmp_path, monkeypatch, field):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, f"unicode-{field}")
+    findings.sync_findings(run_id, {"ruff": [ruff_result(path)["ruff"][0] for path in ("one.py", "two.py", "other.py")]})
+    records = findings.list_findings(project_id)
+    with database.get_connection() as connection:
+        if field == "owner":
+            connection.execute("UPDATE auth_users SET username = 'Évil%_file.py' WHERE id = 11")
+            connection.executemany(
+                "UPDATE security_findings SET owner_id = 11, path = NULL, rule_id = NULL WHERE id = ?",
+                [(row["id"],) for row in records[:2]],
+            )
+        else:
+            connection.executemany(
+                f"UPDATE security_findings SET {field} = ? WHERE id = ?",
+                [(value, row["id"]) for value, row in zip(("Évil%_file.py", "ÉVIL%_FILE.py", "ÉvilXXfile.py"), records)],
+            )
+    first = findings.list_findings_page(project_id, search="éVIL%_file.py", limit=1)
+    second = findings.list_findings_page(project_id, search="éVIL%_file.py", limit=1, offset=1)
+    assert first["total"] == second["total"] == 2
+    assert first["findings"][0]["id"] == records[0]["id"]
+    assert second["findings"][0]["id"] == records[1]["id"]
+    assert first["summary"] == second["summary"] == {"open": 3, "blockers": 3}
+
+
+@pytest.mark.parametrize("options", [
+    {"status": "unknown"}, {"severity": "unknown"}, {"limit": 0},
+    {"limit": 501}, {"offset": -1}, {"search": "a" * 201},
+])
+def test_findings_reject_unbounded_or_invalid_filters(options):
+    with pytest.raises(ValueError):
+        findings.list_findings(1, **options)
+
+
+def test_findings_summary_includes_accepted_risk_and_excludes_bac_blockers(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, "summary-statuses")
+    findings.sync_findings(run_id, {"ruff": [ruff_result(str(index))["ruff"][0] for index in range(5)]})
+    with database.get_connection() as connection:
+        records = connection.execute("SELECT id FROM security_findings ORDER BY id").fetchall()
+        connection.executemany("UPDATE security_findings SET status = ? WHERE id = ?", [
+            (status, row[0]) for status, row in zip(
+                ("accepted", "false_positive", "resolved", "acknowledged", "open"), records,
+            )
+        ])
+        connection.execute("UPDATE security_findings SET tool = 'BAC' WHERE id = ?", (records[-1][0],))
+    page = project_routes.project_findings(
+        project_id, severity="LOW", principal=SimpleNamespace(user_id=10, role="operator", tenant_id=1),
+    )
+    assert page["findings"] == [] and page["total"] == 0
+    assert page["summary"] == {"open": 3, "blockers": 2}
+
+
+@pytest.mark.parametrize("prior_run_count", (1, 2))
+def test_findings_reconciliation_loads_reports_and_provenance_once(tmp_path, monkeypatch, prior_run_count):
+    project_id = configure_database(tmp_path, monkeypatch)
+    first = create_run(project_id, "coverage-first")
+    coverage = {"Ruff": {"complete": True, "source_scope": "repository", "config_digest": "rules-v1"}}
+    result = {
+        **ruff_result(), "profile_version": 2, "source_scope": "repository", "detector_coverage": coverage,
+        "ruff": [ruff_result(f"src/{index}.py")["ruff"][0] for index in range(40)],
+        "large_evidence": "x" * 20000,
+    }
+    findings.sync_findings(first, result)
+    projects.update_scan_run(first, state="completed", progress=100, result=result)
+    if prior_run_count == 2:
+        second = create_run(project_id, "coverage-second-observation")
+        second_result = {**result, "ruff": result["ruff"][20:], "tools": []}
+        findings.sync_findings(second, second_result)
+        projects.update_scan_run(second, state="completed", progress=100, result=second_result)
+    retired = create_run(project_id, "retired-tool", preset="deep")
+    retired_result = {
+        "iac": {"findings": [{"rule_id": "CKV_1", "path": "Dockerfile"}]},
+        "large_evidence": "retired evidence" * 2000,
+    }
+    findings.sync_findings(retired, retired_result)
+    projects.update_scan_run(retired, state="completed", progress=100, result=retired_result)
+    current = create_run(project_id, "coverage-second")
+    statements, decoded, reports = [], [], []
+    real_connection, real_loads = database.get_connection, json.loads
+
+    @contextmanager
+    def traced_connection():
+        with real_connection() as connection:
+            class TracedConnection:
+                def __getattr__(self, name):
+                    return getattr(connection, name)
+
+                def execute(self, sql, parameters=()):
+                    statements.append(sql)
+                    cursor = connection.execute(sql, parameters)
+                    if "result_json" in sql:
+                        class ReportCursor:
+                            def fetchall(self):
+                                rows = cursor.fetchall()
+                                reports.extend(rows)
+                                return rows
+
+                        return ReportCursor()
+                    return cursor
+
+            yield TracedConnection()
+
+    def tracked_loads(payload, *args, **kwargs):
+        if "large_evidence" in payload:
+            decoded.append(payload)
+        return real_loads(payload, *args, **kwargs)
+
+    monkeypatch.setattr(findings, "get_connection", traced_connection)
+    monkeypatch.setattr(findings.json, "loads", tracked_loads)
+    reconciliation = findings.sync_findings(current, {
+        "ruff": [], "profile_version": 2, "source_scope": "repository",
+        "detector_coverage": coverage, "tools": [{"name": "Ruff", "status": "completed"}],
+    })
+    assert reconciliation["resolved"] == 40
+    assert len(decoded) == prior_run_count
+    selects = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+    assert len(selects) <= 5
+    report_reads = [sql for sql in selects if "result_json" in sql]
+    assert len(report_reads) == 1
+    assert len(reports) == prior_run_count
+
+
+def test_older_empty_scan_cannot_resolve_findings_observed_by_a_newer_run(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    older, newer = create_run(project_id, "old-empty"), create_run(project_id, "new-observed")
+    findings.sync_findings(newer, ruff_result())
+    result = findings.sync_findings(older, {"ruff": [], "tools": [{"name": "Ruff", "status": "completed"}]})
+    assert result["resolved"] == 0
+    assert findings.list_findings(project_id)[0]["status"] == "open"
+
+
+@pytest.mark.parametrize("change", [
+    {"profile_version": 3}, {"source_scope": "partial"}, {"operational_failures": ["Ruff unavailable"]},
+    {"detector_coverage": {}}, {"detector_coverage": {"Ruff": {"complete": False}}},
+])
+def test_reconciliation_requires_complete_matching_scope_and_coverage(tmp_path, monkeypatch, change):
+    project_id = configure_database(tmp_path, monkeypatch)
+    first = create_run(project_id, "complete-observation")
+    result = {
+        **ruff_result(), "profile_version": 2, "source_scope": "repository",
+        "detector_coverage": {"Ruff": {"complete": True, "source_scope": "repository", "config_digest": "v1"}},
+    }
+    findings.sync_findings(first, result)
+    projects.update_scan_run(first, state="completed", progress=100, result=result)
+    current = create_run(project_id, "incomplete-comparison")
+    assert findings.sync_findings(current, {**result, "ruff": [], **change})["resolved"] == 0
+    assert findings.list_findings(project_id)[0]["status"] == "open"
+
+
+def test_concurrent_reconciliation_serializes_before_loading_finding_snapshots(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    older, newer = create_run(project_id, "concurrent-old"), create_run(project_id, "concurrent-new")
+    older_snapshot, newer_snapshot, release_older, newer_started = (Event() for _ in range(4))
+    thread_state, real_connection = local(), database.get_connection
+
+    @contextmanager
+    def paused_connection():
+        with real_connection() as connection:
+            class PausedConnection:
+                def __getattr__(self, name):
+                    return getattr(connection, name)
+
+                def execute(self, sql, parameters=()):
+                    if "FROM security_findings" in sql and not thread_state.paused:
+                        thread_state.paused = True
+                        if thread_state.run_id == older:
+                            older_snapshot.set()
+                            assert release_older.wait(3)
+                        else:
+                            newer_snapshot.set()
+                    return connection.execute(sql, parameters)
+
+            yield PausedConnection()
+
+    def reconcile(run_id):
+        thread_state.run_id, thread_state.paused = run_id, False
+        if run_id == newer:
+            newer_started.set()
+        return findings.sync_findings(run_id, ruff_result())
+
+    monkeypatch.setattr(findings, "get_connection", paused_connection)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(reconcile, older)
+        assert older_snapshot.wait(2)
+        second = executor.submit(reconcile, newer)
+        try:
+            assert newer_started.wait(2)
+            assert not newer_snapshot.wait(0.2)
+        finally:
+            release_older.set()
+        assert first.result(timeout=5)["created"] == 1
+        assert second.result(timeout=5)["created"] == 0
+    monkeypatch.setattr(findings, "get_connection", real_connection)
+    finding = findings.list_findings(project_id)[0]
+    assert finding["last_seen_run_id"] == newer and finding["occurrence_count"] == 2
 
 
 def test_finding_lifecycle_requires_expiring_accepted_risk(tmp_path, monkeypatch):

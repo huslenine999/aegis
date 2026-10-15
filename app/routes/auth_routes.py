@@ -41,6 +41,7 @@ from ..oidc import (
 )
 from ..projects import create_project, normalize_github_repository_url
 from ..web_common import (
+    json_object,
     require_access,
     require_recent_access,
     setup_is_available,
@@ -156,10 +157,7 @@ async def complete_setup(request: Request):
     supplied = request.headers.get("X-Aegis-Setup-Token", "")
     if not supplied or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="Invalid setup token.")
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="JSON body required.") from exc
+    body = await json_object(request)
     username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
     workspace_name = str(body.get("workspace_name", "")).strip()
@@ -232,10 +230,7 @@ async def complete_setup(request: Request):
 
 @router.post("/api/auth/login")
 async def login(request: Request):
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="JSON body required.") from exc
+    body = await json_object(request)
     username = str(body.get("username", ""))[:128]
     password = str(body.get("password", ""))[:1024]
     second_factor = str(body.get("second_factor", ""))[:128]
@@ -294,7 +289,7 @@ async def reauthenticate(
 ):
     if principal.auth_method != "session":
         raise HTTPException(status_code=403, detail="Reauthentication requires a browser session.")
-    body = await request.json()
+    body = await json_object(request)
     valid = await asyncio.to_thread(
         reauthenticate_session,
         request.cookies.get(SESSION_COOKIE, ""),
@@ -315,7 +310,7 @@ async def mfa_setup(
 ):
     if principal.auth_method != "session":
         raise HTTPException(status_code=403, detail="MFA setup requires a browser session.")
-    body = await request.json()
+    body = await json_object(request)
     password = str(body.get("password", ""))[:1024]
     if not await asyncio.to_thread(authenticate, principal.username, password):
         raise HTTPException(status_code=403, detail="Current password is invalid.")
@@ -335,7 +330,7 @@ async def mfa_confirm(
 ):
     if principal.auth_method != "session":
         raise HTTPException(status_code=403, detail="MFA setup requires a browser session.")
-    body = await request.json()
+    body = await json_object(request)
     try:
         recovery_codes = await asyncio.to_thread(
             confirm_mfa_setup, principal.user_id, str(body.get("code", ""))
@@ -361,7 +356,7 @@ async def mfa_disable(
 ):
     if principal.auth_method != "session":
         raise HTTPException(status_code=403, detail="MFA changes require a browser session.")
-    body = await request.json()
+    body = await json_object(request)
     disabled = await asyncio.to_thread(
         disable_mfa,
         principal.user_id,
@@ -422,7 +417,7 @@ def list_users(principal=Depends(require_access("admin"))):
 
 @router.post("/api/users", status_code=201)
 async def create_user(request: Request, principal=Depends(require_recent_access("admin"))):
-    body = await request.json()
+    body = await json_object(request)
     username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
     role = str(body.get("role", "viewer")).lower()
@@ -457,11 +452,11 @@ async def create_user(request: Request, principal=Depends(require_recent_access(
 async def update_user(
     user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
-    body = await request.json()
+    body = await json_object(request)
     role = body.get("role")
     active = body.get("active")
     password = body.get("password")
-    if role is not None and role not in {"viewer", "operator", "admin"}:
+    if role is not None and role not in ("viewer", "operator", "admin"):
         raise HTTPException(status_code=400, detail="Invalid role.")
     if active is not None and not isinstance(active, bool):
         raise HTTPException(status_code=400, detail="active must be a boolean.")
@@ -520,7 +515,7 @@ async def update_user(
 async def create_api_token(
     user_id: int, request: Request, principal=Depends(require_recent_access("admin"))
 ):
-    body = await request.json()
+    body = await json_object(request)
     name = str(body.get("name", "automation")).strip()[:128]
     expires_at = body.get("expires_at")
     requested_scopes = body.get("scopes")

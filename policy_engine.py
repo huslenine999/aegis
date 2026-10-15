@@ -2,7 +2,8 @@ import json
 import os
 import sys
 import math
-from collections import Counter
+from collections import Counter, deque
+from concurrent.futures import Future, ThreadPoolExecutor
 import time
 import urllib.request
 import urllib.error
@@ -19,7 +20,6 @@ from app.version import get_package_version
 from app.resource_budgets import (
     ResourceLimitError,
     load_bounded_json,
-    read_bounded,
     resource_budgets,
 )
 
@@ -669,6 +669,7 @@ def parse_cvss_vector(vector_str: str) -> float:
 
 
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
+OSV_REQUEST_DEADLINE_SECONDS = 5.0
 LOCKFILE_KINDS = {
     "uv.lock",
     "poetry.lock",
@@ -713,6 +714,67 @@ def _dependency_inventory_errors(manifests: list[DependencyManifest]) -> list[st
     return errors
 
 
+def _fetch_osv_response(package: DependencyPackage) -> bytes:
+    payload = {
+        "version": package.version,
+        "package": {"name": package.name, "ecosystem": package.ecosystem},
+    }
+    request = urllib.request.Request(
+        "https://api.osv.dev/v1/query",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "Aegis-Scanner/2.0"},
+        method="POST",
+    )
+    deadline = time.monotonic() + OSV_REQUEST_DEADLINE_SECONDS
+    limit = resource_budgets().max_parser_input_bytes
+    body = b""
+    with urllib.request.urlopen(request, timeout=OSV_REQUEST_DEADLINE_SECONDS) as response:
+        # read1 returns after one socket read, so a dribbling server cannot outlast the deadline.
+        while chunk := response.read1(64 * 1024):
+            body += chunk
+            if len(body) > limit:
+                raise ResourceLimitError(f"OSV response exceeds the configured limit of {limit} bytes.")
+            if time.monotonic() > deadline:
+                raise TimeoutError("OSV response exceeded its deadline.")
+    return body
+
+
+def _iter_osv_queries(
+    packages: list[DependencyPackage], cache: dict[str, Any], current_time: float, cache_ttl: int
+):
+    max_pending = 4
+    pending: deque[tuple[DependencyPackage, str, list[dict] | None, float | None, Future[bytes] | None]] = deque()
+    dispatched = False
+    executor = ThreadPoolExecutor(max_workers=max_pending)
+    try:
+        for package in packages:
+            cache_key = f"{package.ecosystem}:{package.name.lower()}@{package.version}"
+            entry = cache.get(cache_key)
+            cached_vulns: list[dict] | None = None
+            entry_age: float | None = None
+            if isinstance(entry, dict) and isinstance(entry.get("vulns"), list):
+                cached_vulns = entry["vulns"]
+                try:
+                    entry_age = current_time - float(entry.get("timestamp", 0))
+                except (TypeError, ValueError):
+                    pass
+            fresh = cached_vulns is not None and entry_age is not None and 0 <= entry_age < cache_ttl
+            future: Future[bytes] | None = None
+            if not fresh:
+                # Pace globally while overlapping I/O; never queue an unbounded batch.
+                if dispatched:
+                    time.sleep(0.1)
+                future = executor.submit(_fetch_osv_response, package)
+                dispatched = True
+            pending.append((package, cache_key, cached_vulns, entry_age, future))
+            if len(pending) == max_pending:
+                yield pending.popleft()
+        yield from pending
+    finally:
+        # Do not wait for in-flight requests on cancel or error; each one ends at its deadline.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def query_osv_vulnerabilities(
     manifests_or_path: Any,
     *,
@@ -751,90 +813,57 @@ def query_osv_vulnerabilities(
     cache_dirty = False
     CACHE_TTL = 86400  # 24 hours
 
-    for pkg in packages:
+    for pkg, cache_key, cached_vulns, entry_age, future in _iter_osv_queries(
+        packages, cache, current_time, CACHE_TTL
+    ):
         pkg_name = pkg.name
         pkg_ver = pkg.version
         ecosystem = pkg.ecosystem
-        cache_key = f"{ecosystem}:{pkg_name.lower()}@{pkg_ver}"
-
-        entry = cache.get(cache_key)
-        cached_vulns = None
-        entry_age = None
-        if isinstance(entry, dict) and isinstance(entry.get("vulns"), list):
-            cached_vulns = entry["vulns"]
-            try:
-                entry_age = current_time - float(entry.get("timestamp", 0))
-            except (TypeError, ValueError):
-                entry_age = None
-            if entry_age is not None and 0 <= entry_age < CACHE_TTL:
-                findings.extend(cached_vulns)
-                continue
-
-        url = "https://api.osv.dev/v1/query"
-        payload = {
-            "version": pkg_ver,
-            "package": {
-                "name": pkg_name,
-                "ecosystem": ecosystem
-            }
-        }
-        
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url, 
-            data=req_data,
-            headers={"Content-Type": "application/json", "User-Agent": "Aegis-Scanner/2.0"},
-            method="POST"
-        )
+        if future is None:
+            findings.extend(cached_vulns)
+            continue
         
         try:
-            with urllib.request.urlopen(req, timeout=5) as response:
-                resp_data = json.loads(
-                    read_bounded(
-                        response,
-                        resource_budgets().max_parser_input_bytes,
-                    ).decode("utf-8")
-                )
-                vuln_list = []
-                for vuln in resp_data.get("vulns", []):
-                    cvss_score = None
-                    vector = None
-                    
-                    db_spec = vuln.get("database_specific", {})
-                    if isinstance(db_spec, dict):
-                        cvss_data = db_spec.get("cvss")
-                        if isinstance(cvss_data, dict):
-                            cvss_score = cvss_data.get("score")
-                            vector = cvss_data.get("vector")
-                            
-                    if cvss_score is None:
-                        for sev in vuln.get("severity", []):
-                            if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
-                                vector = sev.get("score")
-                                cvss_score = parse_cvss_vector(str(vector or ""))
-                                break
-                    
-                    vuln_list.append({
-                        "id": vuln.get("id"),
-                        "aliases": [
-                            str(alias) for alias in vuln.get("aliases", []) if alias
-                        ],
-                        "package": pkg_name,
-                        "version": pkg_ver,
-                        "ecosystem": ecosystem,
-                        "cvss": cvss_score,
-                        "vector": vector,
-                        "summary": vuln.get("summary", "No summary provided."),
-                        "details": vuln.get("details", "No details provided.")
-                    })
-                
-                cache[cache_key] = {
-                    "timestamp": current_time,
-                    "vulns": vuln_list
-                }
-                cache_dirty = True
-                findings.extend(vuln_list)
-                time.sleep(0.1)
+            resp_data = json.loads(future.result().decode("utf-8"))
+            vuln_list = []
+            for vuln in resp_data.get("vulns", []):
+                cvss_score = None
+                vector = None
+
+                db_spec = vuln.get("database_specific", {})
+                if isinstance(db_spec, dict):
+                    cvss_data = db_spec.get("cvss")
+                    if isinstance(cvss_data, dict):
+                        cvss_score = cvss_data.get("score")
+                        vector = cvss_data.get("vector")
+
+                if cvss_score is None:
+                    for sev in vuln.get("severity", []):
+                        if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
+                            vector = sev.get("score")
+                            cvss_score = parse_cvss_vector(str(vector or ""))
+                            break
+
+                vuln_list.append({
+                    "id": vuln.get("id"),
+                    "aliases": [
+                        str(alias) for alias in vuln.get("aliases", []) if alias
+                    ],
+                    "package": pkg_name,
+                    "version": pkg_ver,
+                    "ecosystem": ecosystem,
+                    "cvss": cvss_score,
+                    "vector": vector,
+                    "summary": vuln.get("summary", "No summary provided."),
+                    "details": vuln.get("details", "No details provided.")
+                })
+
+            cache[cache_key] = {
+                "timestamp": current_time,
+                "vulns": vuln_list
+            }
+            cache_dirty = True
+            findings.extend(vuln_list)
         except Exception as e:
             print(f"[WARN] Failed to query OSV API for {cache_key}: {e}")
             if cached_vulns is not None and entry_age is not None and 0 <= entry_age < CACHE_TTL:

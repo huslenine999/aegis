@@ -16,8 +16,8 @@ from ..audit import record_audit
 from ..bac_imports import BAC_ARTIFACTS
 from ..bac_projects import configured_import_public_key, import_bac_report
 from ..auth import AUTH_REQUIRED, principal_from_request, require_role
-from ..database import REDIS_AVAILABLE, REDIS_URL, SCANS_DIR, redis_client
-from ..findings import get_finding, list_findings, update_finding
+from ..database import REDIS_AVAILABLE, SCANS_DIR, redis_client
+from ..findings import get_finding, list_findings_page, update_finding
 from ..github_integration import create_repository_issue
 from ..notifications import (
     CHANNEL_TYPES,
@@ -40,14 +40,13 @@ from ..projects import (
     create_project,
     create_scan_run,
     delete_project,
-    get_project,
+    get_authorized_project,
     get_scan_run,
     list_projects,
     list_project_members,
     list_scan_runs,
     normalize_github_repository_url,
     remove_project_member,
-    require_project_role,
     set_project_member,
     update_project,
 )
@@ -55,6 +54,7 @@ from ..scan_engine import ScanJobPayload
 from ..web_common import (
     DEMO_LAB_ENABLED,
     SCAN_JOB_TIMEOUT_SECONDS,
+    json_object,
     require_access,
     require_recent_access,
     templates,
@@ -66,11 +66,8 @@ logger = logging.getLogger("aegis.main")
 
 
 def _project_access(project_id: int, principal, minimum: str):
-    project = get_project(project_id, principal.tenant_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found.")
     try:
-        require_project_role(
+        project = get_authorized_project(
             project_id,
             principal.user_id,
             principal.role,
@@ -79,6 +76,8 @@ def _project_access(project_id: int, principal, minimum: str):
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
     return project
 
 
@@ -117,18 +116,7 @@ def _enqueue_project_scan(
         github_check_run_id=(github_context or {}).get("check_run_id"),
         policy_version_id=policy["id"],
     )
-    redis_client.hset(
-        f"job:{job_id}",
-        mapping={
-            "state": "queued",
-            "progress": 0,
-            "owner_id": principal.user_id,
-            "project_id": project["id"],
-            "scan_run_id": run_id,
-            "queued_at": time.time(),
-        },
-    )
-    from ..worker import async_scan_task
+    from ..worker import async_scan_task, fail_unfinished_scan, mark_scan_failed
 
     payload = ScanJobPayload(
         job_id=job_id,
@@ -143,20 +131,36 @@ def _enqueue_project_scan(
         # Pull-request checks gate on newly introduced findings only.
         diff_aware=diff_aware or bool((github_context or {}).get("pull_request")),
     )
-    if REDIS_AVAILABLE:
-        from rq import Queue
-        from redis import Redis
-
-        queue = Queue(
-            "deep" if preset == "deep" else "default",
-            connection=Redis.from_url(REDIS_URL),
+    try:
+        redis_client.hset(
+            f"job:{job_id}",
+            mapping={
+                "state": "queued",
+                "progress": 0,
+                "owner_id": principal.user_id,
+                "project_id": project["id"],
+                "scan_run_id": run_id,
+                "queued_at": time.time(),
+            },
         )
-        queue.enqueue(async_scan_task, payload, job_timeout=SCAN_JOB_TIMEOUT_SECONDS)
-    else:
-        import threading
+        if REDIS_AVAILABLE:
+            from rq import Callback, Queue
 
-        thread = threading.Thread(target=async_scan_task, args=(payload,), daemon=True)
-        thread.start()
+            Queue("deep" if preset == "deep" else "default", connection=redis_client).enqueue(
+                async_scan_task,
+                payload,
+                job_timeout=SCAN_JOB_TIMEOUT_SECONDS,
+                on_failure=Callback(mark_scan_failed),
+            )
+        else:
+            import threading
+
+            thread = threading.Thread(target=async_scan_task, args=(payload,), daemon=True)
+            thread.start()
+    except Exception as exc:
+        logger.exception("Unable to queue scan run %s", run_id)
+        fail_unfinished_scan(run_id, project["id"], "Scan could not be queued.")
+        raise HTTPException(status_code=503, detail="Scan queue is unavailable.") from exc
     return {
         "status": "success",
         "job_id": job_id,
@@ -190,7 +194,7 @@ def projects_index(principal=Depends(require_role("viewer"))):
 async def projects_create(
     request: Request, principal=Depends(require_access("operator"))
 ):
-    body = await request.json()
+    body = await json_object(request)
     name = str(body.get("name", "")).strip()
     repository_url = str(body.get("repository_url", "")).strip()
     default_branch = str(body.get("default_branch", "main")).strip()
@@ -224,7 +228,7 @@ async def project_update(
     project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
     project = _project_access(project_id, principal, "admin")
-    body = await request.json()
+    body = await json_object(request)
     name = str(body.get("name", project["name"])).strip()
     repository_url = str(body.get("repository_url", project["repository_url"])).strip()
     default_branch = str(body.get("default_branch", project["default_branch"])).strip()
@@ -342,14 +346,18 @@ def project_findings(
     project_id: int,
     status: str | None = None,
     severity: str | None = None,
+    search: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
     principal=Depends(require_role("viewer")),
 ):
     _project_access(project_id, principal, "viewer")
     try:
-        findings = list_findings(project_id, status=status, severity=severity)
+        return list_findings_page(
+            project_id, status=status, severity=severity, search=search, limit=limit, offset=offset,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"findings": findings}
 
 
 @router.get("/api/projects/{project_id}/findings/{finding_id}")
@@ -373,7 +381,7 @@ async def project_finding_update(
     principal=Depends(require_recent_access("operator")),
 ):
     _project_access(project_id, principal, "operator")
-    body = await request.json()
+    body = await json_object(request)
     try:
         finding = update_finding(project_id, finding_id, principal.user_id, body)
     except ValueError as exc:
@@ -407,7 +415,7 @@ async def project_finding_github_issue(
     repository = project.get("github_full_name")
     if not repository:
         raise HTTPException(status_code=400, detail="Project is not linked to a GitHub repository.")
-    body = await request.json()
+    body = await json_object(request)
     title = str(body.get("title") or f"[{finding['severity']}] {finding['title']}")
     issue_body = str(body.get("body") or "\n".join([
         "## Aegis security finding",
@@ -464,7 +472,7 @@ async def project_policy_create(
     principal=Depends(require_recent_access("operator")),
 ):
     _project_access(project_id, principal, "admin")
-    body = await request.json()
+    body = await json_object(request)
     try:
         policy = create_policy(
             project_id,
@@ -506,7 +514,7 @@ async def project_policy_simulate(
     principal=Depends(require_role("viewer")),
 ):
     _project_access(project_id, principal, "viewer")
-    body = await request.json()
+    body = await json_object(request)
     try:
         definition = normalize_definition(body.get("definition") or {})
         return simulate_policy(project_id, int(body.get("scan_run_id")), definition)
@@ -529,7 +537,7 @@ async def project_member_set(
     principal=Depends(require_recent_access("operator")),
 ):
     _project_access(project_id, principal, "admin")
-    body = await request.json()
+    body = await json_object(request)
     try:
         member = set_project_member(
             project_id,
@@ -571,7 +579,7 @@ async def project_notification_create(
     project_id: int, request: Request, principal=Depends(require_recent_access("operator"))
 ):
     _project_access(project_id, principal, "admin")
-    body = await request.json()
+    body = await json_object(request)
     try:
         channel_id = create_channel(
             project_id=project_id,
@@ -620,7 +628,7 @@ async def project_scan_start(
     principal=Depends(require_access("operator")),
 ):
     project = _project_access(project_id, principal, "operator")
-    body = await request.json()
+    body = await json_object(request)
     preset = str(body.get("preset", project["scan_preset"])).lower()
     diff_aware = bool(body.get("diff_aware", False))
     return _enqueue_project_scan(project, principal, preset, diff_aware=diff_aware)

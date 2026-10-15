@@ -296,7 +296,7 @@ def read_bounded_text(
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
+    if os.name == "nt" and process.poll() is not None:
         return
     try:
         if os.name != "nt":
@@ -305,6 +305,9 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
         process.wait(timeout=1)
     except (OSError, subprocess.TimeoutExpired):
+        pass
+    finally:
+        # Descendants can keep running after the group leader exits.
         try:
             if os.name != "nt":
                 os.killpg(process.pid, signal.SIGKILL)
@@ -482,7 +485,8 @@ def run_bounded_subprocess(
                 continue
             for key, _ in events:
                 stream = cast(BinaryIO, key.fileobj)
-                data = stream.read(
+                data = os.read(
+                    stream.fileno(),
                     min(resource_budgets().stream_chunk_bytes, budget - total + 1)
                 )
                 if not data:

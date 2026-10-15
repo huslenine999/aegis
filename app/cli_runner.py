@@ -752,6 +752,9 @@ def _execute_scan(
     return exit_code
 
 
+AEGIS_HOOK_MARKER = "# Aegis Security Gate Pre-Push Hook"
+
+
 def install_hook():
     git_dir = Path(".git")
     if not git_dir.exists() or not git_dir.is_dir():
@@ -762,10 +765,13 @@ def install_hook():
     hook_dir.mkdir(exist_ok=True)
     
     pre_push_path = hook_dir / "pre-push"
+    if pre_push_path.exists() and AEGIS_HOOK_MARKER not in pre_push_path.read_text(errors="replace"):
+        print("❌ Error: .git/hooks/pre-push already exists and was not installed by Aegis. Remove it first.")
+        return 1
     aegis_bin_abs = PROJECT_ROOT / "bin" / "aegis"
     
     hook_content = f"""#!/bin/bash
-# Aegis Security Gate Pre-Push Hook
+{AEGIS_HOOK_MARKER}
 echo "🛡️ Running Aegis pre-push security scans..."
 
 # Get the directory of the repository
@@ -796,7 +802,7 @@ exit 0
 
 def uninstall_hook():
     pre_push_path = Path(".git/hooks/pre-push")
-    if pre_push_path.exists():
+    if pre_push_path.exists() and AEGIS_HOOK_MARKER in pre_push_path.read_text(errors="replace"):
         pre_push_path.unlink()
         print("✅ Aegis Git pre-push hook uninstalled successfully.")
     else:

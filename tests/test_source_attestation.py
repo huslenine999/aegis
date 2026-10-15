@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -197,3 +198,66 @@ def test_snapshot_report_normalization_handles_path_keys(tmp_path):
         assert str(target / "app.py") in report["results"]
     finally:
         snapshot.cleanup()
+
+
+def test_snapshot_resolves_exclusions_once_per_source_descriptor_pass(tmp_path, monkeypatch):
+    target = tmp_path / "source"
+    target.mkdir()
+    for index in range(8):
+        (target / f"app-{index}.py").write_text("pass\n")
+    excludes = (target / "excluded-1.py", target / "excluded-2.py")
+    resolve = Path.resolve
+    calls = []
+
+    def counted_resolve(path, *args, **kwargs):
+        if path in excludes:
+            calls.append(path)
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counted_resolve)
+    snapshot = create_source_snapshot(target, excluded_paths=excludes)
+    try:
+        assert snapshot.file_count == 8
+        assert calls.count(excludes[0]) == 2
+        assert calls.count(excludes[1]) == 2
+    finally:
+        snapshot.cleanup()
+
+
+def test_snapshot_excludes_exact_files_and_directory_descendants(tmp_path):
+    target = tmp_path / "source"
+    (target / "excluded" / "nested").mkdir(parents=True)
+    (target / "excluded-sibling").mkdir()
+    for name in ("one.py", "one.py.backup", "excluded/nested/app.py", "excluded-sibling/app.py"):
+        (target / name).write_text("pass\n")
+    snapshot = create_source_snapshot(target, excluded_paths=("one.py", str(target / "excluded")))
+    try:
+        assert [item["path"] for item in snapshot.descriptor["files"]] == ["excluded-sibling/app.py", "one.py.backup"]
+    finally:
+        snapshot.cleanup()
+
+
+def test_snapshot_still_rejects_source_changes_during_copy(tmp_path, monkeypatch):
+    import app.source_attestation as attestation
+
+    target = tmp_path / "source.py"
+    target.write_text("original\n")
+    copy = attestation._copy_regular_file
+
+    def copy_then_change(source, destination, mode):
+        copy(source, destination, mode)
+        source.write_text("changed\n")
+
+    monkeypatch.setattr(attestation, "_copy_regular_file", copy_then_change)
+    with pytest.raises(SourceAttestationError, match="Source changed"):
+        create_source_snapshot(target)
+
+
+def test_snapshot_rejects_symlinks_even_when_excluded(tmp_path):
+    target = tmp_path / "source"
+    target.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("pass\n")
+    (target / "excluded.py").symlink_to(outside)
+    with pytest.raises(SourceAttestationError, match="symbolic links"):
+        create_source_snapshot(target, excluded_paths=("excluded.py",))

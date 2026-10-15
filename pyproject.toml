@@ -21,7 +21,6 @@ keywords = [
   "scanner",
 ]
 dependencies = [
-  "Flask==3.1.3",
   "Werkzeug==3.1.8",
   "requests==2.34.2",
   "urllib3==2.7.0",
@@ -38,7 +37,7 @@ dependencies = [
   "rq==2.1.0",
   "python-multipart==0.0.31",
   "websockets==16.0",
-  "psycopg[binary]==3.2.10",
+  "psycopg[binary,pool]==3.2.10",
   "cryptography==50.0.0",
   "boto3==1.43.52",
   "PyJWT[crypto]==2.13.0",

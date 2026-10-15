@@ -699,3 +699,74 @@ def test_print_ascii_report(capsys):
 
     print_ascii_report([], "ERROR", "Semgrep failed", 0.0)
     assert "SCAN INCOMPLETE" in capsys.readouterr().out
+
+
+def test_hook_commands_leave_foreign_pre_push_hooks_alone(tmp_path, monkeypatch):
+    hooks = tmp_path / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    foreign = hooks / "pre-push"
+    foreign.write_text("#!/bin/sh\nmake lint\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert install_hook() == 1
+    assert uninstall_hook() == 0
+    assert foreign.read_text() == "#!/bin/sh\nmake lint\n"
+
+
+def _stack_stub(tmp_path):
+    from types import SimpleNamespace
+
+    env_file = tmp_path / ".env.aegis"
+    env_file.write_text("")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if "pg_dump" in command:
+            return SimpleNamespace(returncode=0, stdout=b"-- dump\n")
+        return SimpleNamespace(returncode=0)
+
+    return env_file, calls, SimpleNamespace(run=run), SimpleNamespace(which=lambda _: "/usr/bin/docker")
+
+
+def test_backup_archive_is_private(tmp_path):
+    from app.cli_stack import run_backup
+
+    env_file, _, subprocess_stub, shutil_stub = _stack_stub(tmp_path)
+    destination = tmp_path / "backup.zip"
+    assert run_backup(
+        project_root=tmp_path, local_env_file=env_file, subprocess_module=subprocess_stub,
+        shutil_module=shutil_stub, package_version="test", output=str(destination),
+    ) == 0
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_restore_stops_on_sql_errors_and_reports_failed_report_copy(tmp_path):
+    import zipfile
+
+    from app.cli_stack import EXIT_OPERATIONAL_ERROR, run_restore
+
+    archive = tmp_path / "backup.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("database.sql", "SELECT 1;\n")
+        bundle.writestr("scans/report.html", "<p>report</p>")
+    scans_source = None
+    env_file, calls, subprocess_stub, shutil_stub = _stack_stub(tmp_path)
+    original_run = subprocess_stub.run
+
+    def run(command, **kwargs):
+        nonlocal scans_source
+        if command[-1] == "dashboard:/data/":
+            scans_source = command[-2]
+            calls.append(command)
+            return type("Result", (), {"returncode": 1})()
+        return original_run(command, **kwargs)
+
+    subprocess_stub.run = run
+    assert run_restore(
+        str(archive), project_root=tmp_path, local_env_file=env_file,
+        subprocess_module=subprocess_stub, shutil_module=shutil_stub, confirmed=True,
+    ) == EXIT_OPERATIONAL_ERROR
+    psql = next(command for command in calls if "psql" in command)
+    assert ["-v", "ON_ERROR_STOP=1", "--single-transaction"] == psql[psql.index("psql") + 1:psql.index("psql") + 4]
+    assert scans_source is not None

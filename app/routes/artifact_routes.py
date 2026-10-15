@@ -1,15 +1,15 @@
 import hashlib
-import itertools
 import logging
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.types import Receive, Scope, Send
 
 from ..artifact_storage import (
     ArtifactLimitError,
@@ -102,12 +102,37 @@ def _artifact_bytes(metadata: dict, path: Path) -> bytes:
     return content
 
 
+class _ArtifactStreamingResponse(StreamingResponse):
+    def __init__(
+        self, content: Iterable[bytes], *, cleanup: Callable[[], None] | None = None, **kwargs: Any
+    ):
+        super().__init__(content, background=BackgroundTask(cleanup) if cleanup else None, **kwargs)
+        self._content = content
+        self._cleanup = cleanup
+
+    async def stream_response(self, send: Send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            close = getattr(self._content, "close", None)
+            if close:
+                close()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        except BaseException:
+            if self._cleanup:
+                self._cleanup()
+            raise
+
+
 def _stream_file_response(
     path: Path,
     *,
     media_type: str,
     filename: str,
-    cleanup: bool = False,
+    cleanup: Callable[[], None] | None = None,
     inline: bool = False,
 ):
     response_limit = resource_budgets().max_response_bytes
@@ -117,20 +142,21 @@ def _stream_file_response(
         raise HTTPException(status_code=404, detail="Artifact not found.") from exc
     if size + (len(REPORT_VIEW_STYLE) if inline else 0) > response_limit:
         raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
-    background = BackgroundTask(path.unlink, missing_ok=True) if cleanup else None
-    body = iter_file_bytes(path, max_bytes=response_limit)
-    if inline:
-        # The signed report remains unchanged; the browser view stays readable
-        # when its untrusted inline scripts are blocked by the report CSP.
-        body = itertools.chain(body, (REPORT_VIEW_STYLE,))
-    return StreamingResponse(
-        body,
+    def body():
+        yield from iter_file_bytes(path, max_bytes=response_limit)
+        if inline:
+            # The signed report remains unchanged; the browser view stays readable
+            # when its untrusted inline scripts are blocked by the report CSP.
+            yield REPORT_VIEW_STYLE
+
+    return _ArtifactStreamingResponse(
+        body(),
         media_type=media_type,
         headers={
             "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{filename}"',
             **({"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:"} if inline else {}),
         },
-        background=background,
+        cleanup=cleanup,
     )
 
 
@@ -166,11 +192,11 @@ def _stream_bundle_response(
                 detail="Report bundle exceeds configured resource limits.",
             ) from exc
         raise
-    return StreamingResponse(
+    return _ArtifactStreamingResponse(
         iter_file_bytes(bundle_path, max_bytes=response_limit),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        background=BackgroundTask(bundle_path.unlink, missing_ok=True),
+        cleanup=lambda: bundle_path.unlink(missing_ok=True),
     )
 
 
@@ -260,8 +286,7 @@ def project_scan_artifact(
                 detail="Report bundle exceeds configured artifact limits.",
             ) from exc
         artifact_sources: dict[str, ReportSource] = {}
-        staged_s3_paths: list[Path] = []
-        try:
+        with tempfile.TemporaryDirectory(prefix="aegis-s3-") as staging_path:
             for metadata in recorded:
                 if metadata.get("name") not in artifact_types:
                     record_artifact_integrity_failure()
@@ -278,14 +303,7 @@ def project_scan_artifact(
                             status_code=409,
                             detail="Artifact integrity verification failed.",
                         )
-                    descriptor, temporary_name = tempfile.mkstemp(
-                        prefix=f".s3-{metadata['name']}.",
-                        suffix=".artifact",
-                        dir=report_dir,
-                    )
-                    os.close(descriptor)
-                    staged = Path(temporary_name)
-                    staged_s3_paths.append(staged)
+                    staged = Path(staging_path) / metadata["name"]
                     try:
                         S3ArtifactStore().download_verified(
                             str(key), metadata["size"], metadata["sha256"], staged
@@ -310,9 +328,6 @@ def project_scan_artifact(
                 filename=f"aegis-{project_id}-{run_id}.zip",
                 include_all=run.get("target") == "bac-research",
             )
-        finally:
-            for staged in staged_s3_paths:
-                staged.unlink(missing_ok=True)
     media_type = artifact_types.get(artifact_name)
     artifact_path = report_dir / artifact_name
     artifact_metadata = get_scan_artifact(run_id, artifact_name)
@@ -337,29 +352,29 @@ def project_scan_artifact(
             raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
         if int(artifact_metadata["size"]) > resource_budgets().max_response_bytes:
             raise HTTPException(status_code=413, detail="Response exceeds configured size limit.")
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".s3-{artifact_name}.", suffix=".artifact", dir=report_dir
-        )
-        os.close(descriptor)
-        staged = Path(temporary_name)
+        staging_directory = tempfile.TemporaryDirectory(prefix="aegis-s3-")
+        staged = Path(staging_directory.name) / artifact_name
         try:
-            S3ArtifactStore().download_verified(
-                str(key), artifact_metadata["size"], artifact_metadata["sha256"], staged
+            try:
+                S3ArtifactStore().download_verified(
+                    str(key), artifact_metadata["size"], artifact_metadata["sha256"], staged
+                )
+            except (OSError, ResourceLimitError, TypeError, ValueError, KeyError) as exc:
+                record_artifact_integrity_failure()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Artifact integrity verification failed.",
+                ) from exc
+            return _stream_file_response(
+                staged,
+                media_type=media_type,
+                filename=artifact_name,
+                cleanup=staging_directory.cleanup,
+                inline=artifact_name == "report.html",
             )
-        except (OSError, ResourceLimitError, TypeError, ValueError, KeyError) as exc:
-            staged.unlink(missing_ok=True)
-            record_artifact_integrity_failure()
-            raise HTTPException(
-                status_code=409,
-                detail="Artifact integrity verification failed.",
-            ) from exc
-        return _stream_file_response(
-            staged,
-            media_type=media_type,
-            filename=artifact_name,
-            cleanup=True,
-            inline=artifact_name == "report.html",
-        )
+        except BaseException:
+            staging_directory.cleanup()
+            raise
     if not artifact_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found.")
     if not _artifact_integrity(artifact_metadata, artifact_path):

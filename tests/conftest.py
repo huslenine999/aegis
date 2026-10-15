@@ -102,6 +102,7 @@ def mock_rq_and_redis(monkeypatch):
     def dummy_enqueue(func, *args, **kwargs):
         kwargs.pop("job_timeout", None)
         kwargs.pop("result_ttl", None)
+        kwargs.pop("on_failure", None)
         return func(*args, **kwargs)
         
     queue_mock = patch("rq.Queue.enqueue", side_effect=dummy_enqueue)

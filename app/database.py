@@ -52,57 +52,129 @@ else:
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 USING_POSTGRES = DATABASE_URL.startswith(("postgresql://", "postgres://"))
+_postgres_pool: Any = None
+_postgres_pool_pid: int | None = None
+_postgres_pool_lock = threading.Lock()
+
+
+def _get_postgres_pool():
+    global _postgres_pool, _postgres_pool_pid
+    try:
+        from psycopg_pool import ConnectionPool
+    except ImportError as exc:
+        raise RuntimeError("PostgreSQL requires psycopg pool. Install production dependencies.") from exc
+    with _postgres_pool_lock:
+        if _postgres_pool is None or _postgres_pool_pid != os.getpid():
+            _postgres_pool = ConnectionPool(
+                DATABASE_URL,
+                min_size=0,
+                max_size=4,
+                timeout=5,
+                kwargs={"connect_timeout": 5},
+                open=True,
+            )
+            _postgres_pool_pid = os.getpid()
+        return _postgres_pool
+
+
+def close_database_pool() -> None:
+    global _postgres_pool, _postgres_pool_pid
+    with _postgres_pool_lock:
+        if _postgres_pool is not None and _postgres_pool_pid == os.getpid():
+            _postgres_pool.close()
+        _postgres_pool = None
+        _postgres_pool_pid = None
+
+
+def _reset_postgres_pool_lock() -> None:
+    global _postgres_pool_lock
+    _postgres_pool_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    # RQ forks jobs: close idle sockets before the fork and replace child locks.
+    os.register_at_fork(
+        before=close_database_pool,
+        after_in_child=_reset_postgres_pool_lock,
+    )
 
 
 class PostgresConnection:
     """Small DB-API adapter so application SQL can remain portable."""
 
-    def __init__(self, connection):
+    def __init__(self, connection, pool=None):
         self._connection = connection
+        self._pool = pool
+        self._pid = os.getpid()
+        self._closed = False
+
+    def _active_connection(self):
+        if self._closed:
+            raise RuntimeError("Database connection is closed.")
+        if self._pid != os.getpid():
+            raise RuntimeError("Database connection belongs to a different process.")
+        return self._connection
 
     @staticmethod
     def _sql(statement: str) -> str:
         return statement.replace("?", "%s")
 
     def execute(self, statement: str, parameters: tuple[Any, ...] = ()):
-        return self._connection.execute(self._sql(statement), parameters)
+        cursor = self._active_connection().execute(self._sql(statement), parameters)
+        return PostgresCursor(cursor, self)
 
     def executemany(self, statement: str, parameters):
         return self.cursor().executemany(statement, parameters)
 
     def cursor(self):
-        return PostgresCursor(self._connection.cursor())
+        return PostgresCursor(self._active_connection().cursor(), self)
 
     def commit(self):
-        return self._connection.commit()
+        return self._active_connection().commit()
 
     def rollback(self):
-        return self._connection.rollback()
+        return self._active_connection().rollback()
 
     def close(self):
-        return self._connection.close()
+        if self._closed:
+            return
+        self._closed = True
+        if self._pid != os.getpid():
+            return
+        if self._pool is not None:
+            self._pool.putconn(self._connection)
+        else:
+            self._connection.close()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, traceback):
-        if exc_type:
-            self.rollback()
-        else:
-            self.commit()
-        self.close()
+        try:
+            if exc_type:
+                self.rollback()
+            else:
+                self.commit()
+        finally:
+            self.close()
 
 
 class PostgresCursor:
-    def __init__(self, cursor):
+    def __init__(self, cursor, connection=None):
         self._cursor = cursor
+        self._connection = connection
+
+    def _active_cursor(self):
+        if self._connection is not None:
+            self._connection._active_connection()
+        return self._cursor
 
     def execute(self, statement: str, parameters: tuple[Any, ...] = ()):
-        self._cursor.execute(statement.replace("?", "%s"), parameters)
+        self._active_cursor().execute(statement.replace("?", "%s"), parameters)
         return self
 
     def executemany(self, statement: str, parameters):
-        self._cursor.executemany(statement.replace("?", "%s"), parameters)
+        self._active_cursor().executemany(statement.replace("?", "%s"), parameters)
         return self
 
     def fetchone(self):
@@ -127,6 +199,11 @@ class SQLiteConnection:
 
     def __init__(self, connection: sqlite3.Connection):
         self._connection = connection
+        connection.create_function(
+            "unicode_lower", 1,
+            lambda value: value.lower() if value is not None else None,
+            deterministic=True,
+        )
 
     def execute(self, statement: str, parameters: tuple[Any, ...] = ()):
         return self._connection.execute(statement, parameters)
@@ -142,6 +219,10 @@ class SQLiteConnection:
 
     def rollback(self):
         return self._connection.rollback()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._connection.in_transaction
 
     def close(self):
         return self._connection.close()
@@ -161,11 +242,8 @@ class SQLiteConnection:
 
 def get_connection():
     if USING_POSTGRES:
-        try:
-            import psycopg
-        except ImportError as exc:
-            raise RuntimeError("PostgreSQL requires psycopg. Install production dependencies.") from exc
-        return PostgresConnection(psycopg.connect(DATABASE_URL))
+        pool = _get_postgres_pool()
+        return PostgresConnection(pool.getconn(), pool)
     connection = SQLiteConnection(sqlite3.connect(DB_PATH))
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
@@ -1296,6 +1374,49 @@ def _migration_021_github_oauth_session_binding(cursor) -> None:
     )
 
 
+def _migration_022_scan_result_summaries(cursor) -> None:
+    from .projects import scan_result_summary
+
+    if USING_POSTGRES:
+        cursor.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'scan_runs'"
+        )
+        columns = {row[0] for row in cursor.fetchall()}
+    else:
+        cursor.execute("PRAGMA table_info(scan_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+    if "summary_json" not in columns:
+        cursor.execute("ALTER TABLE scan_runs ADD COLUMN summary_json TEXT")
+
+    last_id = None
+    while True:
+        clause = " AND id > ?" if last_id is not None else ""
+        cursor.execute(
+            "SELECT id, result_json FROM scan_runs "
+            "WHERE summary_json IS NULL AND result_json IS NOT NULL"
+            f"{clause} ORDER BY id LIMIT 100",
+            (last_id,) if last_id is not None else (),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            break
+        summaries = []
+        for run_id, result_json in rows:
+            try:
+                result = json.loads(result_json)
+                if not isinstance(result, dict):
+                    raise ValueError("Stored scan result must be an object.")
+            except (TypeError, ValueError, RecursionError):
+                result = {"error": "Stored scan result could not be read."}
+            summaries.append((json.dumps(scan_result_summary(result), separators=(",", ":")), run_id))
+        cursor.executemany(
+            "UPDATE scan_runs SET summary_json = ? WHERE id = ? AND summary_json IS NULL",
+            summaries,
+        )
+        last_id = rows[-1][0]
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1318,6 +1439,7 @@ MIGRATIONS = (
     Migration(19, "github_tenant_credential_lifecycle", _migration_019_github_tenant_credential_lifecycle),
     Migration(20, "api_token_hash_version", _migration_020_api_token_hash_version),
     Migration(21, "github_oauth_session_binding", _migration_021_github_oauth_session_binding),
+    Migration(22, "scan_result_summaries", _migration_022_scan_result_summaries),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -1533,7 +1655,9 @@ REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_URL = os.environ.get("REDIS_URL", f"redis://{REDIS_HOST}:6379/0")
 redis_client: Any
 try:
-    _temp_client = redis.Redis.from_url(REDIS_URL, socket_connect_timeout=0.5)
+    _temp_client = redis.Redis.from_url(
+        REDIS_URL, socket_connect_timeout=0.5, socket_timeout=1.0,
+    )
     _temp_client.ping()
     redis_client = _temp_client
     REDIS_AVAILABLE = True

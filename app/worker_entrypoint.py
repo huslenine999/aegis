@@ -65,7 +65,7 @@ def main() -> None:
     isolated = os.environ.get("AEGIS_ISOLATED_WORKER", "false").lower() in TRUE_VALUES
     queues = ["deep"] if isolated else ["default"]
     arguments = [
-        "rq", "worker", "--name",
+        "rq", "worker", "--worker-class", "app.worker.ScanWorker", "--name",
         f"aegis-{'isolated' if isolated else 'standard'}-{socket.gethostname()}",
         "--worker-ttl", "900", "--maintenance-interval", "60",
         *sys.argv[1:], *queues,

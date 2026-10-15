@@ -75,16 +75,16 @@ def _reject_unsupported_entry(path: Path, *, directory: bool) -> None:
         raise SourceAttestationError("Source snapshots may contain only regular files.")
 
 
-def _path_is_excluded(path: Path, source_root: Path, excluded_paths: Iterable[str]) -> bool:
+def _resolve_excluded_paths(source_root: Path, excluded_paths: Iterable[str]) -> set[Path]:
+    resolved: set[Path] = set()
     for raw_value in excluded_paths:
         raw = Path(str(raw_value)).expanduser()
         candidate = raw if raw.is_absolute() else source_root / raw
         try:
-            if path == candidate.resolve(strict=False) or candidate.resolve(strict=False) in path.parents:
-                return True
+            resolved.add(candidate.resolve(strict=False))
         except (OSError, RuntimeError):
             continue
-    return False
+    return resolved
 
 
 def _collect_descriptor(
@@ -104,6 +104,7 @@ def _collect_descriptor(
     except RuntimeError as exc:
         raise SourceAttestationError(str(exc)) from exc
 
+    resolved_exclusions = _resolve_excluded_paths(source, excluded_paths)
     entries: list[dict[str, Any]] = []
     if source.is_file():
         digest, size, mode = _sha256_file(source)
@@ -119,7 +120,10 @@ def _collect_descriptor(
             for name in filenames:
                 candidate = root_path / name
                 _reject_unsupported_entry(candidate, directory=False)
-                if _path_is_excluded(candidate, source, excluded_paths):
+                if resolved_exclusions and (
+                    candidate in resolved_exclusions
+                    or any(parent in resolved_exclusions for parent in candidate.parents)
+                ):
                     continue
                 digest, size, mode = _sha256_file(candidate)
                 relative = candidate.relative_to(source).as_posix()

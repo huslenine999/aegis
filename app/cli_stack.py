@@ -356,6 +356,9 @@ def run_backup(
             )
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # The dump holds password hashes and encrypted credentials: private before any byte is written.
+        destination.touch(mode=0o600)
+        os.chmod(destination, 0o600)
         with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in root.rglob("*"):
                 if path.is_file():
@@ -400,7 +403,10 @@ def run_restore(
             check=False,
         )
         restore = subprocess_module.run(
-            docker_compose_command(project_root, local_env_file, "exec", "-T", "postgres", "psql", "-U", "aegis", "-d", "aegis"),
+            docker_compose_command(
+                project_root, local_env_file, "exec", "-T", "postgres", "psql",
+                "-v", "ON_ERROR_STOP=1", "--single-transaction", "-U", "aegis", "-d", "aegis",
+            ),
             cwd=project_root,
             input=(root / "database.sql").read_bytes(),
             check=False,
@@ -410,11 +416,14 @@ def run_restore(
             return EXIT_OPERATIONAL_ERROR
         scans = root / "scans"
         if scans.exists():
-            subprocess_module.run(
+            copy = subprocess_module.run(
                 docker_compose_command(project_root, local_env_file, "cp", str(scans), "dashboard:/data/"),
                 cwd=project_root,
                 check=False,
             )
+            if copy.returncode != 0:
+                print("Report restore failed.", file=sys.stderr)
+                return EXIT_OPERATIONAL_ERROR
         return subprocess_module.run(
             docker_compose_command(project_root, local_env_file, "up", "-d", "dashboard", "worker"),
             cwd=project_root,

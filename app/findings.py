@@ -7,16 +7,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .database import USING_POSTGRES, get_connection
+from .finding_queries import FINDING_STATUSES, SEVERITIES, query_findings, query_findings_page
 
 
-FINDING_STATUSES = {
-    "open",
-    "acknowledged",
-    "accepted",
-    "false_positive",
-    "resolved",
-}
-SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
 PRESET_RANK = {"quick": 0, "standard": 1, "deep": 2}
 ACTIVE_TOOLS = {"Ruff", "Semgrep", "OSV", "Secrets", "YARA", "CodeQL"}
 ALLOWED_TRANSITIONS = {
@@ -414,6 +407,8 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
     observed = extract_findings(result)
     now = _now()
     with (nullcontext(connection) if connection is not None else get_connection()) as connection:
+        if not USING_POSTGRES and not connection.in_transaction:
+            connection.execute("BEGIN IMMEDIATE")
         run = connection.execute(
             "SELECT project_id, tenant_id, state, preset, target FROM scan_runs WHERE id = ?",
             (scan_run_id,),
@@ -421,28 +416,42 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
         if not run:
             raise ValueError("Scan run not found.")
         project_id, tenant_id, current_preset = int(run[0]), int(run[1]), str(run[3])
+        if USING_POSTGRES:
+            # Serialize reconciliations before taking a finding snapshot.
+            connection.execute("SELECT id FROM projects WHERE id = ? FOR UPDATE", (project_id,)).fetchone()
+        lock = " FOR UPDATE" if USING_POSTGRES else ""
+        existing_rows = connection.execute(
+            """SELECT id, status, occurrence_count, last_seen_run_id, tool, fingerprint
+               FROM security_findings WHERE project_id = ? ORDER BY id""" + lock,
+            (project_id,),
+        ).fetchall()
+        existing_by_fingerprint = {row[5]: row for row in existing_rows}
+        provenance = {
+            int(row[0]): (int(row[1]), bool(row[2]))
+            for row in connection.execute(
+                """SELECT o.finding_id,
+                          MAX(CASE r.preset WHEN 'deep' THEN 2 WHEN 'standard' THEN 1
+                              WHEN 'quick' THEN 0 ELSE -1 END),
+                          MAX(CASE WHEN o.scan_run_id = ? THEN 1 ELSE 0 END)
+                   FROM finding_occurrences o JOIN scan_runs r ON r.id = o.scan_run_id
+                   WHERE r.project_id = ? GROUP BY o.finding_id""",
+                (scan_run_id, project_id),
+            ).fetchall()
+        }
         research = run[4] == "bac-research"
         observed = [item for item in observed if (item["tool"] == "BAC") == research]
         seen: set[str] = set()
         created = reopened = 0
         for item in observed:
             seen.add(item["fingerprint"])
-            existing = connection.execute(
-                """SELECT id, status, occurrence_count, last_seen_run_id FROM security_findings
-                   WHERE project_id = ? AND fingerprint = ?""",
-                (project_id, item["fingerprint"]),
-            ).fetchone()
+            existing = existing_by_fingerprint.get(item["fingerprint"])
             if existing:
                 if existing[3] is not None and int(existing[3]) > scan_run_id:
                     continue
                 finding_id = int(existing[0])
                 old_status = existing[1]
                 next_status = "open" if old_status == "resolved" and not research else old_status
-                occurrence_exists = connection.execute(
-                    """SELECT 1 FROM finding_occurrences
-                       WHERE finding_id = ? AND scan_run_id = ?""",
-                    (finding_id, scan_run_id),
-                ).fetchone()
+                occurrence_exists = provenance.get(finding_id, (-1, False))[1]
                 connection.execute(
                     """UPDATE security_findings SET tool = ?, rule_id = ?, title = ?,
                        severity = ?, path = ?, line_number = ?, status = ?,
@@ -511,15 +520,38 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
         }
         resolved = 0
         if not research and completed_tools and not result.get("operational_failures"):
-            candidates = connection.execute(
-                """SELECT f.id, f.fingerprint, f.status, f.tool, previous_run.preset,
-                          f.last_seen_run_id, previous_run.result_json
-                   FROM security_findings f
-                   LEFT JOIN scan_runs previous_run ON previous_run.id = f.last_seen_run_id
-                   WHERE f.project_id = ? AND f.status != 'resolved'""",
-                (project_id,),
-            ).fetchall()
-            for finding_id, fingerprint, old_status, tool, previous_preset, last_seen_run_id, previous_result_json in candidates:
+            current_version = result.get("profile_version")
+            report_column = ", result_json" if current_version == 2 else ""
+            candidate_tools = sorted(completed_tools & ACTIVE_TOOLS if current_version == 2 else completed_tools)
+            tool_placeholders = ",".join("?" for _ in candidate_tools)
+            previous_runs = {}
+            previous_rows = connection.execute(
+                f"""SELECT id, preset{report_column} FROM scan_runs
+                    WHERE project_id = ? AND id IN (
+                        SELECT DISTINCT last_seen_run_id FROM security_findings
+                        WHERE project_id = ? AND status != 'resolved'
+                        AND last_seen_run_id < ? AND tool != 'BAC'
+                        AND tool IN ({tool_placeholders})
+                    )""",
+                (project_id, project_id, scan_run_id, *candidate_tools),
+            ).fetchall() if candidate_tools else []
+            for previous_run in previous_rows:
+                previous_result = {}
+                if current_version == 2 and previous_run[2]:
+                    try:
+                        decoded = json.loads(previous_run[2])
+                        if isinstance(decoded, dict):
+                            previous_result = {
+                                field: decoded.get(field)
+                                for field in ("profile_version", "source_scope", "detector_coverage")
+                            }
+                    except (TypeError, ValueError):
+                        pass
+                previous_runs[int(previous_run[0])] = (previous_run[1], previous_result)
+            for existing in existing_rows:
+                finding_id, old_status, _, last_seen_run_id, tool, fingerprint = existing
+                if old_status == "resolved":
+                    continue
                 if tool == "BAC":
                     continue
                 if fingerprint in seen:
@@ -528,13 +560,9 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
                     continue
                 if tool not in completed_tools:
                     continue
-                current_version = result.get("profile_version")
+                previous_preset, previous_result = previous_runs.get(last_seen_run_id, (None, {}))
                 if current_version == 2:
-                    if tool not in ACTIVE_TOOLS or not previous_result_json:
-                        continue
-                    try:
-                        previous_result = json.loads(previous_result_json)
-                    except (TypeError, ValueError):
+                    if tool not in ACTIVE_TOOLS or not previous_result:
                         continue
                     current_coverage = (result.get("detector_coverage") or {}).get(tool)
                     previous_coverage = (previous_result.get("detector_coverage") or {}).get(tool)
@@ -551,17 +579,9 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
                         continue
                 elif current_version is not None:
                     continue
-                highest_observed_rank = PRESET_RANK.get(str(previous_preset), -1)
-                occurrence_presets = connection.execute(
-                    """SELECT scan_runs.preset
-                       FROM finding_occurrences
-                       JOIN scan_runs ON scan_runs.id = finding_occurrences.scan_run_id
-                       WHERE finding_occurrences.finding_id = ?""",
-                    (finding_id,),
-                ).fetchall()
                 highest_observed_rank = max(
-                    highest_observed_rank,
-                    *(PRESET_RANK.get(str(row[0]), -1) for row in occurrence_presets),
+                    PRESET_RANK.get(str(previous_preset), -1),
+                    provenance.get(int(finding_id), (-1, False))[0],
                 )
                 if PRESET_RANK.get(current_preset, -1) < highest_observed_rank:
                     continue
@@ -590,55 +610,31 @@ def list_findings(
     finding_id: int | None = None,
     status: str | None = None,
     severity: str | None = None,
+    search: str | None = None,
     limit: int = 200,
+    offset: int = 0,
 ) -> list[dict]:
-    clauses = ["f.project_id = ?"]
-    parameters: list[Any] = [project_id]
-    if finding_id is not None:
-        clauses.append("f.id = ?")
-        parameters.append(int(finding_id))
-    if status:
-        if status not in FINDING_STATUSES:
-            raise ValueError("Invalid finding status.")
-        clauses.append("f.status = ?")
-        parameters.append(status)
-    if severity:
-        severity = severity.upper()
-        if severity not in SEVERITIES:
-            raise ValueError("Invalid finding severity.")
-        clauses.append("f.severity = ?")
-        parameters.append(severity)
-    parameters.append(max(1, min(int(limit), 500)))
     with get_connection() as connection:
-        rows = connection.execute(
-            f"""SELECT f.id, f.fingerprint, f.tool, f.rule_id, f.title,
-                       f.severity, f.path, f.line_number, f.status, f.owner_id,
-                       u.username, f.due_at, f.ticket_url, f.resolution_note,
-                       f.accepted_until, f.first_seen_run_id, f.last_seen_run_id,
-                       f.first_seen_at, f.last_seen_at, f.occurrence_count,
-                       f.updated_at
-                FROM security_findings f
-                LEFT JOIN auth_users u ON u.id = f.owner_id
-                WHERE {' AND '.join(clauses)}
-                ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
-                         WHEN 'MEDIUM' THEN 2 ELSE 1 END DESC,
-                         f.last_seen_at DESC LIMIT ?""",
-            tuple(parameters),
-        ).fetchall()
-    return [
-        {
-            "id": int(row[0]), "fingerprint": row[1], "tool": row[2],
-            "rule_id": row[3], "title": row[4], "severity": row[5],
-            "path": row[6], "line_number": row[7], "status": row[8],
-            "owner_id": int(row[9]) if row[9] is not None else None,
-            "owner": row[10], "due_at": row[11], "ticket_url": row[12],
-            "resolution_note": row[13], "accepted_until": row[14],
-            "first_seen_run_id": row[15], "last_seen_run_id": row[16],
-            "first_seen_at": row[17], "last_seen_at": row[18],
-            "occurrence_count": int(row[19]), "updated_at": row[20],
-        }
-        for row in rows
-    ]
+        return query_findings(
+            connection, project_id, finding_id=finding_id, status=status,
+            severity=severity, search=search, limit=limit, offset=offset,
+        )
+
+
+def list_findings_page(
+    project_id: int,
+    *,
+    status: str | None = None,
+    severity: str | None = None,
+    search: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict:
+    with get_connection() as connection:
+        return query_findings_page(
+            connection, project_id, status=status, severity=severity,
+            search=search, limit=limit, offset=offset,
+        )
 
 
 def get_finding(project_id: int, finding_id: int) -> dict | None:

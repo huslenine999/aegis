@@ -68,6 +68,14 @@ def test_parse_all_runs_and_preserve_paths(tmp_path: Path) -> None:
     lambda doc: doc["runs"][0].pop("results"),
     lambda doc: doc["runs"][0]["invocations"][0].update(executionSuccessful=False),
     lambda doc: doc["runs"][0]["tool"]["driver"].update(name="Other"),
+    lambda doc: doc.update(runs=[]),
+    lambda doc: doc["runs"].append(None),
+    lambda doc: doc["runs"][0]["results"].append(None),
+    lambda doc: doc["runs"][0]["results"][0].update(ruleIndex=True),
+    lambda doc: doc["runs"][0]["results"][0]["message"].update(text=False),
+    lambda doc: doc["runs"][0]["tool"]["driver"]["rules"][0]["properties"].update(tags="CWE-89"),
+    lambda doc: doc["runs"][0]["results"][0].update(partialFingerprints="invalid"),
+    lambda doc: doc["runs"][0]["results"][0]["codeFlows"][0]["threadFlows"][0]["locations"][0].update(location="invalid"),
     lambda doc: doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"].update(uri="../secret"),
     lambda doc: doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"].update(uri="https://example.com/f"),
 ])
@@ -83,7 +91,8 @@ def test_parse_rejects_incomplete_or_hostile_sarif(tmp_path: Path, mutate) -> No
         codeql_scanner.parse_codeql_sarif(report, source, language="python")
 
 
-def test_run_requires_trusted_runtime_and_raises_on_missing_sarif(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("report_content, message", [(None, "missing SARIF"), ("{", "malformed")])
+def test_run_requires_trusted_runtime_and_rejects_missing_or_malformed_sarif(tmp_path: Path, monkeypatch, report_content, message) -> None:
     source = tmp_path / "source"
     source.mkdir()
     output = tmp_path / "output"
@@ -97,12 +106,14 @@ def test_run_requires_trusted_runtime_and_raises_on_missing_sarif(tmp_path: Path
     def fake_run(command, **kwargs):
         if command[1] == "version":
             kwargs["stdout_sink"].write(b"CodeQL command-line toolchain release 2.20.0\n")
+        if command[1:3] == ["database", "analyze"] and report_content is not None:
+            kwargs["output_path"].write_text(report_content)
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess", fake_run)
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess_to_file", fake_run)
 
-    with pytest.raises(codeql_scanner.CodeQLScanError, match="missing SARIF"):
+    with pytest.raises(codeql_scanner.CodeQLScanError, match=message):
         codeql_scanner.run_codeql_scan(
             source, output, codeql_path=codeql,
             query_suites={"python": suite}, languages=["python"],
@@ -128,6 +139,7 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
     (source / "src" / "app.py").write_text("pass\n")
+    (source / "src" / "index.ts").write_text("const value = 1;\n")
     for ignored in codeql_scanner.IGNORED_DIRS:
         directory = source / ignored
         directory.mkdir()
@@ -144,6 +156,18 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
     monkeypatch.setattr(codeql_scanner.stat, "S_ISSOCK", lambda mode: True)
     commands = []
     scanner_environment = []
+    archives = []
+    decoded = []
+    source_tar = codeql_scanner._source_tar
+    load_json = codeql_scanner.load_bounded_json
+
+    def counted_tar(source, destination):
+        archives.append(destination)
+        source_tar(source, destination)
+
+    def counted_decode(path):
+        decoded.append(path.name)
+        return load_json(path)
 
     def fake_run(command, **kwargs):
         commands.append(command)
@@ -159,22 +183,26 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
         kwargs["stdin"].seek(0)
         with tarfile.open(fileobj=io.BytesIO(source_archive), mode="r") as archive:
             members = archive.getmembers()
-        assert {member.name for member in members} == {"src/app.py"}
+        assert {member.name for member in members} == {"src/app.py", "src/index.ts"}
         assert all(member.isfile() for member in members)
         assert set(kwargs["env"]) == {"PATH", "DOCKER_HOST", "DOCKER_CONFIG"}
         assert "cat > /work/source.tar" in command[-1]
         assert "tar -xf /work/source.tar -C /work/source" in command[-1]
         assert "rm /work/source.tar" in command[-1]
+        language = command[-1].split("--language=", 1)[1].split()[0]
+        uri = "src/app.py" if language == "python" else "src/index.ts"
         kwargs["output_path"].write_text(json.dumps({
-            "version": "2.1.0", "runs": [sarif_run(language="python", results=[sarif_result()])]
+            "version": "2.1.0", "runs": [sarif_run(language=language, results=[sarif_result(uri)])]
         }))
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess", fake_run)
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess_stdout_to_file", fake_scan)
+    monkeypatch.setattr(codeql_scanner, "_source_tar", counted_tar)
+    monkeypatch.setattr(codeql_scanner, "load_bounded_json", counted_decode)
     report = codeql_scanner.run_codeql_scan_isolated(
         source, tmp_path / "output", image=image,
-        query_suites={"python": "codeql/python-queries:codeql-suites/python-security-extended.qls"},
+        query_suites={language: f"codeql/{language}-queries:security.qls" for language in ("python", "javascript-typescript")},
         docker_host=f"unix://{socket_path}", docker_path=docker,
     )
     command = next(item for item in commands if "database create" in " ".join(item))
@@ -187,6 +215,10 @@ def test_isolated_runner_uses_bounded_offline_container_and_preserves_evidence(t
     assert not any(item.startswith("-v") or item.startswith("--volume") for item in command)
     assert all("DATABASE_URL" not in env and "AEGIS_EVIDENCE_SIGNING_KEY" not in env for env in scanner_environment)
     assert report["coverage"]["isolation"] == "verified"
+    assert report["coverage"]["languages"] == ["javascript-typescript", "python"]
+    assert len(archives) == 1
+    assert sorted(decoded) == ["javascript-typescript.sarif", "python.sarif"]
+    assert {finding["filename"] for finding in report["findings"]} == {"src/app.py", "src/index.ts"}
     assert report["findings"][0]["rule_id"] == "py/sql-injection"
     assert (tmp_path / "output" / "codeql.sarif").exists()
 
@@ -205,6 +237,12 @@ def test_run_preserves_all_languages_and_never_claims_isolation(tmp_path: Path, 
     for suite in suites.values():
         suite.write_text("- include: test\n", encoding="utf-8")
     commands = []
+    decoded = []
+    load_json = codeql_scanner.load_bounded_json
+
+    def counted_decode(path):
+        decoded.append(path.name)
+        return load_json(path)
 
     def fake_run(command, **kwargs):
         commands.append(command)
@@ -220,11 +258,13 @@ def test_run_preserves_all_languages_and_never_claims_isolation(tmp_path: Path, 
 
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess", fake_run)
     monkeypatch.setattr(codeql_scanner, "run_bounded_subprocess_to_file", fake_run)
+    monkeypatch.setattr(codeql_scanner, "load_bounded_json", counted_decode)
     output = tmp_path / "output"
     report = codeql_scanner.run_codeql_scan(source, output, codeql_path=codeql, query_suites=suites)
 
     assert report["coverage"] == {"complete": True, "languages": ["javascript-typescript", "python"], "source_scope": "repository", "isolation": "unverified"}
     assert len(report["findings"]) == 2
+    assert sorted(decoded) == ["javascript-typescript.sarif", "python.sarif"]
     assert len(json.loads((output / "codeql.sarif").read_text())["runs"]) == 2
     assert json.loads((output / "codeql-report.json").read_text())["findings"] == report["findings"]
     assert all("--build-mode=none" in command for command in commands if command[1:3] == ["database", "create"])
@@ -248,3 +288,15 @@ def test_parse_accepts_cli_sarif_without_optional_invocations(tmp_path: Path) ->
     report = tmp_path / "raw.sarif"
     report.write_text(json.dumps({"version": "2.1.0", "runs": [run]}), encoding="utf-8")
     assert len(codeql_scanner.parse_codeql_sarif(report, source, language="python")) == 1
+
+
+@pytest.mark.parametrize("case", ["missing", "oversized", "unsupported"])
+def test_public_parser_translates_file_errors_and_rejects_unsupported_languages(tmp_path, monkeypatch, case):
+    report = tmp_path / "raw.sarif"
+    if case != "missing":
+        report.write_bytes(b"x" * 33)
+    monkeypatch.setenv("AEGIS_MAX_PARSER_INPUT_BYTES", "32")
+    with pytest.raises(codeql_scanner.CodeQLScanError):
+        codeql_scanner.parse_codeql_sarif(
+            report, tmp_path, language="java" if case == "unsupported" else "python"
+        )
