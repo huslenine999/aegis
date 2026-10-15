@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "corpus_id": "aegis-bac-v1",
-  "description": "Owned synthetic BAC lab. Each case starts from reset data. Private -1 records belong to development; private -2 records belong to evaluation. The evaluation split is not an independent external dataset.",
+  "corpus_id": "aegis-bac-v2",
+  "description": "Owned synthetic BAC lab. Each case starts from reset data. Private -1 records belong to development; private -2 records belong to evaluation. The evaluation split is not an independent external dataset. v2 adds collection listing (unfiltered list), export (leak in a 403 error body), and rename (write before the ownership check).",
   "cases": [
     {"id": "dev-alice-own-read", "split": "development", "operation": "read", "actor": "alice", "resource": "alice-private-1", "expected_allowed": true},
     {"id": "dev-bob-cross-read", "split": "development", "operation": "read", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
@@ -15,6 +15,14 @@
     {"id": "dev-bob-cross-delete", "split": "development", "operation": "delete", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
     {"id": "dev-alice-admin-read", "split": "development", "operation": "admin-read", "actor": "alice", "resource": "users", "expected_allowed": false},
     {"id": "dev-admin-disable-bob", "split": "development", "operation": "admin-disable", "actor": "admin", "resource": "bob", "expected_allowed": true},
+    {"id": "dev-alice-own-list", "split": "development", "operation": "list", "actor": "alice", "resource": "alice-private-1", "expected_allowed": true},
+    {"id": "dev-bob-cross-list", "split": "development", "operation": "list", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
+    {"id": "dev-guest-public-list", "split": "development", "operation": "list", "actor": "guest", "resource": "bob-public", "expected_allowed": true},
+    {"id": "dev-alice-own-export", "split": "development", "operation": "export", "actor": "alice", "resource": "alice-private-1", "expected_allowed": true},
+    {"id": "dev-bob-cross-export", "split": "development", "operation": "export", "actor": "bob", "resource": "alice-private-1", "expected_allowed": false},
+    {"id": "dev-guest-private-export", "split": "development", "operation": "export", "actor": "guest", "resource": "bob-private-1", "expected_allowed": false},
+    {"id": "dev-bob-own-rename", "split": "development", "operation": "rename", "actor": "bob", "resource": "bob-private-1", "expected_allowed": true},
+    {"id": "dev-alice-cross-rename", "split": "development", "operation": "rename", "actor": "alice", "resource": "bob-private-1", "expected_allowed": false},
     {"id": "eval-bob-own-read", "split": "evaluation", "operation": "read", "actor": "bob", "resource": "bob-private-2", "expected_allowed": true},
     {"id": "eval-alice-cross-read", "split": "evaluation", "operation": "read", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
     {"id": "eval-guest-private-preview", "split": "evaluation", "operation": "preview", "actor": "guest", "resource": "alice-private-2", "expected_allowed": false},
@@ -26,6 +34,14 @@
     {"id": "eval-alice-own-delete", "split": "evaluation", "operation": "delete", "actor": "alice", "resource": "alice-private-2", "expected_allowed": true},
     {"id": "eval-alice-cross-delete", "split": "evaluation", "operation": "delete", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
     {"id": "eval-admin-user-read", "split": "evaluation", "operation": "admin-read", "actor": "admin", "resource": "users", "expected_allowed": true},
-    {"id": "eval-bob-admin-disable-alice", "split": "evaluation", "operation": "admin-disable", "actor": "bob", "resource": "alice", "expected_allowed": false}
+    {"id": "eval-bob-admin-disable-alice", "split": "evaluation", "operation": "admin-disable", "actor": "bob", "resource": "alice", "expected_allowed": false},
+    {"id": "eval-bob-own-list", "split": "evaluation", "operation": "list", "actor": "bob", "resource": "bob-private-2", "expected_allowed": true},
+    {"id": "eval-alice-cross-list", "split": "evaluation", "operation": "list", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
+    {"id": "eval-guest-private-list", "split": "evaluation", "operation": "list", "actor": "guest", "resource": "alice-private-2", "expected_allowed": false},
+    {"id": "eval-admin-private-export", "split": "evaluation", "operation": "export", "actor": "admin", "resource": "alice-private-2", "expected_allowed": true},
+    {"id": "eval-alice-cross-export", "split": "evaluation", "operation": "export", "actor": "alice", "resource": "bob-private-2", "expected_allowed": false},
+    {"id": "eval-bob-own-export", "split": "evaluation", "operation": "export", "actor": "bob", "resource": "bob-private-2", "expected_allowed": true},
+    {"id": "eval-alice-own-rename", "split": "evaluation", "operation": "rename", "actor": "alice", "resource": "alice-private-2", "expected_allowed": true},
+    {"id": "eval-bob-cross-rename", "split": "evaluation", "operation": "rename", "actor": "bob", "resource": "alice-private-2", "expected_allowed": false}
   ]
 }

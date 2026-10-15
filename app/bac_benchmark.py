@@ -16,6 +16,14 @@ from .version import get_package_version
 
 PREDICTIONS = {"violation", "no_violation", "inconclusive"}
 BASELINE = "http-status-only"
+# "enhanced" is the instrumented oracle; the other methods see only HTTP responses.
+METHODS = {
+    "enhanced": "prediction",
+    BASELINE: "baseline_prediction",
+    "differential": "differential_prediction",
+    "content-leak": "content_leak_prediction",
+}
+_MIN_LEAK_LENGTH = 8
 
 
 def classification_metrics(rows: list[dict]) -> dict:
@@ -60,6 +68,60 @@ def status_only_prediction(result: dict) -> str:
     return "violation" if not result["expected_allowed"] and 200 <= status < 300 else "no_violation"
 
 
+def _black_box_inputs(result: dict) -> tuple[dict, dict] | None:
+    """Return the attacker probe and owner reference responses, if both completed."""
+    evidence = result.get("evidence") or {}
+    probe, owner = evidence.get("probe"), evidence.get("baseline")
+    if result.get("status") == "inconclusive" or not isinstance(probe, dict) or not isinstance(owner, dict):
+        return None
+    if type(probe.get("status_code")) is not int or not isinstance(owner.get("body"), dict):
+        return None
+    return probe, owner
+
+
+def differential_prediction(result: dict) -> str:
+    """Autorize-style: a denied request whose response equals the owner's response bypassed enforcement."""
+    if result.get("status") != "inconclusive" and result.get("expected_allowed"):
+        return "no_violation"
+    observed = _black_box_inputs(result)
+    if observed is None:
+        return "inconclusive"
+    probe, owner = observed
+    same = probe["status_code"] == owner.get("status_code") and canonical_json({"v": probe.get("body")}) == canonical_json({"v": owner["body"]})
+    return "violation" if same else "no_violation"
+
+
+def _target_record(value: object, resource: str) -> dict | None:
+    if isinstance(value, dict):
+        if value.get("id") == resource:
+            return value
+        value = list(value.values())
+    if isinstance(value, list):
+        return next((found for item in value if (found := _target_record(item, resource)) is not None), None)
+    return None
+
+
+def _strings(value: object) -> set[str]:
+    if isinstance(value, str):
+        return {value}
+    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    return set().union(*(_strings(item) for item in items))
+
+
+def content_leak_prediction(result: dict) -> str:
+    """Report a denied request whose response, of any status, repeats a value from the owner's view of the target."""
+    if result.get("status") != "inconclusive" and result.get("expected_allowed"):
+        return "no_violation"
+    observed = _black_box_inputs(result)
+    if observed is None:
+        return "inconclusive"
+    probe, owner = observed
+    reference = _target_record(owner["body"], result["resource"]) or owner["body"]
+    secrets = {value for value in _strings(reference)
+               if len(value) >= _MIN_LEAK_LENGTH and value not in {result["resource"], result["actor"]}}
+    return "violation" if secrets & _strings(probe.get("body")) else "no_violation"
+
+
 def _metric_groups(rows: list[dict], prediction_key: str) -> dict:
     scored_rows = [{**row, "prediction": row[prediction_key]} for row in rows]
     grouped = {"overall": classification_metrics(scored_rows)}
@@ -74,8 +136,9 @@ def _metric_groups(rows: list[dict], prediction_key: str) -> dict:
 def benchmark_measurements(rows: list[dict]) -> dict:
     """Keep repeated observations separate from distinct seeded scenarios."""
     return {
-        "metrics": {"enhanced": _metric_groups(rows, "prediction"),
-                    BASELINE: _metric_groups(rows, "baseline_prediction")},
+        # Older summaries lack the black-box columns; score only methods every row carries.
+        "metrics": {method: _metric_groups(rows, key) for method, key in METHODS.items()
+                    if all(key in row for row in rows)},
         "sample_counts": {
             "distinct_scenarios": len({row["id"] for row in rows}),
             "distinct_mode_cases": len({(row["mode"], row["id"]) for row in rows}),
@@ -110,6 +173,8 @@ def _paired_rows(report: dict, cases: list[dict], mode: str, repeat: int) -> lis
             "expected_violation": expected_violation(mode, case),
             "prediction": result["status"],
             "baseline_prediction": status_only_prediction(result),
+            "differential_prediction": differential_prediction(result),
+            "content_leak_prediction": content_leak_prediction(result),
         })
     return rows
 
@@ -193,6 +258,8 @@ def run_benchmark(
             "aegis_version": get_package_version(), "python_version": platform.python_version(),
             "benchmark_version": 1, "baseline": BASELINE,
             "baseline_kind": "same-trace ablation", "ground_truth": "seeded owned lab permissions",
+            "black_box_methods": ["http-status-only", "differential", "content-leak"],
+            "reference_method": "enhanced (instrumented oracle; validates the seeded labels)",
             "scope": "One synthetic lab corpus; evaluation split is not external unseen validation.",
         },
         **({"study_protocol": {"definition": study,

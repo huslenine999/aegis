@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from .artifact_storage import ArtifactLimitError, artifact_limits, validate_artifact_sizes
-from .bac import evaluate_observation
+from .bac import evaluate_observation, probe_target
 from .bac_config import ACTORS, DOCUMENTS, MAX_CASES, MAX_MATRIX_BYTES, SPLITS, select_cases, validate_matrix
 from .evidence import canonical_json, verify_manifest
 
@@ -271,19 +271,10 @@ def _trace(value: Any, case_id: str) -> dict:
     return trace
 
 
-def _probe_target(case: dict) -> tuple[str, str]:
-    operation, resource = case["operation"], case["resource"]
-    if operation == "admin-read":
-        return "GET", "/admin/users"
-    if operation == "admin-disable":
-        return "POST", f"/admin/users/{resource}/disable"
-    return {"read": "GET", "preview": "GET", "update": "PATCH", "delete": "DELETE"}[operation], f"/documents/{resource}" + ("/preview" if operation == "preview" else "")
-
-
 def _probe(trace: dict, case: dict, actor: str) -> str:
-    if trace["actor"] != actor or (trace["method"], trace["path"]) != _probe_target(case):
+    if trace["actor"] != actor or (trace["method"], trace["path"]) != probe_target(case):
         raise ValueError("BAC probe actor or operation does not match its matrix case.")
-    if case["operation"] == "update":
+    if case["operation"] in {"update", "rename"}:
         body = _object(trace["request_body"], {"title"}, "update request")
         marker = _text(body["title"], "update marker", 200)
         if not marker.strip():
@@ -312,7 +303,7 @@ def _events(value: Any, case: dict) -> list[dict]:
         _http_status(event["status_code"])
         if event["case_id"] != case["id"] or not isinstance(event["actor"], str) or event["actor"] not in ACTORS:
             raise ValueError("BAC server event does not match its case or actor.")
-        if (event["method"], event["path"]) not in (_probe_target(case), ("GET", "/me")):
+        if (event["method"], event["path"]) not in (probe_target(case), ("GET", "/me")):
             raise ValueError("BAC server event does not match an owned lab operation.")
         request_ids.append(event["request_id"])
     if len(set(request_ids)) != len(request_ids):

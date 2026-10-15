@@ -23,7 +23,9 @@ MAX_MATRIX_BYTES = 256 * 1024
 MAX_PROTOCOL_BYTES = MAX_MATRIX_BYTES + 16 * 1024
 MAX_CASES = 64
 ACTORS = frozenset({"alice", "bob", "admin", "guest"})
-OPERATIONS = frozenset({"read", "preview", "update", "delete", "admin-read", "admin-disable"})
+OPERATIONS = frozenset({
+    "read", "preview", "list", "export", "update", "rename", "delete", "admin-read", "admin-disable",
+})
 DOCUMENTS = frozenset({
     "alice-private-1", "bob-private-1", "alice-private-2", "bob-private-2",
     "alice-public", "bob-public",
@@ -80,7 +82,7 @@ def intended_permission(case: dict) -> bool:
         return True
     if case["operation"].startswith("admin-"):
         return False
-    if case["operation"] in {"read", "preview"} and case["resource"].endswith("-public"):
+    if case["operation"] in {"read", "preview", "list", "export"} and case["resource"].endswith("-public"):
         return True
     return case["actor"] != "guest" and case["resource"].split("-", 1)[0] == case["actor"]
 
@@ -88,7 +90,7 @@ def intended_permission(case: dict) -> bool:
 def load_matrix(path: str | Path | None = None) -> dict:
     if path is not None:
         return validate_matrix(load_bounded_json(Path(path).expanduser(), max_bytes=MAX_MATRIX_BYTES))
-    with as_file(files("rules").joinpath("bac-matrix-v1.json")) as selected:
+    with as_file(files("rules").joinpath("bac-matrix-v2.json")) as selected:
         return validate_matrix(load_bounded_json(selected, max_bytes=MAX_MATRIX_BYTES))
 
 

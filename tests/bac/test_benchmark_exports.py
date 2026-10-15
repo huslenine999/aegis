@@ -29,7 +29,7 @@ METRIC_FIELDS = (
 CASE_FIELDS = (
     "trial_run_id", "mode", "repeat", "id", "split", "actor", "operation", "resource",
     "expected_allowed", "expected_violation", "prediction", "baseline_prediction",
-    "http_status", "duration_seconds", "reason",
+    "differential_prediction", "content_leak_prediction", "http_status", "duration_seconds", "reason",
 )
 SAMPLE_COUNTS = {"distinct_scenarios": 3, "distinct_mode_cases": 4, "attempted_observations": 6}
 
@@ -130,7 +130,7 @@ def test_benchmark_csv_covers_every_group_and_preserves_full_precision_and_ident
     assert len(case_rows) == len(report["results"])
     for row, observation in zip(case_rows, report["results"]):
         for field in CASE_FIELDS:
-            expected_value = observation[field]
+            expected_value = observation.get(field)
             assert row[field].lower() == ("" if expected_value is None else str(expected_value).lower())
         assert row["benchmark_run_id"] == report["run_id"]
         assert row["corpus_id"] == report["corpus_id"]

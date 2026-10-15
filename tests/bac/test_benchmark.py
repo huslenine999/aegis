@@ -395,17 +395,78 @@ def test_benchmark_creates_unique_directory_and_preserves_existing_files(tmp_pat
 def test_default_corpus_contains_independent_splits_and_both_permission_labels():
     import json
 
-    matrix = json.loads((Path(__file__).resolve().parents[2] / "rules" / "bac-matrix-v1.json").read_text())
+    matrix = json.loads((Path(__file__).resolve().parents[2] / "rules" / "bac-matrix-v2.json").read_text())
     cases = matrix["cases"]
     assert matrix["schema_version"] == 1
-    assert len(cases) == 24
+    assert len(cases) == 40
     assert len({case["id"] for case in cases}) == len(cases)
     for split, suffix in (("development", "-1"), ("evaluation", "-2")):
         selected = [case for case in cases if case["split"] == split]
-        assert len(selected) == 12
+        assert len(selected) == 20
         assert {case["expected_allowed"] for case in selected} == {True, False}
         assert {case["operation"] for case in selected} == {
-            "read", "preview", "update", "delete", "admin-read", "admin-disable"
+            "read", "preview", "list", "export", "update", "rename", "delete", "admin-read", "admin-disable"
         }
         assert all(case["resource"].endswith(suffix) for case in selected
                    if "private" in case["resource"])
+
+
+def _black_box_result(probe_status, probe_body, owner_body, *, resource="alice-private-2", owner_status=200):
+    return {
+        "status": "no_violation", "expected_allowed": False, "actor": "bob", "resource": resource,
+        "evidence": {"probe": {"status_code": probe_status, "body": probe_body},
+                     "baseline": {"status_code": owner_status, "body": owner_body}},
+    }
+
+
+OWNER_VIEW = {"id": "alice-private-2", "title": "Alice private-2 document", "content": "synthetic-canary:alice-private-2"}
+
+
+@pytest.mark.parametrize("probe_status, probe_body, differential, leak", [
+    (200, OWNER_VIEW, "violation", "violation"),
+    (200, {"id": "alice-private-2", "title": "Alice private-2 document"}, "no_violation", "violation"),
+    (403, {"detail": "denied", "document": OWNER_VIEW}, "no_violation", "violation"),
+    (403, {"detail": "Document ownership is required"}, "no_violation", "no_violation"),
+])
+def test_black_box_methods_use_only_owner_and_attacker_responses(probe_status, probe_body, differential, leak):
+    from app.bac_benchmark import content_leak_prediction, differential_prediction
+
+    result = _black_box_result(probe_status, probe_body, OWNER_VIEW)
+    assert differential_prediction(result) == differential
+    assert content_leak_prediction(result) == leak
+
+
+def test_content_leak_compares_the_targeted_record_inside_collections():
+    from app.bac_benchmark import content_leak_prediction
+
+    shared = {"id": "alice-public", "title": "Alice public document", "content": "synthetic-canary:alice-public"}
+    owner = {"documents": [OWNER_VIEW, shared]}
+    assert content_leak_prediction(_black_box_result(200, {"documents": [shared]}, owner)) == "no_violation"
+    assert content_leak_prediction(_black_box_result(200, {"documents": [shared, OWNER_VIEW]}, owner)) == "violation"
+
+
+def test_black_box_methods_skip_allowed_controls_and_missing_evidence():
+    from app.bac_benchmark import content_leak_prediction, differential_prediction
+
+    allowed = {"status": "no_violation", "expected_allowed": True, "evidence": {}}
+    incomplete = {**_black_box_result(403, {}, OWNER_VIEW), "status": "inconclusive"}
+    for method in (differential_prediction, content_leak_prediction):
+        assert method(allowed) == "no_violation"
+        assert method(incomplete) == "inconclusive"
+        assert method({**incomplete, "status": "no_violation", "evidence": {}}) == "inconclusive"
+
+
+def test_live_corpus_separates_black_box_failure_modes(tmp_path):
+    from app.bac_config import load_matrix
+
+    report = run_benchmark(matrix=load_matrix(), split="evaluation", repeats=1, output_dir=tmp_path)
+    vulnerable = {row["operation"]: row for row in report["results"]
+                  if row["mode"] == "vulnerable" and row["expected_violation"]}
+    assert all(row["prediction"] == "violation" for row in vulnerable.values())
+    assert vulnerable["export"]["http_status"] == vulnerable["rename"]["http_status"] == 403
+    assert vulnerable["export"]["baseline_prediction"] == vulnerable["rename"]["baseline_prediction"] == "no_violation"
+    assert vulnerable["export"]["content_leak_prediction"] == "violation"
+    assert vulnerable["rename"]["content_leak_prediction"] == vulnerable["rename"]["differential_prediction"] == "no_violation"
+    fixed_list = next(row for row in report["results"] if row["mode"] == "fixed" and row["id"] == "eval-alice-cross-list")
+    assert fixed_list["baseline_prediction"] == "violation" and fixed_list["differential_prediction"] == "no_violation"
+    assert set(report["metrics"]) == {"enhanced", "http-status-only", "differential", "content-leak"}

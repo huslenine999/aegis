@@ -60,7 +60,7 @@ def test_seed_is_reproducible_and_instances_are_isolated(clients, credentials, c
     first, second = clients(), clients("vulnerable")
     first_info = first.get("/_research/info", headers=research_headers(control_token)).json()
     second_info = second.get("/_research/info", headers=research_headers(control_token)).json()
-    assert first_info["lab"] == "aegis-bac-v1"
+    assert first_info["lab"] == "aegis-bac-v2"
     assert first_info["mode"] == "fixed"
     assert second_info["mode"] == "vulnerable"
     assert first_info["instance_id"] != second_info["instance_id"]
@@ -372,3 +372,34 @@ def test_import_does_not_load_production_application_or_database():
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("mode, leaked", [("fixed", False), ("vulnerable", True)])
+def test_export_denial_leaks_only_in_vulnerable_error_body(clients, credentials, mode, leaked):
+    client = clients(mode)
+    own = client.get("/documents/alice-private-2/export", headers=auth(credentials, "alice"))
+    denied = client.get("/documents/alice-private-2/export", headers=auth(credentials, "bob"))
+    guest = client.get("/documents/alice-private-2/export")
+    assert own.status_code == 200 and own.json()["content"].startswith("synthetic-canary:")
+    assert denied.status_code == guest.status_code == 403
+    assert ("document" in denied.json()) is leaked
+    assert "document" not in guest.json()
+
+
+@pytest.mark.parametrize("mode, written", [("fixed", False), ("vulnerable", True)])
+def test_rename_denial_writes_only_in_vulnerable_mode(clients, credentials, control_token, mode, written):
+    client = clients(mode)
+    response = client.put("/documents/alice-private-2/title", json={"title": "marker"}, headers=auth(credentials, "bob"))
+    assert response.status_code == 403
+    assert (snapshot(client, control_token)["documents"]["alice-private-2"]["title"] == "marker") is written
+    assert client.put("/documents/alice-private-2/title", json={"title": "own"}, headers=auth(credentials, "alice")).json()["title"] == "own"
+
+
+@pytest.mark.parametrize("mode, visible", [("fixed", False), ("vulnerable", True)])
+def test_list_filters_other_users_documents_only_when_fixed(clients, credentials, mode, visible):
+    client = clients(mode)
+    listed = {item["id"] for item in client.get("/documents", headers=auth(credentials, "bob")).json()["documents"]}
+    guest = {item["id"] for item in client.get("/documents").json()["documents"]}
+    assert {"bob-private-1", "bob-private-2", "alice-public", "bob-public"} <= listed
+    assert ("alice-private-2" in listed) is visible
+    assert guest == {"alice-public", "bob-public"}

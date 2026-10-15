@@ -16,12 +16,17 @@ computer. It starts automatically for a test and stops afterward.
 
 We are studying this question:
 
-> Does checking response content and actual application changes produce fewer
-> incorrect access-control findings than checking HTTP status alone?
+> How closely do black-box ways of judging API responses match the true answer,
+> and which kinds of API behaviour fool each one?
+
+The lab knows the true answer because it can look inside itself (hidden markers
+in private records, and database snapshots before and after each request). We
+call that the **oracle**. A real tester can only see responses, so we measure
+three response-only methods against the oracle.
 
 Aegis is the tool. Our thesis is the study: define the tests, collect evidence,
 measure results, explain mistakes, and state the limits. We are not evaluating
-all of Aegis's scanners, an AI detector, or cloud deployment in this experiment.
+all of Aegis's scanners or an AI detector.
 
 ## 2. Understand one example
 
@@ -39,9 +44,16 @@ private content was exposed. HTTP `403` alone does not prove that nothing
 leaked either. We must inspect the returned content and, for edits or deletion,
 the actual before/after state.
 
-The simple comparison method flags a forbidden request that returns a `2xx`
-status. Aegis checks the protected content or state change. Both methods use
-the same recorded requests; this is not a comparison against another scanner.
+The three black-box methods, all scored on the same recorded requests:
+
+- **HTTP-status-only:** a forbidden request that got a `2xx` is a violation.
+- **Differential:** a forbidden request that got exactly the same response as
+  the owner got is a violation.
+- **Content-leak:** a forbidden request whose response repeats text from the
+  owner's view of that record is a violation, whatever the status code.
+
+The oracle (shown as `enhanced` in reports) checks the hidden marker or the
+before/after state. None of these is another company's scanner.
 
 ## 3. Words you will see
 
@@ -50,28 +62,31 @@ the same recorded requests; this is not a comparison against another scanner.
 - **Permission matrix:** a list saying who may perform each action.
 - **Case:** one actor/action/resource scenario from that list.
 - **Ground truth:** the known answer, established from the lab's rules and
-  deliberately introduced bugs, not from Aegis's prediction.
+  deliberately introduced bugs. The oracle must agree with it.
+- **Oracle:** the lab's inside view (markers and snapshots) used to check answers.
+- **Black-box method:** a way of judging a response that a real tester could use.
 - **Evidence:** the request, response, before/after state, and server events.
 - **False positive:** a reported violation that did not actually occur.
 - **False negative:** a real violation that the method missed.
 - **Inconclusive:** the test could not establish an outcome. It does not mean safe.
 
-## 4. What the four development phases added
+## 4. The five bug patterns
 
-1. **Import:** put verified individual lab reports into Aegis project history.
-2. **Review:** inspect the evidence explaining each case in the dashboard.
-3. **Measure:** export comparison tables and CSV files for thesis analysis.
-4. **Freeze:** record the study inputs and software versions/hashes, then reject
-   a final run if they no longer match. This is a consistency check, not proof
-   that the experiment executed or formal academic preregistration.
+| Pattern | Route | What goes wrong in the vulnerable version |
+| --- | --- | --- |
+| Missing check | read, update, delete, admin routes | No ownership or role check |
+| Masked response | preview | (Fixed version) returns 200 with only ID and title |
+| Unfiltered collection | list | Everyone's documents are listed |
+| Leak in an error | export | Says 403, but the error body contains the record |
+| Write before check | rename | Saves the change, then says 403 |
 
-The first exercise uses report files. Dashboard import/review is optional and
-requires the team lead to configure signer trust and project access separately.
+Before the exercise, guess which black-box method each pattern will fool. Check
+your guesses in step C.
 
 ## 5. Get the right software
 
 Ask the team lead for the source copy containing `app/bac.py` and
-`rules/bac-matrix-v1.json`. An older GitHub checkout or installed package may
+`rules/bac-matrix-v2.json`. An older GitHub checkout or installed package may
 not include BAC. Do not assume that the version number alone identifies the
 right code.
 
@@ -116,7 +131,7 @@ uv run --locked aegis bac run --mode fixed --split development --output .aegis/t
 ```
 
 `fixed` selects the version with the seeded authorization bugs repaired.
-`development` selects the 12 practice cases. `--output` says where to save the
+`development` selects the 20 practice cases. `--output` says where to save the
 report files. The lab starts and stops automatically.
 
 A complete run should print `Aegis BAC run: allowed` and a manifest path. Here,
@@ -162,25 +177,30 @@ Aegis refuses to replace a nonempty report folder. Preserve the old reports.
 uv run --locked aegis bac benchmark --split development --repeats 1 --output .aegis/team-training/benchmarks
 ```
 
-This runs both versions, then compares Aegis's evidence-based classification
-with the HTTP-status-only method. Each benchmark creates a new experiment
+This runs both versions, then compares the oracle with the three black-box
+methods. Each benchmark creates a new experiment
 folder. Use the printed manifest path to locate its `summary` folder.
 
-For a benchmark, `allowed`/exit code `0` means Aegis's completed classifications
-match the seeded answers. The HTTP-status-only method can still make mistakes.
-Exit code `1` means Aegis made a classification error; `2` means incomplete
+For a benchmark, `allowed`/exit code `0` means the oracle's completed
+classifications match the seeded answers. The black-box methods can still make
+mistakes; that is what we study. Exit code `1` means the oracle disagreed with
+the seeded answers (a lab defect); `2` means incomplete
 testing or an operational error. Neither result approves an application release.
 
-There are 12 distinct practice scenarios. Testing each in both versions gives
-24 version/scenario combinations and 24 attempts with one repetition. These
-are not 24 independent bugs.
+There are 20 distinct practice scenarios. Testing each in both versions gives
+40 version/scenario combinations and 40 attempts with one repetition. These
+are not 40 independent bugs.
+
+In `report.html`, look at the method comparison grouped by operation. Which
+patterns produced false positives or false negatives for each method? Were your
+guesses right?
 
 ## 7. Read the evidence and data
 
 Start with `summary/report.html`, then inspect these files:
 
-- `case-results.csv`: one row per attempt, including the known answer and both
-  methods' predictions. Use it to explain a particular mistake.
+- `case-results.csv`: one row per attempt, including the known answer, the
+  oracle, and each black-box method's prediction. Use it to explain a particular mistake.
 - `metrics.csv`: correct detections, false alarms, missed bugs, and rates.
 - `report.json`: the complete machine-readable report and measurements.
 - `evidence.json`: recorded requests, responses, state snapshots, and case IDs.
@@ -213,20 +233,22 @@ Each member should fill these in from their own training run:
 - Intended permission: allowed or denied?
 - Fixed outcome and supporting evidence:
 - Vulnerable outcome and supporting evidence:
-- HTTP-status-only prediction and why it may be wrong:
+- HTTP-status-only, differential, and content-leak predictions, and why any is wrong:
 - Probe request ID and matching server event:
 
 Then answer: Why can two HTTP `200` responses have different security outcomes?
-Why does an inconclusive test not prove safety? What evidence would establish
-that a forbidden edit actually changed a document?
+Why can a `403` still be a violation (see `dev-bob-cross-export` and
+`dev-alice-cross-rename`)? Why does an inconclusive test not prove safety? Why
+can no response-only method catch the rename bug?
 
 ## 9. Team responsibilities and the next step
 
 - **Red teaming:** check permission scenarios and seeded bugs; review attack cases.
 - **Forensics:** check event correlation, evidence completeness, redaction, and
   explain several cases from the saved records.
-- **Cloud security:** maintain local isolation, resets, version records, and
-  reproducible runs. Cloud deployment is not required for this study.
+- **Cloud security:** containerized, isolated deployment of the lab and of
+  external vulnerable APIs (OWASP crAPI, VAmPI); resets, version records, and
+  reproducible runs.
 
 This exercise is training, not the final thesis dataset. Next, agree on a
 one-page study plan with your professor: the question, scenarios, comparison,
@@ -234,14 +256,15 @@ measurements, limitations, and each member's work. Independently check the
 known answers before scoring the detector. Finish code and dependency decisions
 before freezing the final evaluation. Do not invent outcomes or hide failures.
 
-The built-in corpus has 12 development and 12 evaluation scenarios. A final
-evaluation with three repetitions has 12 evaluation scenarios, 24
-version/scenario combinations, and 72 attempts. Both splits use the same lab
+The built-in corpus has 20 development and 20 evaluation scenarios. A final
+evaluation with three repetitions has 20 evaluation scenarios, 40
+version/scenario combinations, and 120 attempts. Both splits use the same lab
 implementations; they do not establish accuracy on independent real
 applications.
 
-Read [the full research protocol](BAC_RESEARCH.md) for freezing, signatures,
-dashboard imports, and formal evaluation. The published development signing
+Read [the research protocol](BAC_RESEARCH.md) for the study design and
+[operations](BAC_OPERATIONS.md) for freezing, signatures, dashboard imports, and
+evidence review. The published development signing
 key supports local integrity checks only; a signature does not prove the
 results are correct or identify a trusted researcher.
 

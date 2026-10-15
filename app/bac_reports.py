@@ -35,11 +35,13 @@ _RATE_FIELDS = frozenset({"coverage", "precision", "recall", "false_positive_rat
 _BENCHMARK_CASE_COLUMNS = (
     ("id", "Case"), ("mode", "Mode"), ("repeat", "Repeat"), ("trial_run_id", "Trial run"),
     ("actor", "Actor"), ("operation", "Operation"), ("resource", "Resource"),
-    ("expected_violation", "Seeded violation"), ("prediction", "Enhanced"),
-    ("baseline_prediction", "HTTP-status-only"), ("http_status", "HTTP status"), ("reason", "Reason"),
+    ("expected_violation", "Seeded violation"), ("prediction", "Oracle (enhanced)"),
+    ("baseline_prediction", "HTTP-status-only"), ("differential_prediction", "Differential"),
+    ("content_leak_prediction", "Content-leak"), ("http_status", "HTTP status"), ("reason", "Reason"),
 )
 _BENCHMARK_SCOPE = (
-    "HTTP-status-only is a same-trace ablation, not an independent scanner. "
+    "Enhanced is the instrumented oracle (private markers and state snapshots); it validates the seeded labels. "
+    "HTTP-status-only, differential, and content-leak are black-box methods; each is a same-trace ablation, not an independent scanner. "
     "One synthetic lab corpus; repeats are not independent samples or evidence of real-world accuracy. "
     "Undefined rates have no denominator; accuracy excludes inconclusive attempts, so report coverage alongside it."
 )
@@ -163,7 +165,8 @@ def _benchmark_csvs(report: dict) -> dict[str, str]:
         ),
         "case-results.csv": _csv(
             (*identity, "trial_run_id", "mode", "repeat", "id", "split", "actor", "operation", "resource",
-             "expected_allowed", "expected_violation", "prediction", "baseline_prediction", "http_status",
+             "expected_allowed", "expected_violation", "prediction", "baseline_prediction",
+             "differential_prediction", "content_leak_prediction", "http_status",
              "duration_seconds", "reason"),
             [{**row, **identity} for row in report.get("results", [])],
         ),

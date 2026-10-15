@@ -119,7 +119,7 @@ def create_bac_app(*, mode: str, tokens: Mapping[str, str], control_token: str, 
     async def audit_business_requests(request: Request, call_next):
         nonlocal events
         path = request.url.path
-        business_request = path == "/me" or path.startswith(("/documents/", "/admin/"))
+        business_request = path in {"/me", "/documents"} or path.startswith(("/documents/", "/admin/"))
         if not business_request:
             return await call_next(request)
         request_id, valid_request_id = correlation(request, "X-Aegis-Request-ID", secrets.token_hex(16))
@@ -183,6 +183,39 @@ def create_bac_app(*, mode: str, tokens: Mapping[str, str], control_token: str, 
                 return {"id": document["id"], "title": document["title"]}
             return dict(document)
 
+    @app.get("/documents")
+    def list_documents(request: Request):
+        with lock:
+            actor = actor_for(request)
+            return {"documents": [dict(document) for document in state["documents"].values() if may_read(actor, document)]}
+
+    @app.get("/documents/{document_id}/export")
+    def export_document(document_id: Identifier, request: Request):
+        with lock:
+            actor = actor_for(request)
+            document = document_for(document_id)
+            if document["public"] or actor in {"admin", document["owner"]}:
+                return dict(document)
+            # Seeded bug: the denial is correct, but its error body leaks the record.
+            leak = {"document": dict(document)} if mode == "vulnerable" and actor != "guest" else {}
+            return JSONResponse(status_code=403, content={"detail": "Document export is denied", **leak})
+
+    @app.put("/documents/{document_id}/title")
+    def rename_document(document_id: Identifier, payload: DocumentPatch, request: Request):
+        nonlocal state
+        with lock:
+            actor = actor_for(request, required=True)
+            document = document_for(document_id)
+            allowed = actor in {"admin", document["owner"]}
+            if mode == "fixed" and not allowed:
+                raise HTTPException(status_code=403, detail="Document ownership is required")
+            # Seeded bug: the vulnerable route writes before it checks ownership.
+            updated = {**document, "title": payload.title}
+            state = {**state, "documents": {**state["documents"], document_id: updated}}
+            if not allowed:
+                raise HTTPException(status_code=403, detail="Document ownership is required")
+            return dict(updated)
+
     @app.patch("/documents/{document_id}")
     def update_document(document_id: Identifier, payload: DocumentPatch, request: Request):
         nonlocal state
@@ -233,7 +266,7 @@ def create_bac_app(*, mode: str, tokens: Mapping[str, str], control_token: str, 
 
     @research.get("/info")
     def info():
-        return {"lab": "aegis-bac-v1", "instance_id": instance_id, "mode": mode, "seed_sha256": seed_sha256}
+        return {"lab": "aegis-bac-v2", "instance_id": instance_id, "mode": mode, "seed_sha256": seed_sha256}
 
     @research.post("/reset")
     def reset():

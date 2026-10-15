@@ -41,6 +41,11 @@ def _observed_effect(case: dict, body: dict, before: dict, after: dict, marker: 
             raise ValueError("Malformed user activity state.")
         return original is True and current is False
     document = _state_record(before, "documents", resource)
+    if operation in {"list", "export"}:
+        canary = document["content"]
+        if not isinstance(canary, str) or not canary:
+            raise ValueError("Missing private document marker.")
+        return canary in json.dumps(body)
     if operation in {"read", "preview"}:
         canary = document["content"]
         if not isinstance(canary, str) or not canary or document["id"] != resource:
@@ -148,15 +153,26 @@ class _LabClient:
         return trace["body"]
 
 
-def _probe(client: _LabClient, case: dict, actor: str, marker: str) -> dict:
+def probe_target(case: dict) -> tuple[str, str]:
+    """Map one matrix case to the single owned lab route it exercises."""
     operation, resource = case["operation"], case["resource"]
-    if operation == "admin-read":
-        return client.request(actor, "GET", "/admin/users", case["id"])
-    if operation == "admin-disable":
-        return client.request(actor, "POST", f"/admin/users/{resource}/disable", case["id"])
-    path = f"/documents/{resource}" + ("/preview" if operation == "preview" else "")
-    method = {"read": "GET", "preview": "GET", "update": "PATCH", "delete": "DELETE"}[operation]
-    return client.request(actor, method, path, case["id"], body={"title": marker} if operation == "update" else None)
+    return {
+        "admin-read": ("GET", "/admin/users"),
+        "admin-disable": ("POST", f"/admin/users/{resource}/disable"),
+        "list": ("GET", "/documents"),
+        "read": ("GET", f"/documents/{resource}"),
+        "preview": ("GET", f"/documents/{resource}/preview"),
+        "export": ("GET", f"/documents/{resource}/export"),
+        "update": ("PATCH", f"/documents/{resource}"),
+        "rename": ("PUT", f"/documents/{resource}/title"),
+        "delete": ("DELETE", f"/documents/{resource}"),
+    }[operation]
+
+
+def _probe(client: _LabClient, case: dict, actor: str, marker: str) -> dict:
+    operation = case["operation"]
+    method, path = probe_target(case)
+    return client.request(actor, method, path, case["id"], body={"title": marker} if operation in {"update", "rename"} else None)
 
 
 def _check_identity(client: _LabClient, actor: str, case_id: str) -> dict:
@@ -224,7 +240,7 @@ def run_research(*, mode: str, matrix: dict, split: str = "all", output_dir: str
         client = _LabClient(lab)
         try:
             info = client.control("GET", "info", "lab-handshake")
-            if info.get("lab") != "aegis-bac-v1" or info.get("instance_id") != lab.instance_id:
+            if info.get("lab") != "aegis-bac-v2" or info.get("instance_id") != lab.instance_id:
                 raise ValueError("The owned BAC lab identity handshake failed.")
             results = [_run_case(client, case) for case in cases]
         finally:

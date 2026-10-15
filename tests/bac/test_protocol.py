@@ -129,7 +129,7 @@ def test_individual_versions_and_eight_file_shape_stay_exact_without_live_lab(tm
     def lab(mode):
         yield SimpleNamespace(instance_id="synthetic-lab")
 
-    client = SimpleNamespace(control=lambda *args: {"lab": "aegis-bac-v1", "instance_id": "synthetic-lab", "seed_sha256": "a" * 64}, close=lambda: None)
+    client = SimpleNamespace(control=lambda *args: {"lab": "aegis-bac-v2", "instance_id": "synthetic-lab", "seed_sha256": "a" * 64}, close=lambda: None)
     monkeypatch.setattr(bac, "local_bac_lab", lab)
     monkeypatch.setattr(bac, "_LabClient", lambda owned: client)
     monkeypatch.setattr(bac, "_run_case", lambda owned, case: {
