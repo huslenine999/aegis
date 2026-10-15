@@ -15,7 +15,7 @@ inputs:
     required: false
     default: 'aegis-reports'
   no-docker:
-    description: 'Skip Docker-based sandbox checks'
+    description: 'Deprecated and ignored. Docker sandbox checks were removed; scans never start containers.'
     required: false
     default: 'true'
   timeout:
@@ -175,9 +175,6 @@ runs:
           --json
           --config "$CONFIG_PATH"
         )
-        if [ "$INPUT_NO_DOCKER" = "true" ]; then
-          ARGS+=(--no-docker)
-        fi
         SARIF_PATH="$OUTPUT_DIR/aegis.sarif"
         if [ "$INPUT_SARIF" = "true" ]; then
           ARGS+=(--sarif)

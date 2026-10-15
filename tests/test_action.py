@@ -465,7 +465,10 @@ def test_action_upload_sarif_requests_sarif_and_exposes_path(tmp_path):
     )
 
     assert result.returncode == 1, result.stderr
-    assert "--sarif" in (tmp_path / "args.log").read_text().splitlines()
+    scan_args = (tmp_path / "args.log").read_text().splitlines()
+    assert "--sarif" in scan_args
+    # The CLI rejects --no-docker; the deprecated input must never forward it.
+    assert "--no-docker" not in scan_args
     outputs = output_path.read_text().splitlines()
     assert "decision=declined" in outputs
     assert f"sarif-file={tmp_path.resolve() / 'reports' / 'aegis.sarif'}" in outputs

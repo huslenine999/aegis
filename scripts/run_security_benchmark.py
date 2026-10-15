@@ -45,7 +45,6 @@ def run_benchmark(corpus_path: Path = DEFAULT_CORPUS) -> dict:
             with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
                 summary = execute_scan(
                     str(target),
-                    use_docker=False,
                     fast=True,
                     strict=False,
                     quiet=True,
