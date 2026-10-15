@@ -120,6 +120,10 @@ services:
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+      AEGIS_DB_WORKER_PASSWORD: ${AEGIS_DB_WORKER_PASSWORD:?Set the aegis_worker database password}
+      AEGIS_DB_SIGNER_PASSWORD: ${AEGIS_DB_SIGNER_PASSWORD:?Set the aegis_signer database password}
+      AEGIS_DB_BROKER_PASSWORD: ${AEGIS_DB_BROKER_PASSWORD:?Set the aegis_github_broker database password}
+      AEGIS_DB_NOTIFIER_PASSWORD: ${AEGIS_DB_NOTIFIER_PASSWORD:?Set the aegis_notifier database password}
       AEGIS_ENABLE_DEMO_LAB: "false"
       FORWARDED_ALLOW_IPS: 172.31.0.10
     expose:
@@ -180,7 +184,7 @@ services:
       AEGIS_GITHUB_BROKER: remote
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
-      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+      DATABASE_URL: postgresql://aegis_worker:${AEGIS_DB_WORKER_PASSWORD}@postgres:5432/aegis
       AEGIS_ENABLE_DEMO_LAB: "false"
     volumes:
       - aegis-data:/data
@@ -238,7 +242,7 @@ services:
       AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
       AEGIS_MAX_PARSER_INPUT_BYTES: ${AEGIS_MAX_PARSER_INPUT_BYTES:-16777216}
       REDIS_URL: redis://redis:6379/0
-      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+      DATABASE_URL: postgresql://aegis_signer:${AEGIS_DB_SIGNER_PASSWORD}@postgres:5432/aegis
     volumes:
       - aegis-data:/data:ro
     tmpfs:
@@ -276,7 +280,7 @@ services:
       AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
       AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
       REDIS_URL: redis://redis:6379/0
-      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+      DATABASE_URL: postgresql://aegis_github_broker:${AEGIS_DB_BROKER_PASSWORD}@postgres:5432/aegis
     tmpfs:
       - /tmp:size=16m,mode=1777
     healthcheck:
@@ -313,7 +317,7 @@ services:
       AEGIS_SMTP_FROM: ${AEGIS_SMTP_FROM:-}
       AEGIS_DATA_DIR: /data
       REDIS_URL: redis://redis:6379/0
-      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+      DATABASE_URL: postgresql://aegis_notifier:${AEGIS_DB_NOTIFIER_PASSWORD}@postgres:5432/aegis
     volumes:
       - aegis-data:/data
     tmpfs:

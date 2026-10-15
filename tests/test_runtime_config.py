@@ -292,6 +292,17 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["github-broker"]["entrypoint"] == ["python", "-m", "app.github_broker_entrypoint"]
     assert "volumes" not in services["github-broker"]
     assert "github-credentials" in services["github-broker"]["healthcheck"]["test"][-1]
+    # Only the dashboard (which runs migrations) connects as the schema owner.
+    logins = {
+        "worker": "aegis_worker", "deep-worker": None, "signer": "aegis_signer",
+        "github-broker": "aegis_github_broker", "notifier": "aegis_notifier",
+    }
+    for name, login in logins.items():
+        url = services[name].get("environment", {}).get("DATABASE_URL")
+        if login:
+            assert url.startswith(f"postgresql://{login}:"), name
+    assert services["dashboard"]["environment"]["DATABASE_URL"].startswith("postgresql://aegis:")
+    assert "AEGIS_DB_WORKER_PASSWORD" in services["dashboard"]["environment"]
     assert not {"AEGIS_EVIDENCE_SIGNING_KEY", "AEGIS_SESSION_SECRET", "AEGIS_SMTP_PASSWORD"} & set(
         services["github-broker"]["environment"]
     )
@@ -432,6 +443,8 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_REQUIRE_NOTIFIER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_SIGNER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_GITHUB_BROKER", "true")
+    for name in ("WORKER", "SIGNER", "BROKER", "NOTIFIER"):
+        monkeypatch.setenv(f"AEGIS_DB_{name}_PASSWORD", "x" * 32)
     monkeypatch.setenv("AEGIS_REQUIRE_AUTH", "true")
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "s" * 32)
     monkeypatch.setenv("AEGIS_TOKEN_PEPPER", "p" * 32)

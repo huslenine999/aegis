@@ -442,8 +442,11 @@ def sync_findings(scan_run_id: int, result: dict, *, connection=None) -> dict:
             raise ValueError("Scan run not found.")
         project_id, tenant_id, current_preset = int(run[0]), int(run[1]), str(run[3])
         if USING_POSTGRES:
-            # Serialize reconciliations before taking a finding snapshot.
-            connection.execute("SELECT id FROM projects WHERE id = ? FOR UPDATE", (project_id,)).fetchone()
+            # Serialize reconciliations before taking a finding snapshot. An
+            # advisory lock, because the worker login cannot lock project rows.
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('aegis_findings'), hashtext(?))", (str(project_id),)
+            ).fetchone()
         lock = " FOR UPDATE" if USING_POSTGRES else ""
         existing_rows = connection.execute(
             """SELECT id, status, occurrence_count, last_seen_run_id, tool, fingerprint

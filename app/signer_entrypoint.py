@@ -3,6 +3,7 @@
 import os
 import sys
 
+from .database import require_least_privilege_role
 from .evidence import evidence_public_key
 from .evidence_signer import SIGNING_QUEUE
 
@@ -36,6 +37,7 @@ def validate_signer_configuration() -> None:
             "The evidence signer must not receive dashboard, scanner, notifier, or "
             "GitHub App secrets: " + ", ".join(exposed)
         )
+    require_least_privilege_role()
 
 
 def main() -> None:

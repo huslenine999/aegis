@@ -812,3 +812,34 @@ def test_scan_run_persists_github_pull_request_context(tmp_path, monkeypatch):
     assert run["github_installation_id"] == 42
     assert run["github_pull_request"] == 17
     assert run["github_check_run_id"] == 88
+
+
+def test_production_services_verify_their_database_role(monkeypatch, database_role_checks):
+    from app import github_broker_entrypoint, notifier_entrypoint, signer_entrypoint
+
+    monkeypatch.setenv("AEGIS_ENV", "production")
+    for name in ("AEGIS_SESSION_SECRET", "AEGIS_EVIDENCE_SIGNING_KEY", "AEGIS_GITHUB_APP_PRIVATE_KEY_B64"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNER", "remote")
+    monkeypatch.setenv("AEGIS_GITHUB_BROKER", "remote")
+    monkeypatch.delenv("AEGIS_ENCRYPTION_KEY", raising=False)
+    validate_worker_configuration()
+
+    monkeypatch.setenv("AEGIS_EVIDENCE_SIGNING_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    signer_entrypoint.validate_signer_configuration()
+    monkeypatch.delenv("AEGIS_EVIDENCE_SIGNING_KEY")
+
+    monkeypatch.setenv("AEGIS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    github_broker_entrypoint.validate_broker_configuration()
+    notifier_entrypoint.validate_notifier_configuration()
+
+    assert len(database_role_checks) == 4
+
+
+def test_least_privilege_check_refuses_non_postgres_production(monkeypatch):
+    from app import database as db
+    from tests.conftest import REAL_REQUIRE_LEAST_PRIVILEGE_ROLE
+
+    monkeypatch.setattr(db, "USING_POSTGRES", False)
+    with pytest.raises(RuntimeError, match="require PostgreSQL"):
+        REAL_REQUIRE_LEAST_PRIVILEGE_ROLE()

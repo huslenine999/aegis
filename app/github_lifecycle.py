@@ -562,15 +562,24 @@ def authorize_queued_scan(
                 if len(rows) != 1:
                     raise GitHubLifecycleError("Queued scan GitHub installation is revoked or unbound.")
             else:
-                row = connection.execute(
-                    """SELECT c.revoked_at, c.token_encrypted
-                       FROM github_connections c WHERE c.user_id = ?""",
-                    (int(requested_by),),
-                ).fetchone()
                 # No connection means the worker may clone a public repository
                 # anonymously. A previously connected, revoked credential must
-                # not be silently reused.
-                if row and (row[0] is not None or not row[1]):
+                # not be silently reused. On PostgreSQL the worker cannot read
+                # github_connections; a narrow function reports only the state.
+                if connection.__class__.__name__ == "PostgresConnection":
+                    state = connection.execute(
+                        "SELECT aegis_github_connection_state(?)", (int(requested_by),)
+                    ).fetchone()[0]
+                else:
+                    row = connection.execute(
+                        """SELECT c.revoked_at, c.token_encrypted
+                           FROM github_connections c WHERE c.user_id = ?""",
+                        (int(requested_by),),
+                    ).fetchone()
+                    state = "none" if not row else (
+                        "unavailable" if row[0] is not None or not row[1] else "usable"
+                    )
+                if state == "unavailable":
                     raise GitHubLifecycleError("Queued scan GitHub credential is revoked or unavailable.")
 
         return {

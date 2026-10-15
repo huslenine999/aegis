@@ -1,4 +1,5 @@
 import os
+import time
 import secrets
 import sqlite3
 import threading
@@ -1491,6 +1492,200 @@ def _migration_024_final_scan_runs(cursor) -> None:
         """)
 
 
+def _migration_025_least_privilege_support(cursor) -> None:
+    # Artifact metadata for a finished run is evidence, like the run itself.
+    if USING_POSTGRES:
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_reject_final_artifact_change()
+            RETURNS trigger AS $$
+            DECLARE
+                target_run BIGINT;
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    target_run := OLD.scan_run_id;
+                ELSE
+                    target_run := NEW.scan_run_id;
+                END IF;
+                IF EXISTS (
+                    SELECT 1 FROM scan_runs
+                    WHERE id = target_run AND state IN ('completed', 'failed', 'cancelled')
+                ) THEN
+                    RAISE EXCEPTION 'artifacts of finished scan runs are immutable';
+                END IF;
+                IF TG_OP = 'DELETE' THEN
+                    RETURN OLD;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        cursor.execute("DROP TRIGGER IF EXISTS scan_artifacts_final_immutable ON scan_artifacts")
+        cursor.execute("""
+            CREATE TRIGGER scan_artifacts_final_immutable
+            BEFORE INSERT OR UPDATE OR DELETE ON scan_artifacts
+            FOR EACH ROW EXECUTE FUNCTION aegis_reject_final_artifact_change()
+        """)
+        # Lets the scan worker check whether a requester's GitHub connection is
+        # usable without being able to read the stored (encrypted) token.
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION aegis_github_connection_state(target_user BIGINT)
+            RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER
+            SET search_path FROM CURRENT AS $$
+                SELECT COALESCE((
+                    SELECT CASE
+                        WHEN revoked_at IS NOT NULL OR token_encrypted IS NULL OR token_encrypted = ''
+                        THEN 'unavailable' ELSE 'usable' END
+                    FROM github_connections WHERE user_id = target_user
+                ), 'none')
+            $$
+        """)
+        cursor.execute("REVOKE ALL ON FUNCTION aegis_github_connection_state(BIGINT) FROM PUBLIC")
+    else:
+        for operation, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS scan_artifacts_final_{operation.lower()}
+                BEFORE {operation} ON scan_artifacts
+                WHEN EXISTS (
+                    SELECT 1 FROM scan_runs
+                    WHERE id = {row}.scan_run_id AND state IN ('completed', 'failed', 'cancelled')
+                )
+                BEGIN SELECT RAISE(ABORT, 'artifacts of finished scan runs are immutable'); END
+            """)
+
+
+# PostgreSQL logins for the narrow services. Each gets only what its code
+# reads or writes, and none owns a table, so none can disable the triggers
+# that keep audit events, signatures, and finished runs immutable.
+SERVICE_DATABASE_ROLES: dict[str, dict[str, Any]] = {
+    "aegis_worker": {
+        "password_env": "AEGIS_DB_WORKER_PASSWORD",
+        "grants": (
+            ("SELECT", "projects"),
+            ("SELECT", "tenants"),
+            ("SELECT", "scan_runs"),
+            ("UPDATE (state, progress, result_json, summary_json, new_findings, completed_at)", "scan_runs"),
+            ("SELECT, INSERT, DELETE", "scan_artifacts"),
+            ("SELECT, INSERT, UPDATE", "security_findings"),
+            ("SELECT, INSERT, UPDATE", "finding_occurrences"),
+            ("SELECT, INSERT", "finding_events"),
+            ("SELECT", "project_members"),
+            ("SELECT", "project_policies"),
+            ("SELECT (id, tenant_id, role, active, username)", "auth_users"),
+            ("SELECT", "github_repository_bindings"),
+            ("SELECT", "github_installations"),
+        ),
+        "functions": ("aegis_github_connection_state(BIGINT)",),
+    },
+    "aegis_signer": {
+        "password_env": "AEGIS_DB_SIGNER_PASSWORD",
+        "grants": (
+            ("SELECT (id, job_id, project_id, state)", "scan_runs"),
+            ("SELECT (id, tenant_id)", "projects"),
+            ("SELECT, INSERT", "evidence_signatures"),
+        ),
+        "functions": (),
+    },
+    "aegis_github_broker": {
+        "password_env": "AEGIS_DB_BROKER_PASSWORD",
+        "grants": (
+            ("SELECT (id, state, requested_by, github_installation_id, github_check_run_id, project_id)", "scan_runs"),
+            ("SELECT (id, tenant_id, github_full_name, created_by)", "projects"),
+            ("SELECT", "github_repository_bindings"),
+            ("SELECT", "github_installations"),
+            ("SELECT (user_id, token_encrypted, revoked_at)", "github_connections"),
+            ("SELECT (id, tenant_id, active, username, role)", "auth_users"),
+        ),
+        "functions": (),
+    },
+    "aegis_notifier": {
+        "password_env": "AEGIS_DB_NOTIFIER_PASSWORD",
+        "grants": (
+            ("SELECT", "notification_channels"),
+            ("INSERT", "notification_deliveries"),
+        ),
+        "functions": (),
+    },
+}
+
+
+def apply_service_roles(connection) -> list[str]:
+    """Create or refresh the service logins whose passwords are configured.
+
+    Runs as the schema owner after migrations, on every start, so grants follow
+    schema changes. Returns the roles it configured.
+    """
+    if not USING_POSTGRES:
+        return []
+    from psycopg import sql
+
+    raw = connection._active_connection()
+    schema = raw.execute("SELECT current_schema()").fetchone()[0]
+    # Restores made with --no-privileges reset function ACLs; keep this one narrow.
+    raw.execute("REVOKE ALL ON FUNCTION aegis_github_connection_state(BIGINT) FROM PUBLIC")
+    configured = []
+    for role, spec in SERVICE_DATABASE_ROLES.items():
+        password = os.environ.get(spec["password_env"], "")
+        if not password:
+            continue
+        exists = raw.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
+        # Only a superuser may restate SUPERUSER/BYPASSRLS on ALTER; services
+        # re-check these attributes themselves at startup.
+        attributes = "LOGIN" if exists else "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS"
+        raw.execute(sql.SQL(
+            ("ALTER" if exists else "CREATE") + " ROLE {} WITH " + attributes + " PASSWORD {}"
+        ).format(sql.Identifier(role), sql.Literal(password)))
+        raw.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(
+            sql.Identifier(schema), sql.Identifier(role)))
+        raw.execute(sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA {} FROM {}").format(
+            sql.Identifier(schema), sql.Identifier(role)))
+        raw.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
+            sql.Identifier(schema), sql.Identifier(role)))
+        for privileges, table in spec["grants"]:
+            # Privileges and table names are fixed literals defined above.
+            raw.execute(sql.SQL("GRANT " + privileges + " ON {} TO {}").format(
+                sql.Identifier(schema, table), sql.Identifier(role)))
+        if any("INSERT" in privileges for privileges, _ in spec["grants"]):
+            raw.execute(sql.SQL("GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}").format(
+                sql.Identifier(schema), sql.Identifier(role)))
+        for function in spec["functions"]:
+            raw.execute(sql.SQL("GRANT EXECUTE ON FUNCTION " + function + " TO {}").format(
+                sql.Identifier(role)))
+        configured.append(role)
+    return configured
+
+
+def require_least_privilege_role(timeout: float = 120.0) -> None:
+    """Refuse to run a production service as a superuser or the schema owner.
+
+    Waits for the role to exist, since the dashboard creates it at startup.
+    """
+    if not USING_POSTGRES:
+        raise RuntimeError("Production services require PostgreSQL.")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with get_connection() as connection:
+                row = connection.execute(
+                    """SELECT r.rolsuper OR r.rolcreaterole OR r.rolbypassrls,
+                              pg_get_userbyid(c.relowner) = current_user, current_user
+                       FROM pg_roles r, pg_class c
+                       WHERE r.rolname = current_user AND c.relname = 'scan_runs'
+                         AND c.relnamespace = current_schema()::regnamespace"""
+                ).fetchone()
+            break
+        except Exception:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(2)
+    if not row:
+        raise RuntimeError("The Aegis schema has not been created yet.")
+    if row[0] or row[1]:
+        raise RuntimeError(
+            f"Database role {row[2]!r} is too privileged for this service: use its "
+            "least-privilege login (for example aegis_worker), not the schema owner."
+        )
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1516,6 +1711,7 @@ MIGRATIONS = (
     Migration(22, "scan_result_summaries", _migration_022_scan_result_summaries),
     Migration(23, "evidence_signature_ledger", _migration_023_evidence_signature_ledger),
     Migration(24, "final_scan_runs", _migration_024_final_scan_runs),
+    Migration(25, "least_privilege_support", _migration_025_least_privilege_support),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -1566,6 +1762,7 @@ def initialize_database(*, reset: bool = False):
             )
         run_migrations(cursor)
         _seed_default_rows(cursor, reset=reset)
+        apply_service_roles(conn)
         conn.commit()
     except Exception:
         conn.rollback()

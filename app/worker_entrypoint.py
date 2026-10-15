@@ -5,6 +5,7 @@ import sys
 import socket
 from pathlib import Path
 
+from .database import require_least_privilege_role
 from .evidence import evidence_public_key
 from .evidence_signer import remote_signing_enabled
 from .github_broker import remote_broker_enabled
@@ -75,6 +76,7 @@ def validate_worker_configuration() -> None:
                 "Production scanner workers must not receive dashboard, notifier, "
                 "evidence-signing, or GitHub secrets: " + ", ".join(exposed)
             )
+        require_least_privilege_role()
 
 
 def main() -> None:

@@ -3,6 +3,7 @@
 import os
 import sys
 
+from .database import require_least_privilege_role
 from .github_broker import BROKER_QUEUE
 
 
@@ -32,6 +33,7 @@ def validate_broker_configuration() -> None:
             "The GitHub credential broker must not receive dashboard, evidence, or "
             "notifier secrets: " + ", ".join(exposed)
         )
+    require_least_privilege_role()
 
 
 def main() -> None:

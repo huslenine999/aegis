@@ -212,6 +212,14 @@ def validate_runtime_configuration() -> None:
         errors.append("AEGIS_REQUIRE_SIGNER must be true")
     if not environment_bool("AEGIS_REQUIRE_GITHUB_BROKER"):
         errors.append("AEGIS_REQUIRE_GITHUB_BROKER must be true")
+    for name in (
+        "AEGIS_DB_WORKER_PASSWORD",
+        "AEGIS_DB_SIGNER_PASSWORD",
+        "AEGIS_DB_BROKER_PASSWORD",
+        "AEGIS_DB_NOTIFIER_PASSWORD",
+    ):
+        if len(os.environ.get(name, "")) < 24:
+            errors.append(f"{name} must contain at least 24 characters")
     if not environment_bool("AEGIS_REQUIRE_AUTH"):
         errors.append("AEGIS_REQUIRE_AUTH must be true")
     if len(os.environ.get("AEGIS_SESSION_SECRET", "")) < 32:

@@ -37,6 +37,10 @@ def local_environment_values() -> dict[str, str]:
         ).decode().rstrip("="),
         "AEGIS_GITHUB_WEBHOOK_SECRET": secrets.token_urlsafe(40),
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_WORKER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_SIGNER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_BROKER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_NOTIFIER_PASSWORD": secrets.token_urlsafe(32),
         "AEGIS_SKIP_EXTERNAL_SCANNERS": "false",
         "AEGIS_ALLOW_DEEP_SCANS": "false",
         "AEGIS_ISOLATED_WORKER": "false",
@@ -182,6 +186,10 @@ def run_start(
         "AEGIS_AUDIT_HMAC_KEY",
         "AEGIS_ENCRYPTION_KEY",
         "AEGIS_EVIDENCE_SIGNING_KEY",
+        "AEGIS_DB_WORKER_PASSWORD",
+        "AEGIS_DB_SIGNER_PASSWORD",
+        "AEGIS_DB_BROKER_PASSWORD",
+        "AEGIS_DB_NOTIFIER_PASSWORD",
     }
     missing = required - values.keys()
     if missing:
@@ -347,6 +355,10 @@ def run_backup(
                 "pg_dump",
                 "--clean",
                 "--if-exists",
+                # Service logins are cluster-level; the dashboard re-creates
+                # them and re-applies grants on start, so a restore into a new
+                # cluster never fails on a GRANT to a missing role.
+                "--no-privileges",
                 "--format=plain",
                 "-U",
                 "aegis",

@@ -198,3 +198,25 @@ def fake_osv(monkeypatch, tmp_path):
     monkeypatch.setattr(policy_engine, "OSV_CACHE_FILE", tmp_path / "osv-cache.json")
     monkeypatch.setattr(policy_engine, "EXPLOIT_INTEL_CACHE_FILE", tmp_path / "exploit-intel-cache.json")
     return fake
+
+
+import app.database as _database  # noqa: E402
+
+REAL_REQUIRE_LEAST_PRIVILEGE_ROLE = _database.require_least_privilege_role
+
+
+@pytest.fixture(autouse=True)
+def database_role_checks(monkeypatch):
+    """Record production least-privilege checks instead of requiring PostgreSQL.
+
+    The real check runs against PostgreSQL in tests/integration/postgres_paths.py.
+    """
+    import app.database
+    import app.github_broker_entrypoint
+    import app.signer_entrypoint
+    import app.worker_entrypoint
+
+    calls = []
+    for module in (app.database, app.worker_entrypoint, app.signer_entrypoint, app.github_broker_entrypoint):
+        monkeypatch.setattr(module, "require_least_privilege_role", lambda *args, **kwargs: calls.append(True))
+    return calls

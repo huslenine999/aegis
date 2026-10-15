@@ -31,6 +31,9 @@ def validate_notifier_configuration() -> None:
             "Production notifier workers must not receive dashboard, scanner, or "
             "GitHub App secrets: " + ", ".join(exposed)
         )
+    from .database import require_least_privilege_role
+
+    require_least_privilege_role()
 
 
 def main() -> None:

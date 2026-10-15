@@ -149,13 +149,13 @@ def test_scan_history_tracks_new_findings_against_previous_run(tmp_path, monkeyp
         target="project",
         preset="quick",
     )
+    projects.record_scan_artifacts(first, [{"name": "report.html", "size": 1, "sha256": "0" * 64}])
     projects.update_scan_run(
         first,
         state="completed",
         progress=100,
         result={"ruff": [{"code": "S307", "filename": "a.py", "location": {"row": 1}}]},
     )
-    projects.record_scan_artifacts(first, [{"name": "report.html", "size": 1, "sha256": "0" * 64}])
     assert projects.get_scan_run(first)["new_findings"] == 1
 
     second = projects.create_scan_run(
