@@ -21,9 +21,9 @@ keywords = [
   "scanner",
 ]
 dependencies = [
-  "Werkzeug==3.1.8",
+  "Werkzeug==3.1.9",
   "requests==2.34.2",
-  "urllib3==2.7.0",
+  "urllib3==2.8.0",
   "PyYAML==6.0.3",
   "Jinja2==3.1.6",
   "MarkupSafe==2.1.5",
@@ -40,12 +40,12 @@ dependencies = [
   "psycopg[binary,pool]==3.2.10",
   "cryptography==50.0.0",
   "boto3==1.43.52",
-  "PyJWT[crypto]==2.13.0",
+  "PyJWT[crypto]==2.15.0",
 ]
 
 [project.optional-dependencies]
 scanner = [
-  "semgrep==1.173.0",
+  "semgrep==1.179.0",
 ]
 dev = [
   "httpx==0.28.1",
