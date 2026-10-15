@@ -55,6 +55,7 @@ from .scanners import (
     configure_semgrep_environment,
     find_runtime_executable,
     run_yara_scan as shared_run_yara_scan,
+    semgrep_coverage_gaps,
 )
 from .source_attestation import (
     SourceSnapshot,
@@ -520,7 +521,11 @@ def _execute_scan(
                 label="Semgrep",
             )
             semgrep_report = read_json(semgrep_report_path)
-            if semgrep_return_code == 0 and isinstance(semgrep_report, dict):
+            gaps = semgrep_coverage_gaps(semgrep_report) if isinstance(semgrep_report, dict) else []
+            if semgrep_return_code == 0 and isinstance(semgrep_report, dict) and gaps:
+                mark_tool("Semgrep", "failed", detail="incomplete coverage: " + "; ".join(gaps[:5]),
+                          return_code=semgrep_return_code)
+            elif semgrep_return_code == 0 and isinstance(semgrep_report, dict):
                 mark_tool("Semgrep", "completed", return_code=semgrep_return_code)
             else:
                 write_json(semgrep_report_path, {"results": []}, safe_output=safe_output)

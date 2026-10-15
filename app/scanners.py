@@ -85,6 +85,24 @@ def configure_semgrep_environment(environment: dict[str, str] | None = None):
         pass
 
 
+def semgrep_coverage_gaps(report: dict) -> list[str]:
+    """Files some rules never finished on. Semgrep still exits 0 for these.
+
+    A timeout or out-of-memory error means findings in that file are missing,
+    so the scan cannot claim Semgrep coverage. Parse errors are partial
+    analysis and stay warnings.
+    """
+    gaps = []
+    for error in report.get("errors") or []:
+        if not isinstance(error, dict):
+            continue
+        kind = error.get("type")
+        kind = kind[0] if isinstance(kind, list) and kind else kind
+        if error.get("level") == "error" or str(kind) in {"Timeout", "OutOfMemory", "Out of memory"}:
+            gaps.append(f"{kind} in {error.get('path') or 'an unknown file'}")
+    return sorted(set(gaps))
+
+
 def should_skip_path(path: Path, ignored_dirs: set[str] = DEFAULT_IGNORED_DIRS) -> bool:
     return any(part in ignored_dirs for part in path.parts)
 

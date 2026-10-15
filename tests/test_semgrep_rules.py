@@ -11,8 +11,8 @@ import yaml
 
 import policy_engine
 from app import cli
-from app.scan_engine import SEMGREP_SOURCE_EXTENSIONS
-from app.scanners import find_runtime_executable
+from app.scan_engine import SEMGREP_SOURCE_EXTENSIONS, add_semgrep_excludes
+from app.scanners import find_runtime_executable, semgrep_coverage_gaps
 
 ROOT = Path(__file__).resolve().parent.parent
 RULES = ROOT / "rules" / "semgrep_rules.yaml"
@@ -128,3 +128,34 @@ def test_rules_match_labeled_fixtures_exactly(tmp_path):
     assert sorted(expected - found) == [], "missed labeled vulnerabilities"
     assert sorted(found - expected) == [], "findings on unlabeled or ok lines"
     assert not found & safe
+
+
+@pytest.mark.skipif(not find_runtime_executable("semgrep"), reason="semgrep is not installed")
+def test_scanned_repository_cannot_choose_what_semgrep_skips(tmp_path):
+    target = tmp_path / "repo"
+    (target / "tests").mkdir(parents=True)
+    (target / "hidden.py").write_text("def run(value):\n    return eval(value)  # nosemgrep\n")
+    (target / "ignored.py").write_text("def run(value):\n    return eval(value)\n")
+    (target / "tests" / "fixture.py").write_text("def run(value):\n    return eval(value)\n")
+    (target / ".semgrepignore").write_text("ignored.py\nhidden.py\n")
+    command = [find_runtime_executable("semgrep"), "scan", "--metrics", "off", "--disable-version-check",
+               "--config", str(RULES), "--json", "--quiet"]
+    completed = subprocess.run(
+        add_semgrep_excludes(command) + [str(target)], capture_output=True, text=True, timeout=300, check=False,
+    )
+    found = {Path(item["path"]).name for item in json.loads(completed.stdout)["results"]}
+    # nosemgrep comments and .semgrepignore are ignored; Semgrep's own default
+    # (skip tests/) is now applied by Aegis instead.
+    assert found == {"hidden.py", "ignored.py"}
+
+
+def test_semgrep_timeouts_and_fatal_errors_are_coverage_gaps():
+    report = {"errors": [
+        {"level": "warn", "type": "Timeout", "path": "big.py", "rule_id": "python-eval"},
+        {"level": "warn", "type": "Timeout", "path": "big.py", "rule_id": "python-rce"},
+        {"level": "warn", "type": ["PartialParsing", [{"path": "broken.py"}]], "path": "broken.py"},
+        {"level": "error", "type": "Fatal error", "path": "other.js"},
+        "not-an-object",
+    ]}
+    assert semgrep_coverage_gaps(report) == ["Fatal error in other.js", "Timeout in big.py"]
+    assert semgrep_coverage_gaps({"errors": [], "results": []}) == []

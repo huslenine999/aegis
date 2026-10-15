@@ -35,11 +35,26 @@ def exclude_files_pattern(
 EXCLUDE_FILES_PATTERN = exclude_files_pattern()
 
 
+# The scanned repository must not choose what Semgrep skips: ignore its
+# ``nosemgrep`` comments and ``.semgrepignore`` files, and do not silently skip
+# large files (a slow file becomes a Timeout error instead; see
+# scanners.semgrep_coverage_gaps). Pinned Semgrep supports the ``--x-`` flag.
+SEMGREP_TRUSTED_TARGETING = ("--disable-nosem", "--x-ignore-semgrepignore-files", "--max-target-bytes=0")
+# Semgrep's own default .semgrepignore, applied by Aegis instead of the repository.
+SEMGREP_DEFAULT_EXCLUDES = (
+    ".git", ".svn", "_darcs", "build/", "vendor/", "dist/", "*.min.js", ".env/", ".tox/", "node_modules/",
+    ".npm/", ".yarn/", ".venv/", "_opam/", "_build/", "_cargo/", "test/", "tests/", "testsuite/", "*_test.go",
+)
+
+
 def add_semgrep_excludes(
     command: list[str],
     ignored_dirs: Iterable[str] | None = None,
 ) -> list[str]:
-    """Append one ``--exclude`` flag per ignored directory, in a stable order."""
+    """Append Aegis's trusted Semgrep target selection, in a stable order."""
+    command.extend(SEMGREP_TRUSTED_TARGETING)
+    for pattern in SEMGREP_DEFAULT_EXCLUDES:
+        command.extend(["--exclude", pattern])
     for ignored_dir in sorted(ignored_dirs if ignored_dirs is not None else DEFAULT_IGNORED_DIRS):
         command.extend(["--exclude", ignored_dir])
     return command

@@ -62,6 +62,12 @@ All notable changes to the Aegis project will be documented in this file.
   `python-sqli` ignored Flask and Django request data;
   `javascript-command-injection` missed destructured `child_process` imports.
 - The npm launcher no longer builds shell commands from home-directory paths.
+- A scanned repository could hide code from Semgrep: `# nosemgrep` comments
+  and its own `.semgrepignore` files were honored, files over 1 MB were
+  skipped silently, and per-file timeouts still produced a "completed"
+  Semgrep run. Aegis now ignores both, applies Semgrep's default excludes
+  itself, lifts the size limit, and marks Semgrep failed on timeouts or fatal
+  errors, so findings in an unanalyzed file are not reported as resolved.
 - Dependency inventory (found by fuzzing): a bare requirement such as
   `requests`, and `!=` or `===` specifiers, were dropped from
   `requirements.txt` instead of failing the inventory as unpinned; `==2.*`

@@ -24,7 +24,7 @@ from .scan_engine import add_semgrep_excludes, build_ruff_command, exclude_files
 from .scan_status import ToolStatusTracker
 from .scanners import run_yara_scan as shared_run_yara_scan
 from .scanners import DEFAULT_IGNORED_DIRS
-from .scanners import configure_semgrep_environment
+from .scanners import configure_semgrep_environment, semgrep_coverage_gaps
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
 from .codeql_scanner import (
@@ -884,7 +884,11 @@ def async_scan_task(
                     stdout_output_path=semgrep_report_path,
                 )
                 semgrep_report = load_json_report(semgrep_report_path)
-                if return_code == 0 and isinstance(semgrep_report, dict):
+                gaps = semgrep_coverage_gaps(semgrep_report) if isinstance(semgrep_report, dict) else []
+                if return_code == 0 and isinstance(semgrep_report, dict) and gaps:
+                    mark_tool("Semgrep", "failed", detail="incomplete coverage: " + "; ".join(gaps[:5]),
+                              return_code=return_code)
+                elif return_code == 0 and isinstance(semgrep_report, dict):
                     mark_tool("Semgrep", "completed", return_code=return_code)
                 else:
                     write_json(semgrep_report_path, {"results": []})

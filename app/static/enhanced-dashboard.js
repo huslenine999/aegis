@@ -304,7 +304,7 @@
                 title,
                 location: `${item.path || "unknown"}:${item.start?.line || "?"}`,
                 ...guidanceFor("Semgrep", rule, title, item.extra?.fix || item.extra?.metadata?.fix || "Follow the rule message, then rerun the scan to confirm the issue is gone."),
-                suppress: item.extra?.metadata?.suppression_guidance || "Suppress with a nosemgrep comment only when the specific data path is proven safe.",
+                suppress: item.extra?.metadata?.suppression_guidance || "Add a reviewed suppression to the trusted Aegis config only when the specific data path is proven safe; inline nosemgrep comments are ignored.",
                 status: item.finding_status || "Pre-existing in this local scan evidence.",
             });
         });
