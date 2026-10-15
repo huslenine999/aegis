@@ -60,6 +60,13 @@ scan:
       ticket: AEGIS-RISK-011
       expires_at: 2027-07-20
     - tool: Ruff
+      rule: S608
+      path: app/finding_queries.py
+      reason: Finding filters are assembled only from fixed internal clauses (code moved from app/findings.py under the same review) while every external value remains parameterized.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-011
+      expires_at: 2027-07-20
+    - tool: Ruff
       rule: S310
       path: scripts/pilot_readiness.py
       reason: The rehearsal client opens only the two hardcoded localhost health endpoints created by this script.

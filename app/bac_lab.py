@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ACTORS = MappingProxyType({"alice": "user", "bob": "user", "admin": "admin", "guest": "guest"})
 _MAX_EVENTS = 4096
 _CORRELATION_PATTERN = r"^[A-Za-z0-9_.-]{1,128}$"
-_TOKEN_PATTERN = r"^[A-Za-z0-9._~-]{1,256}$"
+_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{1,256}$")
 _START_SECONDS = 5.0
 _STOP_SECONDS = 3.0
 Identifier = Annotated[str, Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
@@ -71,7 +71,7 @@ def create_bac_app(*, mode: str, tokens: Mapping[str, str], control_token: str, 
     if not isinstance(tokens, Mapping) or set(tokens) != {"alice", "bob", "admin"}:
         raise ValueError("BAC lab tokens must contain exactly alice, bob and admin")
     supplied_tokens = (*tokens.values(), control_token)
-    if any(not isinstance(token, str) or not re.fullmatch(_TOKEN_PATTERN, token) for token in supplied_tokens):
+    if any(not isinstance(token, str) or not _TOKEN_PATTERN.fullmatch(token) for token in supplied_tokens):
         raise ValueError("BAC lab credentials must be nonempty bounded header-safe tokens")
     if len(set(supplied_tokens)) != 4:
         raise ValueError("BAC actor tokens and research control key must be unique")

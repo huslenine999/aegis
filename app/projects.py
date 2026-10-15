@@ -574,18 +574,18 @@ def get_scan_run(run_id: int, tenant_id: int | None = None) -> dict | None:
 
 
 def list_scan_runs(project_id: int, limit: int = 50, *, source_only: bool = False) -> list[dict]:
-    source_filter = "AND target != 'bac-research'" if source_only else ""
     with get_connection() as connection:
         rows = connection.execute(
-            f"""SELECT id, job_id, project_id, requested_by, target, preset,
+            """SELECT id, job_id, project_id, requested_by, target, preset,
                       state, progress, new_findings, created_at, completed_at,
                       CASE WHEN state IN ('failed', 'completed')
                            THEN summary_json ELSE NULL END,
                       EXISTS(SELECT 1 FROM scan_artifacts a
                              WHERE a.scan_run_id = scan_runs.id AND a.name = 'report.html')
-               FROM scan_runs WHERE project_id = ? {source_filter}
+               FROM scan_runs
+               WHERE project_id = ? AND (? = 0 OR target != 'bac-research')
                ORDER BY id DESC LIMIT ?""",
-            (project_id, max(1, min(limit, 100))),
+            (project_id, 1 if source_only else 0, max(1, min(limit, 100))),
         ).fetchall()
     scans = []
     for row in rows:
