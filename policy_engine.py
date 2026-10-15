@@ -15,7 +15,14 @@ from typing import Any, Dict, List
 from jinja2 import Environment, select_autoescape
 
 from app.dependencies import DependencyManifest, DependencyPackage, discover_dependency_manifests, extract_packages_from_manifest
-from app.findings import BASELINE_FINGERPRINT_KEY, escalate_osv_severity, extract_findings, strip_baseline_findings
+from app.findings import (
+    BASELINE_FINGERPRINT_KEY,
+    UNSCORED_ADVISORY_REASON,
+    escalate_osv_severity,
+    extract_findings,
+    osv_base_severity,
+    strip_baseline_findings,
+)
 from app.safe_output import SafeOutputRoot
 from app.version import get_package_version
 from app.resource_budgets import (
@@ -364,10 +371,9 @@ def analyze_osv(
 
     findings = []
     for f in report:
-        cvss_score = f.get("cvss") or 0.0
-        severity, reason = escalate_osv_severity(
-            "HIGH" if cvss_score >= 7.0 else ("MEDIUM" if cvss_score >= 4.0 else "LOW"), f
-        )
+        severity, reason = escalate_osv_severity(osv_base_severity(f.get("cvss")), f)
+        if reason is None and f.get("cvss") is None:
+            reason = UNSCORED_ADVISORY_REASON
         findings.append(enrich_finding("OSV Dependency Audit", {
             "severity": severity,
             "id": f.get("id"),
@@ -634,6 +640,8 @@ def parse_cvss_vector(vector_str: str) -> float:
         if "CVSS:3" not in vector_upper and "AV:" not in vector_upper:
             return 0.0
 
+        if vector_upper.startswith("CVSS:4"):
+            return 0.0  # CVSS v4 uses a different scoring system; see _normalize_osv_advisory.
         if vector_upper.startswith("CVSS:"):
             parts = vector_upper.split("/", 1)[1].split("/")
         else:
@@ -644,6 +652,8 @@ def parse_cvss_vector(vector_str: str) -> float:
             if ":" in p:
                 k, v = p.split(":", 1)
                 metrics[k.strip()] = v.strip()
+        if "AU" in metrics:
+            return _cvss_v2_base_score(metrics)
                 
         av_map = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
         ac_map = {"L": 0.77, "H": 0.44}
@@ -689,6 +699,24 @@ def parse_cvss_vector(vector_str: str) -> float:
         return 0.0
 
 
+def _cvss_v2_base_score(metrics: dict[str, str]) -> float:
+    """CVSS v2 base score (FIRST CVSS v2 guide, section 3.2.1)."""
+    impact_weights = {"N": 0.0, "P": 0.275, "C": 0.660}
+    impact = 10.41 * (1 - math.prod(1 - impact_weights.get(metrics.get(key, "N"), 0.0) for key in ("C", "I", "A")))
+    exploitability = (
+        20
+        * {"L": 0.395, "A": 0.646, "N": 1.0}.get(metrics.get("AV", "N"), 1.0)
+        * {"H": 0.35, "M": 0.61, "L": 0.71}.get(metrics.get("AC", "L"), 0.71)
+        * {"M": 0.45, "S": 0.56, "N": 0.704}.get(metrics.get("AU", "N"), 0.704)
+    )
+    if impact == 0:
+        return 0.0
+    score = (0.6 * impact + 0.4 * exploitability - 1.5) * 1.176
+    return math.floor(score * 10 + 0.5 + 1e-9) / 10
+
+
+# Representative scores for an advisory's qualitative severity (GitHub uses MODERATE).
+QUALITATIVE_CVSS_SCORES = {"CRITICAL": 9.0, "HIGH": 7.0, "MODERATE": 4.0, "MEDIUM": 4.0, "LOW": 0.1}
 OSV_CACHE_FILE = SCAN_DIR / "osv-cache.json"
 OSV_API_URL = "https://api.osv.dev"
 OSV_REQUEST_DEADLINE_SECONDS = 10.0
@@ -697,7 +725,9 @@ OSV_TOTAL_DEADLINE_SECONDS = 300.0
 OSV_BATCH_SIZE = 1000  # queries per querybatch request
 OSV_MAX_PAGES = 20
 OSV_HYDRATION_WORKERS = 4
-OSV_ADVISORY_CACHE_PREFIX = "osv-advisory:"
+# Bump the version when _normalize_osv_advisory changes, so cached records are rebuilt.
+OSV_ADVISORY_CACHE_PREFIX = "osv-advisory-v2:"
+OSV_RECORD_SCHEMA = 2  # package cache entries written before this are re-queried
 EXPLOIT_INTEL_CACHE_FILE = SCAN_DIR / "exploit-intel-cache.json"
 # CISA's catalog, then CISA's own GitHub mirror of the same file.
 KEV_FEED_URLS = (
@@ -827,11 +857,26 @@ def _normalize_osv_advisory(vuln: dict[str, Any]) -> dict[str, Any]:
             cvss_score = cvss_data.get("score")
             vector = cvss_data.get("vector")
     if cvss_score is None:
-        for sev in vuln.get("severity", []):
-            if isinstance(sev, dict) and sev.get("type") in ("CVSS_V3", "CVSS_V2"):
-                vector = sev.get("score")
-                cvss_score = parse_cvss_vector(str(vector or ""))
-                break
+        severities = vuln.get("severity")
+        vectors = {
+            sev.get("type"): str(sev.get("score") or "")
+            for sev in (severities if isinstance(severities, list) else [])
+            if isinstance(sev, dict) and sev.get("score")
+        }
+        qualitative = str(db_spec.get("severity") or "").upper() if isinstance(db_spec, dict) else ""
+        # Prefer a computed CVSS v3 score, then the publisher's own rating (CVSS
+        # v4 is not computed here), then CVSS v2. Otherwise leave it unscored.
+        if "CVSS_V3" in vectors:
+            vector = vectors["CVSS_V3"]
+            cvss_score = parse_cvss_vector(vector)
+        elif qualitative in QUALITATIVE_CVSS_SCORES:
+            vector = vectors.get("CVSS_V4") or vectors.get("CVSS_V2")
+            cvss_score = QUALITATIVE_CVSS_SCORES[qualitative]
+        elif "CVSS_V2" in vectors:
+            vector = vectors["CVSS_V2"]
+            cvss_score = parse_cvss_vector(vector)
+        else:
+            vector = vectors.get("CVSS_V4")
     return {
         "id": vuln.get("id"),
         "aliases": [str(alias) for alias in vuln.get("aliases", []) if alias],
@@ -942,7 +987,11 @@ def query_osv_vulnerabilities(
             except (TypeError, ValueError):
                 pass
         cached[cache_key] = (cached_vulns, entry_age)
-        if not (cached_vulns is not None and entry_age is not None and 0 <= entry_age < CACHE_TTL):
+        fresh = (
+            isinstance(entry, dict) and entry.get("schema") == OSV_RECORD_SCHEMA
+            and entry_age is not None and 0 <= entry_age < CACHE_TTL
+        )
+        if not (cached_vulns is not None and fresh):
             stale_packages.append(package)
 
     # 2. Ask OSV which advisories affect each stale package, in batches.
@@ -987,7 +1036,7 @@ def query_osv_vulnerabilities(
                 }
                 for advisory_id in affecting
             ]
-            cache[cache_key] = {"timestamp": current_time, "vulns": vuln_list}
+            cache[cache_key] = {"timestamp": current_time, "schema": OSV_RECORD_SCHEMA, "vulns": vuln_list}
             cache_dirty = True
             findings.extend(vuln_list)
             continue

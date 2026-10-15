@@ -3,9 +3,11 @@
 import copy
 import hashlib
 import json
+import os
 from types import MappingProxyType
 
 import pytest
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from app.bac_imports import BAC_ARTIFACTS, validate_bac_bundle
 from app.bac_reports import export_report
@@ -497,3 +499,46 @@ def test_manifest_signature_failure_does_not_expose_sensitive_data(bundle):
     with pytest.raises(ValueError) as error:
         validate_bac_bundle({**artifacts, "scan-manifest.json": canonical_json(manifest)}, key)
     assert "private-sensitive-value" not in str(error.value)
+
+
+_JSON_VALUES = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False, allow_infinity=False) | st.text(max_size=20),
+    lambda children: st.lists(children, max_size=4) | st.dictionaries(st.text(max_size=8), children, max_size=4),
+    max_leaves=12,
+)
+
+
+def _json_paths(value, prefix=()):
+    yield prefix
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _json_paths(item, prefix + (key,))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _json_paths(item, prefix + (index,))
+
+
+@settings(max_examples=int(os.environ.get("AEGIS_FUZZ_EXAMPLES", "60")), deadline=None,
+          derandomize="AEGIS_FUZZ_EXAMPLES" not in os.environ,
+          suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture])
+@given(name=st.sampled_from(["report.json", "matrix.json", "findings.json", "evidence.json", "server-events.json"]),
+       data=st.data(), replacement=_JSON_VALUES, delete=st.booleans())
+def test_re_signed_structural_mutations_fail_only_with_value_errors(bundle, name, data, replacement, delete):
+    """A validly signed but malformed bundle is rejected cleanly, never with a crash (fuzzed)."""
+    artifacts, key = bundle
+    document = json.loads(artifacts[name])
+    target = data.draw(st.sampled_from(list(_json_paths(document))))
+    if not target:
+        document = replacement
+    else:
+        parent = document
+        for part in target[:-1]:
+            parent = parent[part]
+        if delete and isinstance(parent, dict):
+            parent.pop(target[-1])
+        else:
+            parent[target[-1]] = replacement
+    try:
+        validate_bac_bundle(resigned_bundle(artifacts, updates={name: document}), key)
+    except ValueError:
+        pass

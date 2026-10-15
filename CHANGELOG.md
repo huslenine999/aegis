@@ -25,6 +25,13 @@ All notable changes to the Aegis project will be documented in this file.
 - `aegis backup` writes a verified evidence inventory; `aegis restore`
   re-verifies every signed run before restoring and refuses on failure
   (`--public-key`, `--allow-evidence-failures`).
+- Property-based fuzz tests for dependency manifests, advisory scoring, signed
+  evidence, and BAC bundle admission (`tests/test_fuzz_inputs.py`; deeper runs
+  with `AEGIS_FUZZ_EXAMPLES`), and a monkey test that sends random requests to
+  every route as anonymous, viewer, operator, admin, and another tenant's admin
+  (`tests/test_api_monkey.py`; `AEGIS_MONKEY_REQUESTS`, optionally on
+  PostgreSQL). 30,000+ monkey requests on SQLite and PostgreSQL found no crash,
+  server error, or access-boundary failure.
 - Held-out CodeQL benchmark results in `benchmarks/results/`, and
   `--codeql-cli` / `--with-semgrep` options for `scripts/run_codeql_benchmark.py`.
 
@@ -55,6 +62,20 @@ All notable changes to the Aegis project will be documented in this file.
   `python-sqli` ignored Flask and Django request data;
   `javascript-command-injection` missed destructured `child_process` imports.
 - The npm launcher no longer builds shell commands from home-directory paths.
+- Dependency inventory (found by fuzzing): a bare requirement such as
+  `requests`, and `!=` or `===` specifiers, were dropped from
+  `requirements.txt` instead of failing the inventory as unpinned; `==2.*`
+  wildcards and npm tags such as `latest` or `1.x` counted as exact pins; and a
+  bare `pyproject.toml` dependency was "pinned" to its own name. All of these
+  could produce a clean OSV result for a dependency that was never checked.
+  Unrecognized requirement lines now fail the inventory.
+- Advisory scoring: CVSS v2 vectors were scored with the v3 formula (almost
+  always 0.0, so LOW), and advisories with only a CVSS v4 vector or no vector
+  were LOW. Aegis now computes CVSS v2 correctly, uses the publisher's own
+  severity (for example GitHub's) when there is no v3 vector, and treats an
+  unscored advisory as MEDIUM, which blocks by default. CVSS 9.0 and above is
+  CRITICAL in the gate, as it already was in tracked findings. Cached advisory
+  records are rebuilt.
 
 ## [2.5.0] - 2026-10-15
 

@@ -106,7 +106,7 @@ def test_osv_batches_packages_and_fetches_each_advisory_once(fake_osv):
     assert findings[0]["aliases"] == ["CVE-2026-0"]
     saved = json.loads(policy_engine.OSV_CACHE_FILE.read_text())
     assert {f"npm:{name}@1.0.0" for name in names} <= set(saved)
-    assert "osv-advisory:OSV-shared" in saved
+    assert policy_engine.OSV_ADVISORY_CACHE_PREFIX + "OSV-shared" in saved
 
 
 def test_osv_splits_large_inventories_into_bounded_batches(fake_osv, monkeypatch):
@@ -154,7 +154,7 @@ def test_osv_advisory_ids_from_responses_cannot_change_the_request_path(fake_osv
 
 def test_osv_batch_merge_preserves_cache_ttl_stale_fallback_and_strict_failures(fake_osv, monkeypatch):
     policy_engine.OSV_CACHE_FILE.write_text(json.dumps({
-        "npm:fresh@1.0.0": {"timestamp": 199999, "vulns": [{"id": "fresh"}]},
+        "npm:fresh@1.0.0": {"timestamp": 199999, "schema": policy_engine.OSV_RECORD_SCHEMA, "vulns": [{"id": "fresh"}]},
         "npm:stale@1.0.0": {"timestamp": 0, "vulns": [{"id": "stale"}]},
     }))
     fake_osv.add("npm", "stale", "1.0.0", {"id": "stale-new"})

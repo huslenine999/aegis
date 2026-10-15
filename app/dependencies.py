@@ -59,10 +59,11 @@ SUPPORTED_MANIFESTS = {
 }
 
 
-REQUIREMENT_RE = re.compile(
-    r"^\s*([A-Za-z0-9_.-]+)\s*(?:\[[^\]]+\])?\s*(==|>=|~=|<=|>|<)\s*([A-Za-z0-9_.*!+.-]+)"
-)
-EXACT_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.!\-+_]*$")
+REQUIREMENT_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*?)\s*$")
+SPECIFIER_RE = re.compile(r"\s*(===|==|!=|~=|>=|<=|>|<)\s*([A-Za-z0-9_.*!+-]+)\s*")
+# An exact release starts with a digit and has no wildcard ("2.*", "1.x").
+EXACT_VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z.!\-+_]*$")
+WILDCARD_COMPONENT_RE = re.compile(r"(?:^|\.)[xX*](?:\.|$)")
 
 
 def scan_root_for_target(target_path: str | Path) -> Path:
@@ -144,33 +145,28 @@ def extract_packages_from_manifest(
 
 def _packages_from_requirements(path: Path) -> list[DependencyPackage]:
     packages = []
-    for line in read_bounded_text(path, errors="ignore").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or line.startswith(("-", "git+", "http://", "https://")):
+    text = read_bounded_text(path, errors="ignore").replace("\r\n", "\n").replace("\\\n", " ")
+    for line in text.splitlines():
+        # pip comments need leading whitespace; per-requirement options follow " --".
+        line = re.split(r"(?:^|\s)#", line, maxsplit=1)[0].split(" --", 1)[0].strip()
+        if not line or line.startswith(("-", ".", "/", "git+", "http://", "https://", "file:")):
             continue
-        match = REQUIREMENT_RE.match(line)
-        if match:
-            operator = match.group(2)
-            version = match.group(3) if operator == "==" else None
-            packages.append(DependencyPackage(match.group(1), version, "PyPI"))
+        packages.append(_python_dependency_from_spec(line))
     return packages
 
 
 def _packages_from_pyproject(path: Path) -> list[DependencyPackage]:
     data = tomllib.loads(read_bounded_text(path, errors="ignore"))
-    packages = []
+    packages: list[DependencyPackage] = []
     project = data.get("project", {})
-    for value in project.get("dependencies", []) or []:
-        package = _python_dependency_from_spec(value)
-        if package:
-            packages.append(package)
+    groups = [project.get("dependencies") or []]
     optional = project.get("optional-dependencies", {})
     if isinstance(optional, dict):
-        for values in optional.values():
-            for value in values or []:
-                package = _python_dependency_from_spec(value)
-                if package:
-                    packages.append(package)
+        groups.extend(values or [] for values in optional.values())
+    for values in groups:
+        if not isinstance(values, list):
+            raise ValueError("pyproject.toml dependencies must be lists of requirements.")
+        packages.extend(_python_dependency_from_spec(value) for value in values)
     poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
     if isinstance(poetry_deps, dict):
         for name, spec in poetry_deps.items():
@@ -366,11 +362,27 @@ def _packages_from_lock_dependencies(deps: dict[str, Any], ecosystem: str) -> li
     return packages
 
 
-def _python_dependency_from_spec(spec: str) -> DependencyPackage | None:
-    match = re.match(r"^\s*([A-Za-z0-9_.-]+)", str(spec))
+def _python_dependency_from_spec(spec: str) -> DependencyPackage:
+    """Parse one PEP 508 requirement; only a single ``==``/``===`` pin is exact."""
+    text = str(spec).split(";", 1)[0]
+    match = REQUIREMENT_RE.match(text)
     if not match:
-        return None
-    return DependencyPackage(match.group(1), _version_from_spec(spec), "PyPI")
+        raise ValueError(f"Unrecognized Python requirement: {text.strip()[:80]}")
+    name, constraint = match.groups()
+    if constraint.startswith("@"):
+        return DependencyPackage(name, None, "PyPI")
+    if constraint.startswith("(") and constraint.endswith(")"):
+        constraint = constraint[1:-1]
+    clauses = []
+    for clause in constraint.split(",") if constraint else []:
+        specifier = SPECIFIER_RE.fullmatch(clause)
+        if not specifier:
+            raise ValueError(f"Unrecognized Python requirement: {text.strip()[:80]}")
+        clauses.append(specifier.groups())
+    version = None
+    if len(clauses) == 1 and clauses[0][0] in {"==", "==="}:
+        version = _clean_exact_version(clauses[0][1])
+    return DependencyPackage(name, version, "PyPI")
 
 
 def _version_from_spec(spec: Any) -> str | None:
@@ -378,24 +390,16 @@ def _version_from_spec(spec: Any) -> str | None:
         spec = spec.get("version")
     if not isinstance(spec, str):
         return None
-    spec = spec.strip()
-    requirement_match = REQUIREMENT_RE.match(spec)
-    if requirement_match:
-        if requirement_match.group(2) != "==":
-            return None
-        return _clean_exact_version(requirement_match.group(3))
-    if spec.startswith("=="):
-        return _clean_exact_version(spec[2:].strip())
-    if EXACT_VERSION_RE.match(spec):
-        return spec
-    return None
+    return _clean_exact_version(spec.strip().lstrip("="))
 
 
 def _clean_exact_version(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     version = value.strip().lstrip("v")
-    return version if EXACT_VERSION_RE.match(version) else None
+    if not EXACT_VERSION_RE.match(version) or WILDCARD_COMPONENT_RE.search(version):
+        return None
+    return version
 
 
 def _dedupe_packages(packages: list[DependencyPackage]) -> list[DependencyPackage]:

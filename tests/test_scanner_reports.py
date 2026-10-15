@@ -73,7 +73,7 @@ def test_analyze_yara_missing():
 
 def test_generate_sbom(tmp_path):
     req_file = tmp_path / "requirements.txt"
-    req_file.write_text("Flask==3.1.3\nrequests>=2.34.2\n# Comment line\n\ninvalid_line_no_version\n")
+    req_file.write_text("Flask==3.1.3\nrequests>=2.34.2\n# Comment line\n\nunpinned_package\n")
     
     sbom_file = tmp_path / "sbom.json"
     generate_cyclonedx_sbom(req_file, sbom_file)
@@ -82,13 +82,15 @@ def test_generate_sbom(tmp_path):
     sbom_data = json.loads(sbom_file.read_text())
     assert sbom_data["bomFormat"] == "CycloneDX"
     assert sbom_data["specVersion"] == "1.5"
-    assert len(sbom_data["components"]) == 2
+    assert len(sbom_data["components"]) == 3
     
     packages = {c["name"]: c.get("version") for c in sbom_data["components"]}
     assert "Flask" in packages
     assert packages["Flask"] == "3.1.3"
     assert "requests" in packages
     assert packages["requests"] is None
+    # A bare requirement is still a dependency, listed without a version.
+    assert packages["unpinned_package"] is None
 
 
 def test_run_yara_scan_webshell(tmp_path):

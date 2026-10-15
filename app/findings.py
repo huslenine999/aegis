@@ -81,6 +81,26 @@ EPSS_ESCALATION_THRESHOLD = 0.1
 _SEVERITY_ORDER = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
 
+UNSCORED_ADVISORY_REASON = (
+    "The advisory publishes no CVSS v2/v3 score or severity; treated as MEDIUM until reviewed"
+)
+
+
+def osv_base_severity(cvss: Any) -> str:
+    """Map an advisory's CVSS score to a severity; an unscored advisory is MEDIUM.
+
+    A known vulnerability without a usable score (for example a CVSS v4-only
+    record) must not fall below the default gate as if it were LOW.
+    """
+    try:
+        score = float(cvss)
+    except (TypeError, ValueError):
+        return "MEDIUM"
+    if score != score:
+        return "MEDIUM"
+    return "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW"
+
+
 def escalate_osv_severity(severity: str, item: dict) -> tuple[str, str | None]:
     """Raise a dependency finding's severity from exploit evidence; never lower it.
 
@@ -190,10 +210,7 @@ def extract_findings(result: dict | None) -> list[dict]:
         )
 
     for item in result.get("osv") or []:
-        score = float(item.get("cvss") or 0)
-        severity, _ = escalate_osv_severity(
-            "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW", item
-        )
+        severity, _ = escalate_osv_severity(osv_base_severity(item.get("cvss")), item)
         add(
             "OSV",
             item.get("id"),
