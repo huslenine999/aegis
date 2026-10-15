@@ -55,6 +55,7 @@ from .github_integration import complete_check_run, github_installation_token, g
 from .github_lifecycle import GitHubLifecycleError, authorize_queued_scan
 from .notifications import queue_project_notification
 from .observability import record_scan_queue_age, record_worker_failure
+from .process_hardening import deny_same_user_inspection
 from .reporting import load_json_report
 from .resource_budgets import (
     ResourceLimitError,
@@ -441,6 +442,12 @@ def mark_scan_failed(job, connection=None, *exc_info) -> None:
 
 
 class ScanWorker(Worker):
+    def __init__(self, *args, **kwargs):
+        # Before any job runs: scanner subprocesses must not be able to read
+        # this process's environment (database password, keys) via /proc.
+        deny_same_user_inspection()
+        super().__init__(*args, **kwargs)
+
     def handle_work_horse_killed(self, job, retpid, ret_val, rusage):
         # RQ runs no failure callback when the work horse is killed (for example out of memory).
         mark_scan_failed(job)

@@ -109,6 +109,7 @@ files = [
   "app/notifier_entrypoint.py",
   "app/evidence_signer.py",
   "app/signer_entrypoint.py",
+  "app/process_hardening.py",
   "policy_engine.py",
 ]
 
