@@ -4,8 +4,22 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-15
+
 ### Added
 
+- Standard scans now apply Semgrep rules to JavaScript/TypeScript, Go, and
+  Java as well as Python: injection, request input reaching file paths,
+  outbound URLs, or redirects, HTML sinks, unsafe deserialization, XXE,
+  disabled TLS verification, hard-coded JWT secrets, and weak hashing. Every
+  rule has labeled vulnerable and safe fixtures enforced by the test suite.
+- Dependency findings are prioritized with the CISA Known Exploited
+  Vulnerabilities catalog (raised to CRITICAL) and FIRST EPSS (raised to at
+  least HIGH at a 10% or greater 30-day exploitation probability). Severity is
+  never lowered, and the evidence date is recorded on each finding.
+- The GitHub Action can upload SARIF to GitHub code scanning
+  (`upload-sarif: true`) so findings appear on the pull-request diff. SARIF
+  rules carry `security-severity` for code-scanning ranking.
 - Added the Broken Access Control research workflow (`aegis bac`) with
   vulnerable/fixed lab variants, evidence bundles, and a status-only baseline.
 - Added tenant-scoped finding queries with status, severity, and search filters.
@@ -19,6 +33,9 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Changed
 
+- OSV lookups use `/v1/querybatch` and fetch each distinct advisory once,
+  caching advisories by their modified time.
+- Semgrep findings report the bare rule ID instead of a path-prefixed ID.
 - Retired Checkov, Safety, ClamAV, Trivy, and custom DAST probes from new scans;
   Deep scans now use an offline, pinned CodeQL container on a dedicated worker.
 - Scan history returns compact summaries and project access uses a single
@@ -34,6 +51,15 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Fixed
 
+- The GitHub Action no longer forwards `--no-docker`, which the CLI rejects
+  since the scanner migration; with the default `no-docker: true` every Action
+  run ended in an operational error. The input is now deprecated and ignored.
+- `scripts/run_security_benchmark.py` runs again after the same removal.
+- Semgrep suppressions written with the bare rule ID now match. Raw Semgrep
+  rule IDs embedded the local path to the rules file, which also exposed the
+  operator's username in reports and SARIF.
+- A missing Semgrep rules file now fails the scanner instead of silently
+  falling back to a Python-only copy.
 - Reject non-object JSON bodies, oversized identifiers, and unhashable roles
   with `400` instead of server errors.
 - Kill scanner process trees on timeout or cancellation even after partial output.

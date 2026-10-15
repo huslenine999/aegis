@@ -54,13 +54,6 @@ For Standard scans with Semgrep included, install the scanner extra:
 pipx install "aegis-security-console[scanner]"
 ```
 
-If PyPI reports that no matching distribution exists before the first tagged
-release is published, install the current repository revision instead:
-
-```bash
-pipx install "git+https://github.com/huslenine999/aegis.git#egg=aegis-security-console[scanner]"
-```
-
 Check the available scanner dependencies, then run the built-in demonstration:
 
 ```bash
@@ -279,7 +272,6 @@ aegis scan . --config ./aegis.yml
 
 ```yaml
 scan:
-  no_docker: true
   fail_on: medium,high,critical
   timeout: 120
   sarif: .aegis/reports/aegis.sarif
@@ -488,7 +480,7 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-15 recorded 925 passing Python tests, 2
+The last local validation on 2026-10-15 recorded 965 passing Python tests, 2
 skipped Compose integration tests, and passing Ruff and mypy checks. Coverage was
 last measured at 80.13% over the configured modules on 2026-09-23. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture. The coverage percentage is not whole-project

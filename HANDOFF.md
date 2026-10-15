@@ -1,7 +1,7 @@
 # Aegis — Engineering Handoff
 
 Date: 2026-10-15
-Branch: `main`. Version 2.4.0 (unreleased changes in `CHANGELOG.md`). MIT.
+Branch: `main`. Version 2.5.0 (tagged locally as `v2.5.0`; see `CHANGELOG.md`). MIT.
 Author: Khuslen Gan-Ochir.
 
 ## What Aegis is
@@ -19,7 +19,8 @@ Ships three ways:
 3. Self-hosted workbench — FastAPI dashboard + PostgreSQL + Redis/RQ workers +
    notifier + Caddy (`docker-compose.yml`)
 
-Scanners: Ruff, Semgrep, OSV, secret detection, optional YARA. Deep scans add
+Scanners: Ruff, Semgrep (Aegis rules for Python, JS/TS, Go, Java), OSV
+prioritized with CISA KEV and EPSS, secret detection, optional YARA. Deep scans add
 an offline, pinned CodeQL container on a dedicated worker (`make codeql-setup`).
 Checkov, Safety, ClamAV, Trivy, and the custom DAST probes were retired; see
 `docs/SCANNER_MIGRATION_PLAN.md`.
@@ -54,9 +55,9 @@ docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ## Current verification status (2026-10-15)
 
 ```
-pytest:      925 passed, 2 skipped
+pytest:      965 passed, 2 skipped
 ruff:        clean
-mypy:        clean (60 source files)
+mypy:        clean (configured modules)
 ```
 
 Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright install chromium` once). Quick loop: `make verify-fast`.
@@ -69,8 +70,9 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    `docs/research/THESIS_OUTLINE.md`. External targets (crAPI, VAmPI) are
    planned, not implemented; the runner still accepts only its own loopback lab.
    Training runs and passing tests are not final results.
-2. **First PyPI release.** Tag a release so `pipx install aegis-security-console`
-   works without the git fallback in the README.
+2. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
+   Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
+   tag, and confirm `pipx install aegis-security-console` works.
 3. **Deep-scan assurance.** Authenticated Deep browser flow, adversarial
    isolation checks, and a held-out CodeQL benchmark (see
    `docs/research/CAPSTONE_REVIEW.md`).
