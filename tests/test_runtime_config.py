@@ -283,6 +283,18 @@ def test_container_runtime_is_hardened_and_persistent():
     assert services["signer"]["volumes"] == ["aegis-data:/data:ro"]
     assert services["signer"]["read_only"] is True
     assert "evidence-signing" in services["signer"]["healthcheck"]["test"][-1]
+    # Only the broker holds GitHub and credential-encryption secrets among the workers.
+    assert services["worker"]["environment"]["AEGIS_GITHUB_BROKER"] == "remote"
+    assert services["dashboard"]["environment"]["AEGIS_REQUIRE_GITHUB_BROKER"] == "true"
+    for secret in ("AEGIS_ENCRYPTION_KEY", "AEGIS_GITHUB_APP_PRIVATE_KEY_B64", "AEGIS_GITHUB_APP_ID"):
+        assert secret not in services["worker"]["environment"]
+        assert secret in services["github-broker"]["environment"]
+    assert services["github-broker"]["entrypoint"] == ["python", "-m", "app.github_broker_entrypoint"]
+    assert "volumes" not in services["github-broker"]
+    assert "github-credentials" in services["github-broker"]["healthcheck"]["test"][-1]
+    assert not {"AEGIS_EVIDENCE_SIGNING_KEY", "AEGIS_SESSION_SECRET", "AEGIS_SMTP_PASSWORD"} & set(
+        services["github-broker"]["environment"]
+    )
     assert not {"AEGIS_ENCRYPTION_KEY", "AEGIS_GITHUB_APP_PRIVATE_KEY_B64", "AEGIS_SESSION_SECRET"} & set(
         services["signer"]["environment"]
     )
@@ -336,6 +348,7 @@ def test_container_preflight_rejects_missing_production_configuration(monkeypatc
         "AEGIS_REQUIRE_AUTH",
         "AEGIS_REQUIRE_NOTIFIER",
         "AEGIS_REQUIRE_SIGNER",
+        "AEGIS_REQUIRE_GITHUB_BROKER",
         "AEGIS_REQUIRE_REDIS",
         "AEGIS_REQUIRE_WORKER",
         "AEGIS_SESSION_SECRET",
@@ -418,6 +431,7 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_REQUIRE_WORKER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_NOTIFIER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_SIGNER", "true")
+    monkeypatch.setenv("AEGIS_REQUIRE_GITHUB_BROKER", "true")
     monkeypatch.setenv("AEGIS_REQUIRE_AUTH", "true")
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "s" * 32)
     monkeypatch.setenv("AEGIS_TOKEN_PEPPER", "p" * 32)

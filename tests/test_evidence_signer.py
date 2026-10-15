@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import database, evidence_signer, projects, signer_entrypoint, worker
+from app import database, evidence_signer, projects, service_rpc, signer_entrypoint, worker
 from app.evidence import canonical_json, evidence_public_key, sign_manifest, verify_manifest
 from app.evidence_signer import SigningRefused, sign_requested_manifest, validate_signing_request
 from app.scan_engine import ScanJobPayload
@@ -239,7 +239,7 @@ def use_fake_queue(monkeypatch, job):
             return job
 
     monkeypatch.setattr(rq, "Queue", FakeQueue)
-    monkeypatch.setattr(evidence_signer.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(service_rpc.time, "sleep", lambda _seconds: None)
 
 
 def test_remote_request_returns_the_signed_manifest(monkeypatch):

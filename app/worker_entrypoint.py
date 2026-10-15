@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .evidence import evidence_public_key
 from .evidence_signer import remote_signing_enabled
+from .github_broker import remote_broker_enabled
 from .codeql_scanner import SUPPORTED_LANGUAGES, operator_runtime_configuration
 
 
@@ -15,7 +16,10 @@ FORBIDDEN_PRODUCTION_SECRETS = {
     "AEGIS_ADMIN_TOKEN",
     "AEGIS_AUDIT_HMAC_KEY",
     "AEGIS_BOOTSTRAP_ADMIN_PASSWORD",
+    "AEGIS_ENCRYPTION_KEY",
     "AEGIS_EVIDENCE_SIGNING_KEY",
+    "AEGIS_GITHUB_APP_PRIVATE_KEY",
+    "AEGIS_GITHUB_APP_PRIVATE_KEY_B64",
     "AEGIS_METRICS_TOKEN",
     "AEGIS_SESSION_SECRET",
     "AEGIS_SETUP_TOKEN",
@@ -30,6 +34,11 @@ def validate_worker_configuration() -> None:
         raise RuntimeError(
             "Production scanner workers must sign evidence through the evidence "
             "signer: set AEGIS_EVIDENCE_SIGNER=remote and run the signer service."
+        )
+    if production and not remote_broker_enabled():
+        raise RuntimeError(
+            "Production scanner workers must obtain GitHub credentials from the broker: "
+            "set AEGIS_GITHUB_BROKER=remote and run the github-broker service."
         )
     if not remote_signing_enabled():
         # A local signer must hold a valid key before accepting any repository.
@@ -64,7 +73,7 @@ def validate_worker_configuration() -> None:
         if exposed:
             raise RuntimeError(
                 "Production scanner workers must not receive dashboard, notifier, "
-                "or evidence-signing secrets: " + ", ".join(exposed)
+                "evidence-signing, or GitHub secrets: " + ", ".join(exposed)
             )
 
 

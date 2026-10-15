@@ -210,6 +210,8 @@ def validate_runtime_configuration() -> None:
         errors.append("AEGIS_REQUIRE_NOTIFIER must be true")
     if not environment_bool("AEGIS_REQUIRE_SIGNER"):
         errors.append("AEGIS_REQUIRE_SIGNER must be true")
+    if not environment_bool("AEGIS_REQUIRE_GITHUB_BROKER"):
+        errors.append("AEGIS_REQUIRE_GITHUB_BROKER must be true")
     if not environment_bool("AEGIS_REQUIRE_AUTH"):
         errors.append("AEGIS_REQUIRE_AUTH must be true")
     if len(os.environ.get("AEGIS_SESSION_SECRET", "")) < 32:

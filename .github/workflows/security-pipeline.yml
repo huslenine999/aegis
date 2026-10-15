@@ -262,7 +262,7 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml build
 
       - name: Start production stack
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker signer notifier
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis dashboard worker signer github-broker notifier
 
       - name: Verify service readiness
         shell: bash
@@ -294,7 +294,7 @@ jobs:
 
       - name: Show container logs
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color dashboard worker signer notifier postgres redis
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color dashboard worker signer github-broker notifier postgres redis
 
       - name: Stop production stack
         if: always()

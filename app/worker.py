@@ -51,7 +51,8 @@ from .artifact_storage import (
 )
 from .safe_output import SafeOutputError, SafeOutputRoot
 from .source_attestation import SourceSnapshot, create_source_snapshot, normalize_scan_report_paths
-from .github_integration import complete_check_run, github_installation_token, github_token
+from . import github_broker
+from .github_integration import github_installation_token, github_token
 from .github_lifecycle import GitHubLifecycleError, authorize_queued_scan
 from .notifications import queue_project_notification
 from .observability import record_scan_queue_age, record_worker_failure
@@ -323,22 +324,30 @@ def _clone_github_project(
     job_id: str,
     installation_id: int | None = None,
     revision: str | None = None,
+    scan_run_id: int | None = None,
 ) -> tuple[str, Path]:
     destination = SCANS_DIR / "workspaces" / job_id
     destination.parent.mkdir(parents=True, exist_ok=True)
     if revision and not re.fullmatch(r"[0-9a-f]{40,64}", revision):
         raise RuntimeError("GitHub source revision is invalid.")
-    token = (
-        github_installation_token(
-            installation_id,
-            tenant_id=project["tenant_id"],
-            repository=project["github_full_name"],
+    if scan_run_id:
+        # The broker derives the repository and identity from the run itself.
+        token = github_broker.clone_token(scan_run_id)
+    elif github_broker.remote_broker_enabled():
+        raise RuntimeError("GitHub clones require a recorded scan run.")
+    else:
+        token = (
+            github_installation_token(
+                installation_id,
+                tenant_id=project["tenant_id"],
+                repository=project["github_full_name"],
+                permissions={"contents": "read"},
+            )
+            if installation_id
+            else None
         )
-        if installation_id
-        else None
-    )
-    if not token:
-        token = github_token(requested_by)
+        if not token:
+            token = github_token(requested_by)
     environment = scanner_subprocess_environment()
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
@@ -401,16 +410,13 @@ def _complete_github_scan_check(
     details_base = os.environ.get("AEGIS_PUBLIC_URL", "").rstrip("/")
     details_url = f"{details_base}/projects" if details_base.startswith("https://") else ""
     try:
-        complete_check_run(
-            run["github_installation_id"],
-            project["github_full_name"],
-            run["github_check_run_id"],
+        github_broker.complete_check(
+            scan_run_id,
             conclusion=conclusion,
             title="Aegis security gate passed" if conclusion == "success" else "Aegis security gate blocked",
             summary=summary,
             details_url=details_url,
             annotations=annotations,
-            tenant_id=project["tenant_id"],
         )
     except Exception as exc:
         publish_job_event(
@@ -722,6 +728,7 @@ def async_scan_task(
                     job_id,
                     github_installation_id,
                     source_revision,
+                    scan_run_id,
                 )
                 target = "project"
         

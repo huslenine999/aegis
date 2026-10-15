@@ -157,26 +157,8 @@ def readiness():
             )
         notifier_state = f"{len(notifier_workers)} available"
 
-    signer_state = "not-required"
-    if os.environ.get("AEGIS_REQUIRE_SIGNER", "false").lower() in {"1", "true", "yes", "on"}:
-        if not REDIS_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Signer readiness requires Redis.")
-        try:
-            from rq import Worker
-
-            from .evidence_signer import SIGNING_QUEUE
-
-            signers = [
-                worker for worker in Worker.all(connection=redis_client)
-                if SIGNING_QUEUE in worker.queue_names()
-            ]
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503, detail="Signer readiness could not be verified."
-            ) from exc
-        if not signers:
-            raise HTTPException(status_code=503, detail="No evidence signer is available.")
-        signer_state = f"{len(signers)} available"
+    signer_state = _service_state("AEGIS_REQUIRE_SIGNER", "evidence-signing", "evidence signer")
+    broker_state = _service_state("AEGIS_REQUIRE_GITHUB_BROKER", "github-credentials", "GitHub credential broker")
 
     return {
         "status": "ready",
@@ -185,7 +167,25 @@ def readiness():
         "worker": worker_state,
         "notifier": notifier_state,
         "signer": signer_state,
+        "github_broker": broker_state,
     }
+
+
+def _service_state(flag: str, queue: str, label: str) -> str:
+    """Readiness of a narrow RQ service such as the evidence signer."""
+    if os.environ.get(flag, "false").lower() not in {"1", "true", "yes", "on"}:
+        return "not-required"
+    if not REDIS_AVAILABLE:
+        raise HTTPException(status_code=503, detail=f"{label[0].upper() + label[1:]} readiness requires Redis.")
+    try:
+        from rq import Worker
+
+        workers = [worker for worker in Worker.all(connection=redis_client) if queue in worker.queue_names()]
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"{label} readiness could not be verified.") from exc
+    if not workers:
+        raise HTTPException(status_code=503, detail=f"No {label} is available.")
+    return f"{len(workers)} available"
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

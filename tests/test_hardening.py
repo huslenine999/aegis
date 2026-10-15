@@ -409,6 +409,11 @@ def test_production_workers_must_use_the_separate_evidence_signer(monkeypatch):
         validate_worker_configuration()
 
     monkeypatch.setenv("AEGIS_EVIDENCE_SIGNER", "remote")
+    monkeypatch.delenv("AEGIS_GITHUB_BROKER", raising=False)
+    with pytest.raises(RuntimeError, match="AEGIS_GITHUB_BROKER=remote"):
+        validate_worker_configuration()
+
+    monkeypatch.setenv("AEGIS_GITHUB_BROKER", "remote")
     validate_worker_configuration()
 
     # The key itself must never reach a production scanner worker.
@@ -456,7 +461,14 @@ def test_isolated_worker_preflights_pinned_codeql_runtime(monkeypatch):
 def test_production_workers_reject_cross_boundary_secrets(monkeypatch):
     monkeypatch.setenv("AEGIS_ENV", "production")
     monkeypatch.setenv("AEGIS_EVIDENCE_SIGNER", "remote")
+    monkeypatch.setenv("AEGIS_GITHUB_BROKER", "remote")
     monkeypatch.delenv("AEGIS_EVIDENCE_SIGNING_KEY", raising=False)
+    monkeypatch.delenv("AEGIS_ENCRYPTION_KEY", raising=False)
+    for secret in ("AEGIS_ENCRYPTION_KEY", "AEGIS_GITHUB_APP_PRIVATE_KEY_B64"):
+        monkeypatch.setenv(secret, "must-not-reach-scanner")
+        with pytest.raises(RuntimeError, match=secret):
+            validate_worker_configuration()
+        monkeypatch.delenv(secret)
     monkeypatch.setenv("AEGIS_SESSION_SECRET", "must-not-reach-scanner")
     with pytest.raises(RuntimeError, match="AEGIS_SESSION_SECRET"):
         validate_worker_configuration()

@@ -81,6 +81,7 @@ services:
       AEGIS_REQUIRE_WORKER: "true"
       AEGIS_REQUIRE_NOTIFIER: "true"
       AEGIS_REQUIRE_SIGNER: "true"
+      AEGIS_REQUIRE_GITHUB_BROKER: "true"
       AEGIS_MAX_UPLOAD_BYTES: ${AEGIS_MAX_UPLOAD_BYTES:-1048576}
       AEGIS_MAX_REQUEST_BYTES: ${AEGIS_MAX_REQUEST_BYTES:-1114112}
       AEGIS_ARTIFACT_RETENTION_DAYS: ${AEGIS_ARTIFACT_RETENTION_DAYS:-30}
@@ -148,7 +149,6 @@ services:
     environment:
       AEGIS_ENV: production
       AEGIS_PUBLIC_URL: https://${AEGIS_DOMAIN}
-      AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
       AEGIS_DATA_DIR: /data
       AEGIS_REQUIRE_REDIS: "true"
       AEGIS_REQUIRE_WORKER: "true"
@@ -174,10 +174,10 @@ services:
       AEGIS_STREAM_CHUNK_BYTES: ${AEGIS_STREAM_CHUNK_BYTES:-65536}
       AEGIS_ALLOW_DEEP_SCANS: "false"
       AEGIS_ISOLATED_WORKER: "false"
-      # Workers never hold the evidence key; the signer service signs for them.
+      # Workers hold no evidence, GitHub, or credential-encryption keys: the
+      # signer and github-broker services act for them.
       AEGIS_EVIDENCE_SIGNER: remote
-      AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
-      AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
+      AEGIS_GITHUB_BROKER: remote
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
@@ -245,6 +245,42 @@ services:
       - /tmp:size=16m,mode=1777
     healthcheck:
       test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('evidence-signing' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  github-broker:
+    # Holds the GitHub App key and the key for stored OAuth tokens. Issues a
+    # read-only, single-repository clone token or completes a check run, only
+    # for a scan run that is still in progress.
+    image: ${AEGIS_IMAGE:-aegis-local:latest}
+    build: .
+    entrypoint: ["python", "-m", "app.github_broker_entrypoint"]
+    command: ["--url", "redis://redis:6379/0", "--path", "/app/app"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      AEGIS_ENV: production
+      AEGIS_ENCRYPTION_KEY: ${AEGIS_ENCRYPTION_KEY:?Set the credential encryption key}
+      AEGIS_GITHUB_APP_ID: ${AEGIS_GITHUB_APP_ID:-}
+      AEGIS_GITHUB_APP_PRIVATE_KEY_B64: ${AEGIS_GITHUB_APP_PRIVATE_KEY_B64:-}
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://aegis:${POSTGRES_PASSWORD}@postgres:5432/aegis
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('github-credentials' in worker.queue_names() for worker in Worker.all(connection=connection))"]
       interval: 10s
       timeout: 5s
       retries: 6

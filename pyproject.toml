@@ -110,6 +110,9 @@ files = [
   "app/evidence_signer.py",
   "app/signer_entrypoint.py",
   "app/process_hardening.py",
+  "app/service_rpc.py",
+  "app/github_broker.py",
+  "app/github_broker_entrypoint.py",
   "policy_engine.py",
 ]
 

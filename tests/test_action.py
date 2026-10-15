@@ -264,7 +264,7 @@ def test_container_smoke_starts_all_readiness_services():
     )
     log_step = next(step for step in steps if step.get("name") == "Show container logs")
 
-    required_services = {"postgres", "redis", "dashboard", "worker", "signer", "notifier"}
+    required_services = {"postgres", "redis", "dashboard", "worker", "signer", "github-broker", "notifier"}
     assert required_services <= set(start_step["run"].split())
     assert required_services <= set(log_step["run"].split())
     assert "/run-scan" not in readiness_step["run"]

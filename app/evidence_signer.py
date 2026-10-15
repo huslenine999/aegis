@@ -21,12 +21,12 @@ sign artifacts that differ from what is stored.
 import hashlib
 import json
 import os
-import time
 from datetime import datetime, timezone
 from typing import Any
 
 from .artifact_storage import SAFE_JOB_ID, run_directory
 from .database import SCANS_DIR, get_connection
+from .service_rpc import ServiceRefused, call_service
 from .evidence import (
     canonical_json,
     classify_source_attestation,
@@ -42,7 +42,7 @@ POLICY_STATUSES = {"ALLOWED", "BLOCKED", "ERROR"}
 SIGNING_TIMEOUT_SECONDS = 60.0
 
 
-class SigningRefused(RuntimeError):
+class SigningRefused(ServiceRefused):
     """The signer declined to sign a manifest."""
 
 
@@ -58,31 +58,17 @@ def sign_scan_manifest(payload: dict) -> dict:
 
 
 def _request_remote_signature(payload: dict) -> dict:
-    from rq import Queue
-
-    from .database import redis_client
-
-    queue = Queue(SIGNING_QUEUE, connection=redis_client)
-    job = queue.enqueue(
+    signed = call_service(
+        SIGNING_QUEUE,
         sign_requested_manifest,
         payload,
-        job_timeout=int(SIGNING_TIMEOUT_SECONDS),
-        result_ttl=300,
-        failure_ttl=3600,
+        label="evidence signer",
+        timeout=SIGNING_TIMEOUT_SECONDS,
+        error=SigningRefused,
     )
-    deadline = time.monotonic() + SIGNING_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        status = job.get_status(refresh=True)
-        if status == "finished":
-            signed = job.return_value()
-            if not isinstance(signed, dict) or "signature" not in signed:
-                raise SigningRefused("The evidence signer returned an invalid manifest.")
-            return signed
-        if status in {"failed", "stopped", "canceled"}:
-            raise SigningRefused("The evidence signer refused or failed to sign the manifest.")
-        time.sleep(0.2)
-    job.cancel()
-    raise SigningRefused("The evidence signer did not respond in time.")
+    if not isinstance(signed, dict) or "signature" not in signed:
+        raise SigningRefused("The evidence signer returned an invalid manifest.")
+    return signed
 
 
 def _artifact_inventory(report_dir) -> list[dict]:

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+from typing import Any
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -92,7 +93,14 @@ def github_installation_token(
     *,
     tenant_id: int | None = None,
     repository: str | None = None,
+    permissions: dict[str, str] | None = None,
 ) -> str:
+    """Mint an installation token, scoped to one repository when one is named.
+
+    Without a scope GitHub returns a token for every repository the
+    installation can reach, with all of the App's permissions. Aegis always
+    names the repository, and callers pass only the permissions they need.
+    """
     if int(installation_id) < 1:
         raise ValueError("GitHub installation ID is invalid.")
     if tenant_id is not None:
@@ -103,6 +111,11 @@ def github_installation_token(
             installation_id=int(installation_id),
             repository_full_name=repository,
         )
+    scope: dict[str, Any] = {}
+    if repository:
+        scope["repositories"] = [repository.split("/", 1)[-1]]
+    if permissions:
+        scope["permissions"] = dict(permissions)
     response = requests.post(
         f"{GITHUB_API}/app/installations/{int(installation_id)}/access_tokens",
         headers={
@@ -110,6 +123,7 @@ def github_installation_token(
             "Authorization": f"Bearer {github_app_jwt()}",
             "X-GitHub-Api-Version": "2022-11-28",
         },
+        json=scope or None,
         timeout=15,
     )
     response.raise_for_status()
@@ -136,7 +150,10 @@ def _github_app_api(
             "Authorization": (
                 "Bearer "
                 + github_installation_token(
-                    installation_id, tenant_id=tenant_id, repository=repository
+                    installation_id,
+                    tenant_id=tenant_id,
+                    repository=repository,
+                    permissions={"checks": "write"},
                 )
             ),
             "X-GitHub-Api-Version": "2022-11-28",
