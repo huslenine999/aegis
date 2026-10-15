@@ -12,7 +12,6 @@ SCRIPT = ROOT / "app" / "static" / "enhanced-dashboard.js"
 REPORT_TEMPLATE = ROOT / "app" / "templates" / "report_template.html"
 ADMIN_TEMPLATE = ROOT / "app" / "templates" / "admin.html"
 PROJECTS_TEMPLATE = ROOT / "app" / "templates" / "projects.html"
-LANDING_TEMPLATE = ROOT / "app" / "templates" / "landing.html"
 
 
 def test_dashboard_has_accessible_application_shell():
@@ -138,12 +137,3 @@ def test_operations_and_project_pages_have_accessible_status_regions():
     assert 'aria-live="polite"' in projects
     assert 'id="notification-form"' in projects
 
-
-def test_public_landing_has_a_clear_pilot_offer_and_auth_boundary():
-    html = LANDING_TEMPLATE.read_text()
-
-    assert "Private-by-default release security" in html
-    assert "Request a founding pilot" in html
-    assert 'href="/login"' in html
-    assert 'id="pricing"' in html
-    assert "AEGIS_COMMERCIAL_CONTACT_URL" not in html

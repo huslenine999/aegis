@@ -39,9 +39,9 @@ from ..projects import require_project_role
 from ..waf_rules import save_waf_rules as save_waf_rules_to_db
 from ..web_common import (
     ALLOWED_SCAN_TARGETS,
-    COMMERCIAL_CONTACT_URL,
     MAX_UPLOAD_BYTES,
     SCAN_JOB_TIMEOUT_SECONDS,
+    json_object,
     load_waf_rules_from_db,
     require_access,
     require_demo_boundary,
@@ -64,18 +64,6 @@ def threat_lab(request: Request, _principal=Depends(require_demo_lab_access)):
         return RedirectResponse("/setup", status_code=303)
     return templates.TemplateResponse(request, "index.html", {"threat_lab": True})
 
-
-@router.get("/welcome", response_class=HTMLResponse)
-def commercial_landing(request: Request):
-    """Public product page for visitors who are not ready to sign in."""
-    return templates.TemplateResponse(
-        request,
-        "landing.html",
-        {
-            "pilot_url": COMMERCIAL_CONTACT_URL,
-            "github_url": "https://github.com/huslenine999/aegis",
-        },
-    )
 
 @router.post(
     "/toggle-waf",
@@ -100,7 +88,7 @@ def get_waf_rules():
 )
 async def save_waf_rules(request: Request):
     try:
-        data = await request.json()
+        data = await json_object(request)
         rules = data.get("rules", [])
         if not isinstance(rules, list):
             raise HTTPException(status_code=400, detail="WAF rules must be a list.")

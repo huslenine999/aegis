@@ -11,7 +11,7 @@
 <body class="auth-page">
   <main class="auth-layout">
     <section class="auth-story" aria-label="Setup overview">
-      <div><a class="brand-lockup" href="/welcome"><span>Aegis<small>First-run setup</small></span></a><h1>One repository. One policy. One clear decision.</h1><p>Claim the workspace, connect the first approved repository, and start with a release gate your team can explain.</p></div>
+      <div><a class="brand-lockup" href="/"><span>Aegis<small>First-run setup</small></span></a><h1>One repository. One policy. One clear decision.</h1><p>Claim the workspace, connect the first approved repository, and start with a release gate your team can explain.</p></div>
       <div class="auth-proof"><span>Private boundary</span><span>Least privilege</span><span>Signed evidence</span></div>
     </section>
     <section class="auth-card">
@@ -28,7 +28,6 @@
         <button id="submit" class="button primary" type="submit">Finish setup</button>
         <p id="error" class="form-message" role="alert" aria-live="polite"></p>
       </form>
-      <a class="auth-link" href="/welcome">Read the product overview →</a>
     </section>
   </main>
   <script nonce="{{ request.state.csp_nonce }}">

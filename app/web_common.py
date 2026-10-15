@@ -8,6 +8,7 @@ constants, and mutable runtime flags have exactly one definition.
 import hmac
 import ipaddress
 import os
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request, WebSocket
 from fastapi.templating import Jinja2Templates
@@ -26,6 +27,17 @@ from .reporting import (
 from .waf_rules import load_waf_rules_with_defaults
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+async def json_object(request: Request) -> Any:
+    """Parse a request body that must be a JSON object, rejecting anything else with 400."""
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise HTTPException(status_code=400, detail="JSON object body required.") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object body required.")
+    return body
 
 DEMO_LAB_ENABLED = os.environ.get(
     "AEGIS_ENABLE_DEMO_LAB", "false"
@@ -59,10 +71,6 @@ RUN_ARTIFACTS = {
     "source-descriptor.json": "application/json",
     "scan-manifest.json": "application/json",
 }
-COMMERCIAL_CONTACT_URL = os.environ.get(
-    "AEGIS_COMMERCIAL_CONTACT_URL",
-    "https://github.com/huslenine999/aegis/issues/new",
-)
 
 # Global state for the WAF toggle (demo only).
 WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"

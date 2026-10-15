@@ -99,7 +99,6 @@ jobs:
               "app/worker_entrypoint.py",
               "app/notifier_entrypoint.py",
               "app/templates/index.html",
-              "app/templates/landing.html",
               "app/templates/report_template.html",
               "app/static/enhanced-dashboard.css",
               "app/static/enhanced-dashboard.js",

@@ -15,7 +15,6 @@ Planned, Not Applicable, or External Customer Control.
 | Vulnerability management | `SECURITY.md`, `docs/INCIDENT_RESPONSE.md` |
 | Business continuity | backup/restore commands and `docs/OPERATIONS.md` |
 | Independent assurance | `docs/PENTEST_SCOPE.md`; report remains outstanding |
-| Availability commitment | `docs/SLA_TEMPLATE.md`; becomes contractual only when signed |
 | Data handling | `docs/DATA_HANDLING.md`; legal review remains outstanding |
 
 Never answer “compliant” solely because a technical control exists. SOC 2,
