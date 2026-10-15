@@ -1,0 +1,136 @@
+{
+  "codeql_target_class_metrics": {
+    "false_negatives": 0,
+    "false_positive_rate": 0.0,
+    "false_positives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "true_negatives": 4,
+    "true_positives": 4
+  },
+  "codeql_version": "2.27.0",
+  "corpus": "codeql-heldout-v1.json",
+  "corpus_sha256": "6e70eb005a05fc01ed19657c6a94fb4c9599751fe0c235c19627b9ac8eb01ea3",
+  "elapsed_seconds": 35.185,
+  "isolation": "not-applicable (fixed benchmark corpus)",
+  "languages": [
+    "javascript-typescript",
+    "python"
+  ],
+  "metrics": {
+    "cases": 8,
+    "false_negatives": 0,
+    "false_positive_rate": 0.25,
+    "false_positives": 1,
+    "precision": 0.8,
+    "recall": 1.0,
+    "true_negatives": 3,
+    "true_positives": 4
+  },
+  "passed": false,
+  "query_suites": {
+    "javascript-typescript": "codeql/javascript-queries:codeql-suites/javascript-security-extended.qls",
+    "python": "codeql/python-queries:codeql-suites/python-security-extended.qls"
+  },
+  "results": [
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "python-sql-injection",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "python-parameterized-sql",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/command-line-injection"
+      ],
+      "expected_rule_id": "py/command-line-injection",
+      "id": "python-command-injection",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "python-argv-command",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/command-line-injection",
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": "js/command-line-injection",
+      "id": "javascript-command-injection",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "javascript-exec-file-arguments",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/code-injection"
+      ],
+      "expected_rule_id": "js/code-injection",
+      "id": "javascript-code-injection",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-eval"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "javascript-json-parser",
+      "passed": true,
+      "semgrep_rule_ids": []
+    }
+  ],
+  "runtime": "direct-cli",
+  "sarif_sha256": {
+    "javascript-typescript": "fb866ee6ebd02fa2d97e7bfa57d78df7e0dfdb0212ec4825fab50162ab37c96b",
+    "python": "9f05ea2aed96e71f0157e8d3185dc0b65fe412a61c0d86d8981ad25c847f2c0e"
+  },
+  "schema_version": 2,
+  "semgrep": {
+    "combined_with_codeql": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.25,
+      "false_positives": 1,
+      "precision": 0.8,
+      "recall": 1.0,
+      "true_negatives": 3,
+      "true_positives": 4
+    },
+    "metrics": {
+      "false_negatives": 3,
+      "false_positive_rate": 0.0,
+      "false_positives": 0,
+      "precision": 1.0,
+      "recall": 0.25,
+      "true_negatives": 4,
+      "true_positives": 1
+    },
+    "rules_sha256": "e9b722f19f4ae38c38c4a1a707689fd1ff58c480c4d4a965a4960f3c4809adcf",
+    "version": "1.173.0"
+  },
+  "source_scope": "synthetic-held-out-fixtures",
+  "status": "completed"
+}
