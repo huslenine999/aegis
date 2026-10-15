@@ -401,3 +401,71 @@ def test_action_invalid_input_sets_error_outputs(tmp_path):
     assert "decision=error" in outputs
     assert "exit-code=2" in outputs
     assert (tmp_path / "aegis-input-error.json").exists()
+
+
+def test_action_sarif_upload_is_opt_in_and_reporting_only():
+    action = load_action()
+
+    assert action["inputs"]["upload-sarif"]["default"] == "false"
+    assert action["outputs"]["sarif-file"]["value"] == "${{ steps.aegis.outputs.sarif-file }}"
+    upload = next(
+        step for step in action["runs"]["steps"]
+        if str(step.get("uses", "")).startswith("github/codeql-action/upload-sarif@")
+    )
+    # Upload after a blocked gate too, but never let a publishing failure
+    # replace the gate decision.
+    assert "!cancelled()" in upload["if"]
+    assert "steps.aegis.outputs.sarif-file != ''" in upload["if"]
+    assert upload["continue-on-error"] is True
+    assert upload["with"]["sarif_file"] == "${{ steps.aegis.outputs.sarif-file }}"
+
+
+def test_action_upload_sarif_requests_sarif_and_exposes_path(tmp_path):
+    action = load_action()
+    scan_step = next(step for step in action["runs"]["steps"] if step.get("id") == "aegis")
+    script_path = tmp_path / "action-step.sh"
+    script_path.write_text(scan_step["run"])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_aegis = bin_dir / "aegis"
+    # Stand-in scanner: record arguments, write SARIF into --output, and block.
+    fake_aegis.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\" > \"$ARGS_LOG\"\n"
+        "while [ $# -gt 0 ]; do if [ \"$1\" = --output ]; then out=$2; fi; shift; done\n"
+        "echo '{}' > \"$out/aegis.sarif\"\n"
+        "echo '{\"status\": \"blocked\", \"results\": []}'\n"
+        "exit 1\n"
+    )
+    fake_aegis.chmod(0o755)
+    output_path = tmp_path / "github-output"
+    environment = {
+        **os.environ,
+        "INPUT_TARGET": ".",
+        "INPUT_OUTPUT_DIR": "reports",
+        "INPUT_NO_DOCKER": "true",
+        "INPUT_TIMEOUT": "120",
+        "INPUT_FAIL_ON": "high,critical",
+        "INPUT_CONFIG": "",
+        "INPUT_SARIF": "false",
+        "INPUT_STRICT": "true",
+        "INPUT_UPLOAD_SARIF": "true",
+        "AEGIS_ACTION_PATH": str(PROJECT_ROOT),
+        "ARGS_LOG": str(tmp_path / "args.log"),
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(output_path),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "github-summary"),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        ["bash", str(script_path)], cwd=tmp_path, env=environment,
+        capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "--sarif" in (tmp_path / "args.log").read_text().splitlines()
+    outputs = output_path.read_text().splitlines()
+    assert "decision=declined" in outputs
+    assert f"sarif-file={tmp_path.resolve() / 'reports' / 'aegis.sarif'}" in outputs

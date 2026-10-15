@@ -59,6 +59,10 @@ def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# CVSS-style scores GitHub code scanning maps to Critical/High/Medium/Low.
+SARIF_SECURITY_SEVERITY = {"CRITICAL": "9.5", "HIGH": "8.0", "MEDIUM": "5.5", "LOW": "3.0"}
+
+
 def write_sarif_report(
     path: Path,
     results: list[dict],
@@ -91,11 +95,17 @@ def write_sarif_report(
                     artifact_uri = str(filename)
             line = issue.get("line_number") or issue.get("start_line") or 1
             end_line = issue.get("end_line") or line
-            rules.setdefault(rule_id, {
+            rule = rules.setdefault(rule_id, {
                 "id": rule_id,
                 "name": rule_id,
                 "shortDescription": {"text": message[:120]},
+                "properties": {"tags": ["security"], "security-severity": "0.0"},
             })
+            # GitHub code scanning ranks security alerts by the highest
+            # security-severity of the rule, so keep the most severe observation.
+            score = SARIF_SECURITY_SEVERITY.get(severity, "5.5")
+            if float(score) > float(rule["properties"]["security-severity"]):
+                rule["properties"]["security-severity"] = score
             sarif_results.append({
                 "ruleId": rule_id,
                 "level": severity_to_level.get(severity, "warning"),

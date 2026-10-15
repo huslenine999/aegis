@@ -293,6 +293,22 @@ def test_sarif_contains_all_iac_findings_with_framework_metadata(tmp_path):
     assert results[0]["locations"][0]["physicalLocation"]["region"]["endLine"] == 2
 
 
+def test_sarif_rules_carry_github_security_severity(tmp_path):
+    output = tmp_path / "aegis.sarif"
+    cli.write_sarif_report(output, [{
+        "tool": "Semgrep",
+        "examples": [
+            {"test_id": "aegis.js-eval", "issue_text": "eval", "severity": "MEDIUM", "filename": "a.js", "line_number": 1},
+            {"test_id": "aegis.js-eval", "issue_text": "eval", "severity": "CRITICAL", "filename": "b.js", "line_number": 2},
+            {"test_id": "aegis.weak-hash", "issue_text": "md5", "severity": "LOW", "filename": "c.js", "line_number": 3},
+        ],
+    }], base_path=tmp_path)
+
+    rules = {rule["id"]: rule for rule in json.loads(output.read_text())["runs"][0]["tool"]["driver"]["rules"]}
+    assert rules["aegis.js-eval"]["properties"] == {"tags": ["security"], "security-severity": "9.5"}
+    assert rules["aegis.weak-hash"]["properties"]["security-severity"] == "3.0"
+
+
 def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
     target_file = tmp_path / "unsafe.py"
     output_dir = tmp_path / "reports"

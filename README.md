@@ -289,6 +289,10 @@ name: security
 on:
   pull_request:
 
+permissions:
+  contents: read
+  security-events: write   # only needed for upload-sarif
+
 jobs:
   aegis:
     runs-on: ubuntu-latest
@@ -299,7 +303,18 @@ jobs:
         with:
           scan-target: .
           fail-on: medium,high,critical
+          upload-sarif: true
 ```
+
+With `upload-sarif: true`, findings are published to GitHub code scanning, so
+they appear as annotations on the pull-request diff and in the repository's
+**Security** tab. The upload also runs when the gate blocks, so the findings
+that caused the block are visible on the diff. Publishing is reporting only: a
+failed upload (for example, a pull request from a fork, whose token is
+read-only) is a warning and never changes the gate decision. Code scanning
+matches file paths from the repository root, so keep `scan-target: .` when
+uploading. Code scanning on private repositories requires GitHub Advanced
+Security or GitHub Code Security.
 
 Pin Aegis and every third-party Action to reviewed immutable commit SHAs in a
 protected production workflow.

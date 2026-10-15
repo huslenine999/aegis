@@ -15,7 +15,7 @@ inputs:
     required: false
     default: 'aegis-reports'
   no-docker:
-    description: 'Skip Docker sandbox, Trivy, and DAST checks'
+    description: 'Skip Docker-based sandbox checks'
     required: false
     default: 'true'
   timeout:
@@ -38,6 +38,14 @@ inputs:
     description: 'Fail when a requested scanner cannot complete reliably'
     required: false
     default: 'true'
+  upload-sarif:
+    description: 'Upload SARIF to GitHub code scanning so findings appear on the pull request diff. Implies sarif. Requires the security-events: write permission.'
+    required: false
+    default: 'false'
+  sarif-category:
+    description: 'Code scanning category for the uploaded SARIF; change it when one repository runs several Aegis jobs'
+    required: false
+    default: 'aegis'
 outputs:
   decision:
     description: 'Aegis decision: approved, declined, or error'
@@ -48,6 +56,9 @@ outputs:
   exit-code:
     description: 'Aegis exit code: 0 allowed, 1 policy blocked, 2 operational error'
     value: ${{ steps.aegis.outputs.exit-code }}
+  sarif-file:
+    description: 'Path to the SARIF report when sarif or upload-sarif is enabled and the report was written'
+    value: ${{ steps.aegis.outputs.sarif-file }}
 
 runs:
   using: 'composite'
@@ -79,6 +90,7 @@ runs:
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
         AEGIS_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -uo pipefail
@@ -116,6 +128,11 @@ runs:
         case "$INPUT_STRICT" in
           true|false) ;;
           *) fail_input "strict must be true or false" ;;
+        esac
+        case "${INPUT_UPLOAD_SARIF:-false}" in
+          true) INPUT_SARIF=true ;;
+          false) ;;
+          *) fail_input "upload-sarif must be true or false" ;;
         esac
         if ! [[ "$INPUT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
           fail_input "timeout must be a positive integer"
@@ -161,6 +178,7 @@ runs:
         if [ "$INPUT_NO_DOCKER" = "true" ]; then
           ARGS+=(--no-docker)
         fi
+        SARIF_PATH="$OUTPUT_DIR/aegis.sarif"
         if [ "$INPUT_SARIF" = "true" ]; then
           ARGS+=(--sarif)
         fi
@@ -208,4 +226,19 @@ runs:
         fi
         echo "summary-json=$SUMMARY_PATH" >> "$GITHUB_OUTPUT"
         echo "exit-code=$STATUS" >> "$GITHUB_OUTPUT"
+        if [ "$INPUT_SARIF" = "true" ] && [ -f "$SARIF_PATH" ]; then
+          echo "sarif-file=$SARIF_PATH" >> "$GITHUB_OUTPUT"
+        fi
         exit "$STATUS"
+
+    # Runs after a blocked gate too, so the findings that caused the block are
+    # annotated on the diff. Publishing is reporting only: an upload failure
+    # (for example a fork pull request with a read-only token) is a warning and
+    # never changes the gate decision above.
+    - name: Upload SARIF to GitHub code scanning
+      if: ${{ !cancelled() && inputs.upload-sarif == 'true' && steps.aegis.outputs.sarif-file != '' }}
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+      with:
+        sarif_file: ${{ steps.aegis.outputs.sarif-file }}
+        category: ${{ inputs.sarif-category }}
