@@ -424,6 +424,10 @@ Important controls include:
 - encrypted GitHub and notification credentials;
 - replay-resistant GitHub webhooks and exact-head check runs;
 - request limits, scanner deadlines, workspace limits, and fail-closed evidence;
+- trusted scanner policy: the scanned repository cannot change scanner
+  configuration or hide code with inline suppressions (`noqa`, `nosemgrep`,
+  `pragma: allowlist secret`) or ignore files, and a scanner that times out
+  on a file fails the run instead of completing;
 - signed manifests, artifact hashes, and append-only audit-chain verification;
 - a separate notifier process that does not expose SMTP credentials to scanners;
 - a separate evidence signer: scanner workers never hold the signing key, and
@@ -494,12 +498,16 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-16 recorded 1,015 passing Python tests, 3
-skipped integration tests (Compose and opt-in PostgreSQL), 33 passing browser
-tests, and passing Ruff and mypy checks. Coverage was
-last measured at 88.8% over the configured modules on 2026-10-16. A live offline CodeQL scan found SQL injection
-in a controlled Python fixture. The coverage percentage is not whole-project
-coverage.
+The last local validation on 2026-10-16 recorded 1,062 passing Python tests and
+4 skipped integration tests (Compose, and PostgreSQL unless
+`AEGIS_TEST_POSTGRES_URL` is set), passing Ruff and mypy checks, and 89.2%
+coverage over the configured modules (not whole-project coverage). The suite
+includes property-based fuzz tests of untrusted-input parsers, an API monkey
+test across every route and role, and an end-to-end scan of a repository that
+tries known scanner-evasion tricks. The PostgreSQL integration tests, including
+each service's least-privilege login, pass on PostgreSQL 16. The 33 browser
+tests last passed on 2026-10-15. A live offline CodeQL scan found SQL injection
+in a controlled Python fixture.
 
 The existing 30-case benchmark exercises the Quick Python scanner. Seven
 browser tests cover setup, access control, the dashboard, accessibility, and

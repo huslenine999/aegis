@@ -1,6 +1,6 @@
 # Aegis — Engineering Handoff
 
-Date: 2026-10-15
+Date: 2026-10-16
 Branch: `main`. Version 2.5.0 (tagged locally as `v2.5.0`; see `CHANGELOG.md`). MIT.
 Author: Khuslen Gan-Ochir.
 
@@ -17,7 +17,8 @@ Ships three ways:
 2. GitHub Action (`action.yml`) — fail-closed PR gate, installs from
    `requirements.txt` (hash-pinned `uv export`)
 3. Self-hosted workbench — FastAPI dashboard + PostgreSQL + Redis/RQ workers +
-   notifier + Caddy (`docker-compose.yml`)
+   notifier + evidence signer + GitHub credential broker + Caddy
+   (`docker-compose.yml`; each service has its own PostgreSQL login)
 
 Scanners: Ruff, Semgrep (Aegis rules for Python, JS/TS, Go, Java), OSV
 prioritized with CISA KEV and EPSS, secret detection, optional YARA. Deep scans add
@@ -52,15 +53,22 @@ docs/                  Operations, security, and deployment documentation
 docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ```
 
-## Current verification status (2026-10-15)
+## Current verification status (2026-10-16)
 
 ```
-pytest:      1015 passed, 3 skipped (Compose x2, PostgreSQL opt-in)
-e2e:         33 passed (Playwright, Chromium)
-coverage:    88.8% over the gated modules
+pytest:      1062 passed, 4 skipped (Compose x2, PostgreSQL opt-in x2)
+             includes Hypothesis fuzz tests and a 500-request API monkey test
+PostgreSQL:  role and path integration tests pass on PostgreSQL 16
+             (AEGIS_TEST_POSTGRES_URL); 10,000 monkey requests on PostgreSQL
+e2e:         33 passed (Playwright, Chromium; last run 2026-10-15)
+coverage:    89.2% over the gated modules
 ruff:        clean
 mypy:        clean (configured modules)
 ```
+
+Deeper fuzzing: `AEGIS_FUZZ_EXAMPLES=5000 pytest tests/test_fuzz_inputs.py` and
+`AEGIS_MONKEY_REQUESTS=20000 pytest tests/test_api_monkey.py` (add
+`AEGIS_TEST_POSTGRES_URL` for an empty PostgreSQL database).
 
 Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright install chromium` once). Quick loop: `make verify-fast`.
 
