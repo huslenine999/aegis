@@ -81,8 +81,11 @@ and prevent one project from reading another project's results.
   role for workers that cannot write `scan_runs.state` for other runs or delete
   ledger rows.
 - A database superuser can disable triggers or replace both audit data and the
-  application-held audit key. Export chain heads and structured events to an
-  independently administered SIEM before relying on them for regulated
+  application-held audit key. Aegis exports chain-head checkpoints
+  (`/api/admin/audit/checkpoint`) that detect truncation and rollback when
+  verified later, but only if they are stored where that superuser cannot
+  rewrite them and the audit key is held separately. Export structured events
+  to an independently administered SIEM before relying on them for regulated
   non-repudiation.
 - The release-gate scan's application and dependency findings are addressed by
   Migrations 20–21, the portable bounded stdout scanner transport, global-only

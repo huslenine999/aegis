@@ -2,14 +2,14 @@ import logging
 import os
 import shutil
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from ..audit import list_audit_events, verify_audit_chain
+from ..audit import create_audit_checkpoint, list_audit_events, verify_audit_chain
 from ..database import REDIS_AVAILABLE, SCANS_DIR, get_connection, redis_client
 from ..github_integration import github_enabled
 from ..observability import recent_requests
-from ..web_common import DEMO_LAB_ENABLED, require_access, templates
+from ..web_common import DEMO_LAB_ENABLED, json_object, require_access, templates
 
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
@@ -67,6 +67,25 @@ def admin_audit(limit: int = 100, principal=Depends(require_access("admin"))):
 @router.get("/api/admin/audit/verify")
 def admin_audit_verify(principal=Depends(require_access("admin"))):
     return verify_audit_chain(principal.tenant_id)
+
+
+@router.post("/api/admin/audit/verify")
+async def admin_audit_verify_checkpoints(request: Request, principal=Depends(require_access("admin"))):
+    """Verify the chain against checkpoints exported earlier and stored outside Aegis."""
+    body = await json_object(request)
+    checkpoints = body.get("checkpoints")
+    if not isinstance(checkpoints, list) or not 1 <= len(checkpoints) <= 1000:
+        raise HTTPException(status_code=400, detail="Provide 1 to 1000 checkpoints.")
+    return verify_audit_chain(principal.tenant_id, checkpoints)
+
+
+@router.get("/api/admin/audit/checkpoint")
+def admin_audit_checkpoint(principal=Depends(require_access("admin"))):
+    """Export the current chain head for storage outside Aegis."""
+    try:
+        return create_audit_checkpoint(principal.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/api/admin/requests")

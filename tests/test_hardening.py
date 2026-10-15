@@ -512,7 +512,7 @@ def test_audit_chain_is_append_only_and_verifiable(tmp_path, monkeypatch):
     result = audit.verify_audit_chain(tenant_id)
 
     assert first and second and first != second
-    assert result == {"valid": True, "events": 2, "head_hash": second}
+    assert result == {"valid": True, "events": 2, "head_hash": second, "checkpoints_verified": 0}
     with database.get_connection() as connection:
         with pytest.raises(Exception, match="append-only"):
             connection.execute("DELETE FROM audit_events WHERE tenant_id = ?", (tenant_id,))
@@ -542,6 +542,93 @@ def test_audit_verification_rejects_visible_unchained_rows(tmp_path, monkeypatch
 
     assert result["valid"] is False
     assert result["events"] == 2
+
+
+def _audited_tenant(tmp_path, monkeypatch, events=3):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("AEGIS_AUDIT_HMAC_KEY", "a" * 40)
+    for index in range(events):
+        audit.record_audit(None, f"project.event{index}", "project", index, tenant_id=1)
+
+
+def _drop_audit_triggers():
+    # What a database superuser can do; the triggers alone cannot stop it.
+    with database.get_connection() as connection:
+        connection.execute("DROP TRIGGER audit_events_no_delete")
+        connection.execute("DROP TRIGGER audit_events_no_update")
+
+
+def test_audit_checkpoint_detects_tail_truncation_the_chain_cannot(tmp_path, monkeypatch):
+    _audited_tenant(tmp_path, monkeypatch)
+    checkpoint = audit.create_audit_checkpoint(1)
+    _drop_audit_triggers()
+    with database.get_connection() as connection:
+        connection.execute("DELETE FROM audit_events WHERE id = (SELECT MAX(id) FROM audit_events)")
+
+    # The shortened chain is still internally consistent ...
+    assert audit.verify_audit_chain(1)["valid"] is True
+    # ... but no longer contains the externally recorded head.
+    result = audit.verify_audit_chain(1, [checkpoint])
+    assert result["valid"] is False
+    assert "truncation or rollback" in result["reason"]
+    assert result["failed_event_id"] == checkpoint["event_id"]
+
+
+def test_audit_checkpoint_detects_a_restored_older_database(tmp_path, monkeypatch):
+    _audited_tenant(tmp_path, monkeypatch, events=2)
+    snapshot = (tmp_path / "snapshot.db")
+    snapshot.write_bytes(database.DB_PATH.read_bytes())
+    audit.record_audit(None, "project.deleted", "project", 9, tenant_id=1)
+    checkpoint = audit.create_audit_checkpoint(1)
+
+    database.DB_PATH.write_bytes(snapshot.read_bytes())
+
+    assert audit.verify_audit_chain(1)["valid"] is True
+    assert audit.verify_audit_chain(1, [checkpoint])["valid"] is False
+
+
+def test_audit_checkpoints_accumulate_and_survive_new_events(tmp_path, monkeypatch):
+    _audited_tenant(tmp_path, monkeypatch, events=1)
+    first = audit.create_audit_checkpoint(1)
+    audit.record_audit(None, "project.updated", "project", 1, tenant_id=1)
+    second = audit.create_audit_checkpoint(1)
+    audit.record_audit(None, "project.updated", "project", 2, tenant_id=1)
+
+    result = audit.verify_audit_chain(1, [first, second])
+
+    assert result["valid"] is True
+    assert result["checkpoints_verified"] == 2
+    assert (first["events"], second["events"], result["events"]) == (1, 2, 3)
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ({"event_hash": "0" * 64}, "does not match"),
+    ({"events": 1}, "does not match"),
+    ({"tenant_id": 2}, "another tenant"),
+    ({"event_id": "not-a-number"}, "malformed"),
+])
+def test_forged_or_mismatched_audit_checkpoints_fail(tmp_path, monkeypatch, change, reason):
+    _audited_tenant(tmp_path, monkeypatch)
+    checkpoint = {**audit.create_audit_checkpoint(1), **change}
+
+    result = audit.verify_audit_chain(1, [checkpoint])
+
+    assert result["valid"] is False
+    assert reason in result["reason"]
+
+
+def test_audit_checkpoint_refuses_invalid_or_empty_chains(tmp_path, monkeypatch):
+    configure_database(tmp_path, monkeypatch)
+    monkeypatch.setenv("AEGIS_AUDIT_HMAC_KEY", "a" * 40)
+    with pytest.raises(ValueError, match="no events"):
+        audit.create_audit_checkpoint(1)
+
+    audit.record_audit(None, "project.created", "project", 1, tenant_id=1)
+    _drop_audit_triggers()
+    with database.get_connection() as connection:
+        connection.execute("UPDATE audit_events SET action = 'project.forged'")
+    with pytest.raises(ValueError, match="invalid"):
+        audit.create_audit_checkpoint(1)
 
 
 def test_audit_key_fails_closed_in_production_without_hmac_key(monkeypatch):

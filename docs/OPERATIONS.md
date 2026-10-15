@@ -46,6 +46,28 @@ Run a restore drill at least quarterly and after schema or storage changes. Reco
 elapsed restore time, the recovered schema version, sample artifact hash checks, and
 the audit-chain verification result.
 
+## Audit-chain checkpoints
+
+The audit hash chain detects an edited, inserted, or deleted event inside the
+chain. It cannot, on its own, detect that the newest events were deleted or
+that an older database was restored, because what remains is still a valid
+chain. Checkpoints close that gap:
+
+1. At least daily, export the current chain head as an administrator:
+   `GET /api/admin/audit/checkpoint`. The response records the newest event's
+   ID, its HMAC chain hash, and the number of events before it.
+2. Store each checkpoint where the Aegis database administrator cannot rewrite
+   it: a SIEM, WORM storage, or a change ticket. Without the audit HMAC key a
+   checkpoint cannot be forged to match a rewritten chain, so keep that key out
+   of the same administrator's reach.
+3. To verify, `POST /api/admin/audit/verify` with
+   `{"checkpoints": [...]}`. Verification fails, naming the event, if any
+   checkpointed event is missing (truncation or rollback) or no longer matches
+   its recorded position and hash.
+4. After a restore drill, verify against the latest stored checkpoint. A
+   restore older than that checkpoint fails by design; record the gap as the
+   recovery point actually achieved.
+
 ## Deployment sequence
 
 1. Back up the database and confirm artifact replication health.
