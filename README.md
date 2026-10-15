@@ -487,8 +487,9 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-16 recorded 1,013 passing Python tests, 2
-skipped Compose integration tests, and passing Ruff and mypy checks. Coverage was
+The last local validation on 2026-10-16 recorded 1,015 passing Python tests, 3
+skipped integration tests (Compose and opt-in PostgreSQL), 33 passing browser
+tests, and passing Ruff and mypy checks. Coverage was
 last measured at 88.8% over the configured modules on 2026-10-16. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture. The coverage percentage is not whole-project
 coverage.

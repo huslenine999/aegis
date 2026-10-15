@@ -55,7 +55,9 @@ docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ## Current verification status (2026-10-15)
 
 ```
-pytest:      1013 passed, 2 skipped
+pytest:      1015 passed, 3 skipped (Compose x2, PostgreSQL opt-in)
+e2e:         33 passed (Playwright, Chromium)
+coverage:    88.8% over the gated modules
 ruff:        clean
 mypy:        clean (configured modules)
 ```
@@ -70,17 +72,23 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    `docs/research/THESIS_OUTLINE.md`. External targets (crAPI, VAmPI) are
    planned, not implemented; the runner still accepts only its own loopback lab.
    Training runs and passing tests are not final results.
-2. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
+2. **Re-pin CI trust anchors after review.** The approval gate scans with
+   trusted revision `ed6b080`, whose `aegis.yml` predates
+   `app/finding_queries.py`, so it blocks until re-pinned to a reviewed
+   commit. `action-e2e.yml` pins `b2f00d3`, from before the `--no-docker` fix.
+   Push first, review, then update both SHAs (`docs/RELEASE_CHECKLIST.md`
+   step 12).
+3. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
    Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
    tag, and confirm `pipx install aegis-security-console` works.
-3. **Deep-scan assurance.** Authenticated Deep browser flow and Docker-level
+4. **Deep-scan assurance.** Authenticated Deep browser flow and Docker-level
    adversarial isolation checks. The held-out CodeQL benchmark is done
    (`benchmarks/results/`); a larger fresh corpus is the next step.
-4. **Least-privilege worker database role.** The last open piece of F06: the
+5. **Least-privilege worker database role.** The last open piece of F06: the
    evidence key is already out of the worker (separate `signer` service), but
    workers still share the database role. See the 2026-10-16 follow-up table in
    `docs/research/CAPSTONE_REVIEW.md`.
-5. **Large modules.** `app/database.py` and `app/worker.py` are the next split
+6. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.
 
 ## Environment gotchas

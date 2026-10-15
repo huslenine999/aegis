@@ -21,8 +21,24 @@ All notable changes to the Aegis project will be documented in this file.
 - Held-out CodeQL benchmark results in `benchmarks/results/`, and
   `--codeql-cli` / `--with-semgrep` options for `scripts/run_codeql_benchmark.py`.
 
+### Security
+
+- Upgraded PyJWT 2.13.0 to 2.15.0, urllib3 2.7.0 to 2.8.0, and Werkzeug 3.1.8
+  to 3.1.9 to clear open advisories, and Semgrep 1.173.0 to 1.179.0, which
+  pins fixed MCP (1.29.0), Click (8.4.2), and PyJWT releases. The seven
+  Semgrep-dependency suppressions that expired on 2026-10-20 are removed.
+
+### Changed
+
+- A dependency audit has a five-minute overall budget, and the KEV catalog
+  falls back to CISA's GitHub mirror.
+- Opt-in PostgreSQL integration checks (`AEGIS_TEST_POSTGRES_URL`).
+
 ### Fixed
 
+- Aegis's own Standard self-scan passes again: a fixed SQL clause is bound as
+  a parameter, a regex no longer trips the hardcoded-password check, and the
+  reviewed exception follows code moved to `app/finding_queries.py`.
 - `python-rce` missed `shell=True` unless it was the last argument;
   `python-sqli` ignored Flask and Django request data;
   `javascript-command-injection` missed destructured `child_process` imports.
