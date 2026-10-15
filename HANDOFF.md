@@ -55,7 +55,7 @@ docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ## Current verification status (2026-10-15)
 
 ```
-pytest:      965 passed, 2 skipped
+pytest:      1013 passed, 2 skipped
 ruff:        clean
 mypy:        clean (configured modules)
 ```
@@ -73,10 +73,14 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
 2. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
    Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
    tag, and confirm `pipx install aegis-security-console` works.
-3. **Deep-scan assurance.** Authenticated Deep browser flow, adversarial
-   isolation checks, and a held-out CodeQL benchmark (see
-   `docs/research/CAPSTONE_REVIEW.md`).
-4. **Large modules.** `app/database.py` and `app/worker.py` are the next split
+3. **Deep-scan assurance.** Authenticated Deep browser flow and Docker-level
+   adversarial isolation checks. The held-out CodeQL benchmark is done
+   (`benchmarks/results/`); a larger fresh corpus is the next step.
+4. **Least-privilege worker database role.** The last open piece of F06: the
+   evidence key is already out of the worker (separate `signer` service), but
+   workers still share the database role. See the 2026-10-16 follow-up table in
+   `docs/research/CAPSTONE_REVIEW.md`.
+5. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.
 
 ## Environment gotchas

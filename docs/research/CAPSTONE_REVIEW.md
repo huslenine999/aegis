@@ -28,6 +28,21 @@ This changes the interpretation of the dated DAST/Checkov/Trivy/Safety/ClamAV ob
 
 Focused regression coverage for these changes is passing. The remaining findings are still open work and should be treated as the defense backlog rather than implied guarantees.
 
+## Follow-up (2026-10-16)
+
+Status of the findings addressed after the 2.5.0 release work. "Residual"
+names what is still open; the dated observations below are kept as history.
+
+| Finding | Status | What changed | Residual |
+| --- | --- | --- | --- |
+| F06 worker blast radius | Partly fixed | A separate signer process holds the Ed25519 key. It signs a run once, only while in flight, after re-hashing stored artifacts and checking the source attestation. Production workers refuse the key. | Workers share one database role. A compromised worker could misreport an in-flight run, or reopen a finished run's state before requesting a signature. Needs a least-privilege worker role and per-job disposable runtimes. Docker-level adversarial tests were not run. |
+| F07 audit truncation/rollback | Fixed in code | Exportable chain-head checkpoints; verification fails when a checkpointed event is missing or moved. | Only effective if checkpoints are stored where the database administrator cannot rewrite them and the audit key is held separately. |
+| F11 uncalibrated risk index | Partly addressed | Dependency findings are escalated from CISA KEV (to CRITICAL) and FIRST EPSS (≥10% to at least HIGH), with the evidence date recorded. | The aggregate risk index is still a heuristic. |
+| F13 small synthetic benchmark | Partly addressed | Held-out CodeQL corpus run (CodeQL 2.27.0: 4/4, one unrelated alert). Aegis Semgrep rules scored 1/4 held-out, which exposed three rule defects, now fixed with fixtures. Results in `benchmarks/results/`. | Eight cases; a larger, fresh held-out corpus and real-repository evaluation are still needed. |
+| F14 search covers first 200 | Fixed | Server-side filtering and search, stable ordering, totals, "N of M" display; tested with 201 findings. | None. |
+| F15 recovery of trusted evidence | Fixed for local backups | Backups store an evidence inventory; restores re-verify every signature and artifact hash and refuse on failure or missing runs. | S3-backed artifact recovery and a live Compose restore drill were not exercised. |
+| F16 serial OSV queries | Fixed | `/v1/querybatch` with per-advisory caching. | No overall wall-clock budget across batches. |
+
 ## Verification and limits
 
 - Executed the Python suite: **312 passed, 2 skipped, 39.04 seconds**. The skipped tests require the Compose integration environment.

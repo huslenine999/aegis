@@ -487,7 +487,7 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-15 recorded 965 passing Python tests, 2
+The last local validation on 2026-10-16 recorded 1,013 passing Python tests, 2
 skipped Compose integration tests, and passing Ruff and mypy checks. Coverage was
 last measured at 80.13% over the configured modules on 2026-09-23. A live offline CodeQL scan found SQL injection
 in a controlled Python fixture. The coverage percentage is not whole-project
@@ -495,9 +495,11 @@ coverage.
 
 The existing 30-case benchmark exercises the Quick Python scanner. Seven
 browser tests cover setup, access control, the dashboard, accessibility, and
-output escaping. An authenticated Deep browser flow, adversarial isolation
-checks, and a held-out CodeQL benchmark remain to be completed before claiming
-production assurance. See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
+output escaping. The held-out CodeQL corpus has been run: CodeQL 2.27.0 found
+4/4 vulnerable cases with one unrelated alert on a safe case
+([results](benchmarks/results/README.md)). An authenticated Deep browser flow
+and Docker-level adversarial isolation checks remain to be completed before
+claiming production assurance. See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.
 

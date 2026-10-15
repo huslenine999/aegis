@@ -4,6 +4,30 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Evidence signing runs in a separate `signer` service; scanner workers no
+  longer hold the Ed25519 key. The signer signs each in-progress run once,
+  after re-hashing its artifacts and checking its source attestation, and
+  records it in an append-only `evidence_signatures` ledger. Production
+  workers require `AEGIS_EVIDENCE_SIGNER=remote`, and the dashboard requires a
+  live signer (`AEGIS_REQUIRE_SIGNER`).
+- Audit-chain checkpoints (`GET /api/admin/audit/checkpoint`,
+  `POST /api/admin/audit/verify`) that detect deleted recent events and
+  restored older databases.
+- `aegis backup` writes a verified evidence inventory; `aegis restore`
+  re-verifies every signed run before restoring and refuses on failure
+  (`--public-key`, `--allow-evidence-failures`).
+- Held-out CodeQL benchmark results in `benchmarks/results/`, and
+  `--codeql-cli` / `--with-semgrep` options for `scripts/run_codeql_benchmark.py`.
+
+### Fixed
+
+- `python-rce` missed `shell=True` unless it was the last argument;
+  `python-sqli` ignored Flask and Django request data;
+  `javascript-command-injection` missed destructured `child_process` imports.
+- The npm launcher no longer builds shell commands from home-directory paths.
+
 ## [2.5.0] - 2026-10-15
 
 ### Added
