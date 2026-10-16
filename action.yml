@@ -64,7 +64,7 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -235,7 +235,7 @@ runs:
     - name: Upload SARIF to GitHub code scanning
       if: ${{ !cancelled() && inputs.upload-sarif == 'true' && steps.aegis.outputs.sarif-file != '' }}
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+      uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
       with:
         sarif_file: ${{ steps.aegis.outputs.sarif-file }}
         category: ${{ inputs.sarif-category }}
