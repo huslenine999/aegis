@@ -26,34 +26,34 @@ dependencies = [
   "urllib3==2.8.0",
   "PyYAML==6.0.3",
   "Jinja2==3.1.6",
-  "MarkupSafe==2.1.5",
-  "ruff==0.15.17",
+  "MarkupSafe==3.0.4",
+  "ruff==0.17.1",
   "detect-secrets==1.5.0",
-  "yara-python==4.5.0",
-  "pipdeptree==2.35.3",
-  "fastapi==0.138.1",
-  "uvicorn==0.49.0",
-  "redis==5.2.1",
-  "rq==2.1.0",
-  "python-multipart==0.0.31",
-  "websockets==16.0",
-  "psycopg[binary,pool]==3.2.10",
-  "cryptography==50.0.0",
-  "boto3==1.43.52",
-  "PyJWT[crypto]==2.15.0",
+  "yara-python==4.5.4",
+  "pipdeptree==4.2.7",
+  "fastapi==0.143.2",
+  "uvicorn==0.54.0",
+  "redis==8.1.0",
+  "rq==2.12.0",
+  "python-multipart==0.0.32",
+  "websockets==17.2",
+  "psycopg[binary,pool]==3.3.6",
+  "cryptography==50.0.2",
+  "boto3==1.43.114",
+  "PyJWT[crypto]==2.15.1",
 ]
 
 [project.optional-dependencies]
 scanner = [
-  "semgrep==1.179.0",
+  "semgrep==1.181.0",
 ]
 dev = [
   "httpx==0.28.1",
   "hypothesis==6.170.0",
-  "mypy==1.18.2",
+  "mypy==2.4.0",
   "pytest==9.1.1",
-  "pytest-cov==6.2.1",
-  "pytest-timeout==2.3.1",
+  "pytest-cov==7.1.0",
+  "pytest-timeout==2.4.0",
 ]
 
 [project.scripts]
