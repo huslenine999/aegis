@@ -21,9 +21,10 @@ The complete stack requires the deployment files from a source checkout:
 ```bash
 git clone https://github.com/huslenine999/aegis.git
 cd aegis
-python3 -m venv venv
-./venv/bin/python -m pip install -e ".[dev,scanner]"
-./venv/bin/aegis start
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,scanner]"
+aegis start
 ```
 
 After the first start, manage it from the same checkout:

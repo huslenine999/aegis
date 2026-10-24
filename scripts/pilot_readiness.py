@@ -82,6 +82,10 @@ def production_environment_values() -> dict[str, str]:
             secrets.token_bytes(32)
         ).decode().rstrip("="),
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_WORKER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_SIGNER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_BROKER_PASSWORD": secrets.token_urlsafe(32),
+        "AEGIS_DB_NOTIFIER_PASSWORD": secrets.token_urlsafe(32),
     }
 
 

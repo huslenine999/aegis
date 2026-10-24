@@ -1,3 +1,4 @@
+import re
 import sys
 
 from scripts import pilot_readiness
@@ -12,6 +13,27 @@ def test_rehearsal_environment_is_single_tenant_production():
     assert values["AEGIS_ALLOW_DEEP_SCANS"] == "false"
     assert len(values["AEGIS_SESSION_SECRET"]) >= 32
     assert "replace-with" not in "\n".join(values.values())
+
+
+def test_rehearsal_environment_supplies_required_compose_values():
+    compose = (pilot_readiness.PROJECT_ROOT / "docker-compose.yml").read_text()
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", compose))
+    values = pilot_readiness.production_environment_values()
+
+    assert required <= values.keys()
+    assert all(values[name] for name in required)
+
+
+def test_rehearsal_database_passwords_are_independent_and_url_safe():
+    names = ["POSTGRES_PASSWORD", *(f"AEGIS_DB_{role}_PASSWORD" for role in (
+        "WORKER", "SIGNER", "BROKER", "NOTIFIER",
+    ))]
+    first = pilot_readiness.production_environment_values()
+    second = pilot_readiness.production_environment_values()
+    passwords = [values[name] for values in (first, second) for name in names]
+
+    assert len(set(passwords)) == len(passwords)
+    assert all(re.fullmatch(r"[A-Za-z0-9_-]{24,}", password) for password in passwords)
 
 
 def test_run_check_records_command_failure():
