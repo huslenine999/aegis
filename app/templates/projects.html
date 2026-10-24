@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Security workbench | Aegis</title>
-  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.1">
 </head>
 <body class="app-page">
   <a class="skip-link" href="#workspace-content">Skip to workspace</a>
@@ -23,6 +23,7 @@
       </nav>
       <div class="app-sidebar-footer">
         <div class="identity-card"><strong id="identity">Loading identity…</strong><small>Authenticated workspace</small></div>
+        <button id="sign-out" class="sign-out" type="button">Sign out</button>
       </div>
     </aside>
 
@@ -144,7 +145,7 @@
               <div id="panel-settings" class="workspace-section" role="tabpanel" data-workspace-panel="settings" hidden>
                 <section class="panel section-card">
                   <div class="section-heading"><div><h2>Project settings</h2><p>Choose the default scan depth for this repository.</p></div></div>
-                  <div class="form-grid"><label>Scan preset<select id="scan-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard">Standard — PR gate</option><option value="deep">Deep — CodeQL runtime required</option></select></label><div><span id="preset-note" class="muted">Standard checks are recommended for pull requests.</span></div><div class="full row"><button id="save-project" type="button">Save settings</button><button id="delete-project" class="danger" type="button">Delete project</button></div></div>
+                  <div class="form-grid"><label class="full">GitHub HTTPS URL<input id="repository-url" type="url" placeholder="https://github.com/org/repository.git" aria-describedby="repository-note"><small id="repository-note">Add a repository before scanning. Once saved, create a new project to scan a different repository.</small></label><label>Scan preset<select id="scan-preset"><option value="quick">Quick — local/dev feedback</option><option value="standard">Standard — PR gate</option><option value="deep">Deep — CodeQL runtime required</option></select></label><div><span id="preset-note" class="muted">Standard checks are recommended for pull requests.</span></div><div class="full row"><button id="save-project" type="button">Save settings</button><button id="delete-project" class="danger" type="button">Delete project</button></div></div>
                 </section>
               </div>
             </div>
@@ -227,6 +228,10 @@
         ? {month:"short", day:"numeric"}
         : {dateStyle:"medium", timeStyle:"short"}).format(date);
     }
+    function evidenceUrl(runId) {
+      const scan = cachedScans.find((item) => Number(item.id) === Number(runId));
+      return runId && scan?.has_report !== false ? `/api/projects/${selected.id}/scans/${Number(runId)}/artifacts/report.html` : "";
+    }
     function scanElapsed(scan) {
       const started = new Date(scan.created_at).getTime();
       if (!Number.isFinite(started)) return "";
@@ -279,9 +284,11 @@
       const hasSourceScan = Boolean(cachedLatestSourceScan);
       const welcome = params.has("welcome") || projects.length === 0 || (selected && !hasSourceScan);
       byId("onboarding").hidden = !welcome || hasSourceScan;
-      byId("onboarding-scan").disabled = !selected || selected.role === "viewer";
+      const canScan = Boolean(selected?.repository_url) && selected.role !== "viewer";
+      byId("onboarding-scan").disabled = !canScan;
+      byId("start-scan").disabled = !canScan;
       byId("onboarding-copy").textContent = selected
-        ? `${selected.name} is ready for its first scan.`
+        ? selected.repository_url ? `${selected.name} is ready for its first scan.` : "Add a GitHub repository in Settings before scanning."
         : "Create or import a project, then start a quick scan.";
     }
     async function loadIdentity() {
@@ -291,6 +298,7 @@
       csrf = identity.csrf_token || "";
       byId("identity").textContent = `${identity.username} · ${identity.role}`;
     }
+    byId("sign-out").onclick = async () => { await api("/api/auth/logout", {method:"POST"}); location.assign("/login"); };
     async function loadProjects() {
       const response = await api("/api/projects");
       projects = (await response.json()).projects || [];
@@ -298,7 +306,7 @@
       byId("projects").innerHTML = projects.length ? projects.map((project) => `
         <button class="project ${selected?.id === project.id ? "active" : ""}" data-project="${project.id}">
           <strong>${escapeHtml(project.name)}</strong>
-          <small>${escapeHtml(project.github_full_name || project.repository_url || "Local project")} · ${escapeHtml(project.scan_preset)}</small>
+          <small>${escapeHtml(project.github_full_name || project.repository_url || "Repository not configured")} · ${escapeHtml(project.scan_preset)}</small>
         </button>`).join("") : '<div class="empty-state"><strong>No projects yet</strong>Create one or connect GitHub.</div>';
       document.querySelectorAll("[data-project]").forEach((button) => button.onclick = () => selectProject(Number(button.dataset.project)));
       if (!selected && projects.length) {
@@ -329,12 +337,14 @@
       byId("empty-project").hidden = true;
       byId("project-detail").hidden = false;
       byId("project-name").textContent = selected.name;
-      byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Local project";
+      byId("project-repository").textContent = selected.github_full_name || selected.repository_url || "Repository not configured — add a GitHub URL in Settings before scanning.";
       byId("project-role").textContent = `${selected.role} access`;
       byId("project-branch").textContent = selected.default_branch || "main";
       byId("project-preset").textContent = `${selected.scan_preset} scan`;
       byId("workspace-context").textContent = `${selected.name} / ${selected.default_branch || "main"}`;
       byId("scan-preset").value = selected.scan_preset;
+      byId("repository-url").value = selected.repository_url || "";
+      byId("repository-url").readOnly = Boolean(selected.repository_url) || selected.role !== "admin";
       byId("save-project").hidden = selected.role !== "admin";
       byId("delete-project").hidden = selected.role !== "admin";
       ["policy-form", "member-form", "notification-form"].forEach((name) => byId(name).hidden = selected.role !== "admin");
@@ -483,9 +493,25 @@
           ${canOperate && ["resolved", "accepted", "false_positive"].includes(finding.status) ? `<button data-finding-status="${finding.id}:open">Reopen</button>` : ""}
           ${canOperate && finding.tool !== "BAC" && selected.github_full_name && !finding.ticket_url ? `<button data-finding-ticket="${finding.id}">Create GitHub issue</button>` : ""}
           ${finding.ticket_url ? `<a class="button subtle" href="${escapeHtml(finding.ticket_url)}" target="_blank" rel="noopener">Remediation ticket</a>` : ""}
+          ${finding.tool !== "BAC" && evidenceUrl(finding.last_seen_run_id) ? `<a class="button subtle" href="${evidenceUrl(finding.last_seen_run_id)}" target="_blank" rel="noopener">Latest evidence</a>` : ""}
         </div>
+        <details class="finding-history" data-finding-history="${Number(finding.id)}"><summary>History · first seen ${escapeHtml(formatDate(finding.first_seen_at, true))}, last seen ${escapeHtml(formatDate(finding.last_seen_at, true))}</summary><ol></ol></details>
         ${canOperate ? `<div class="row"><select data-finding-owner="${finding.id}" aria-label="Owner for ${escapeHtml(finding.title)}"><option value="">Unassigned</option>${currentMembers.map(member => `<option value="${Number(member.user_id)}" ${Number(finding.owner_id) === Number(member.user_id) ? "selected" : ""}>${escapeHtml(member.username)}</option>`).join("")}</select><input data-finding-due="${finding.id}" type="date" aria-label="Due date for ${escapeHtml(finding.title)}" value="${finding.due_at ? escapeHtml(finding.due_at.slice(0, 10)) : ""}"><button data-save-assignment="${finding.id}">Save owner & due date</button></div>` : ""}
       </article>`).join("") || '<div class="empty-state"><strong>No findings match</strong>Adjust the filters or run a scan to populate the queue.</div>';
+      document.querySelectorAll("[data-finding-history]").forEach(details => details.ontoggle = async () => {
+        if (!details.open || details.dataset.loaded) return;
+        details.dataset.loaded = "true";
+        const list = details.querySelector("ol");
+        list.innerHTML = "<li>Loading history…</li>";
+        const response = await api(`/api/projects/${selected.id}/findings/${details.dataset.findingHistory}`);
+        if (!response.ok) { delete details.dataset.loaded; list.innerHTML = "<li>History could not be loaded.</li>"; return; }
+        const finding = await response.json();
+        list.innerHTML = (finding.events || []).map(event => {
+          const evidence = finding.tool !== "BAC" && evidenceUrl(event.details?.scan_run_id);
+          const status = event.to_status && event.to_status !== event.from_status ? ` → ${escapeHtml(event.to_status.replaceAll("_", " "))}` : "";
+          return `<li><time class="mono" datetime="${escapeHtml(event.created_at)}">${escapeHtml(formatDate(event.created_at))}</time> ${escapeHtml(event.event_type.replaceAll("_", " "))}${status}${event.actor ? ` by ${escapeHtml(event.actor)}` : ""}${evidence ? ` · <a href="${evidence}" target="_blank" rel="noopener">scan evidence</a>` : ""}${event.note ? `<br><span class="muted">${escapeHtml(event.note)}</span>` : ""}</li>`;
+        }).join("") || "<li>No recorded events.</li>";
+      });
       document.querySelectorAll("[data-finding-status]").forEach(button => button.onclick = async () => {
         const [id, status] = button.dataset.findingStatus.split(":");
         const changes = {status};
@@ -672,9 +698,12 @@
     };
     byId("scan-preset").onchange = updatePresetNote;
     byId("save-project").onclick = async () => {
-      const response = await api(`/api/projects/${selected.id}`, {method:"PATCH", body:JSON.stringify({scan_preset:byId("scan-preset").value})});
+      const projectId = selected.id;
+      const response = await api(`/api/projects/${projectId}`, {method:"PATCH", body:JSON.stringify({repository_url:byId("repository-url").value,scan_preset:byId("scan-preset").value})});
       const data = await response.json(); if (!response.ok) return message(data.detail || "Project update failed.", true);
-      message("Project settings saved."); selected.scan_preset = data.scan_preset; await loadProjects();
+      if (selected?.id !== projectId) return;
+      projects = projects.map(project => project.id === projectId ? {...project, ...data} : project);
+      message("Project settings saved."); await selectProject(projectId);
     };
     byId("delete-project").onclick = async () => {
       if (!confirm(`Delete ${selected.name} and all of its scan history?`)) return;

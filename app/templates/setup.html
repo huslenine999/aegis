@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Set up Aegis</title>
-  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.1">
 </head>
 <body class="auth-page">
   <main class="auth-layout">
@@ -20,7 +20,7 @@
       <p>Create the administrator and optional first project. You can adjust scan depth later.</p>
       <form id="setup-form">
         <label for="workspace-name">Workspace name<input id="workspace-name" value="My security workspace" maxlength="128" required autofocus></label>
-        <label for="repository">Repository URL or path<input id="repository" placeholder="https://github.com/organization/project"><small>Leave blank to create a project after setup.</small></label>
+        <label for="repository">GitHub HTTPS URL<input id="repository" placeholder="https://github.com/organization/project"><small>Leave blank to create a project after setup.</small></label>
         <label for="scan-preset">Default scan depth<select id="scan-preset"><option value="quick">Quick — fastest local feedback</option><option value="standard" selected>Standard — recommended PR gate</option><option value="deep">Deep — isolated worker required</option></select></label>
         <label for="username">Administrator username<input id="username" value="admin" autocomplete="username" minlength="3" maxlength="128" required></label>
         <label for="password">Administrator password<input id="password" type="password" autocomplete="new-password" minlength="12" required></label>

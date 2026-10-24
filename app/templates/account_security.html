@@ -6,13 +6,17 @@
   <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Account security | Aegis</title>
-  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.1">
 </head>
 <body class="app-page">
   <div class="app-shell">
     <aside class="app-sidebar" aria-label="Primary navigation">
       <a class="brand-lockup" href="/projects"><span>Aegis<small>Security workbench</small></span></a>
       <nav class="app-nav"><span class="app-nav-label">Workspace</span><a href="/projects"><span>Projects</span></a><a class="active" href="/account/security" aria-current="page"><span>Account security</span></a><a href="/admin"><span>Operations</span></a></nav>
+      <div class="app-sidebar-footer">
+        <div class="identity-card"><strong id="identity">Loading identity…</strong><small>Authenticated workspace</small></div>
+        <button id="sign-out" class="sign-out" type="button">Sign out</button>
+      </div>
     </aside>
     <div class="app-main">
       <header class="app-topbar"><div class="topbar-context"><small>Identity protection</small><strong>Account security</strong></div><a class="button subtle" href="/projects">Back to projects</a></header>
@@ -44,11 +48,11 @@
   </div>
   <script nonce="{{ request.state.csp_nonce }}">
     let csrf="";const byId=(id)=>document.getElementById(id);async function api(url,options={}){const headers=new Headers(options.headers||{});if(options.method&&options.method!=="GET")headers.set("X-CSRF-Token",csrf);if(options.body)headers.set("Content-Type","application/json");return fetch(url,{...options,headers,credentials:"same-origin"})}function message(value){byId("message").textContent=value}
-    async function load(){const response=await api("/api/auth/me");if(response.status===401){location.assign("/login");return}const me=await response.json();csrf=me.csrf_token||"";byId("status").textContent=me.mfa_enabled?"Authenticator MFA is enabled.":"Authenticator MFA is not enabled.";byId("enable-section").hidden=me.mfa_enabled;byId("disable-section").hidden=!me.mfa_enabled}
+    async function load(){const response=await api("/api/auth/me");if(response.status===401){location.assign("/login");return}const me=await response.json();csrf=me.csrf_token||"";byId("identity").textContent=`${me.username} · ${me.role}`;byId("status").textContent=me.mfa_enabled?"Authenticator MFA is enabled.":"Authenticator MFA is not enabled.";byId("enable-section").hidden=me.mfa_enabled;byId("disable-section").hidden=!me.mfa_enabled}
     byId("reauth-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/reauth",{method:"POST",body:JSON.stringify({password:byId("reauth-password").value,second_factor:byId("reauth-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"Reauthentication failed.");return}byId("reauth-password").value="";byId("reauth-code").value="";message("Sensitive access refreshed for ten minutes.")});
     byId("setup-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa/setup",{method:"POST",body:JSON.stringify({password:byId("setup-password").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA setup failed.");return}byId("setup-secret").textContent=`Secret: ${data.secret}\n\n${data.otpauth_uri}`;byId("confirmation").hidden=false;message("Authenticator secret created. Confirm a code to enable MFA.")});
     byId("confirm-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa/confirm",{method:"POST",body:JSON.stringify({code:byId("confirm-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA confirmation failed.");return}byId("recovery-codes").textContent=(data.recovery_codes||[]).join("\n");byId("recovery").hidden=false;byId("confirmation").hidden=true;message("MFA enabled. Save the recovery codes, then sign in again.")});
-    byId("disable-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa",{method:"DELETE",body:JSON.stringify({password:byId("disable-password").value,code:byId("disable-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA could not be disabled.");return}location.assign("/login")});load();
+    byId("disable-form").addEventListener("submit",async(event)=>{event.preventDefault();const response=await api("/api/auth/mfa",{method:"DELETE",body:JSON.stringify({password:byId("disable-password").value,code:byId("disable-code").value})});const data=await response.json();if(!response.ok){message(data.detail||"MFA could not be disabled.");return}location.assign("/login")});byId("sign-out").onclick=async()=>{await api("/api/auth/logout",{method:"POST"});location.assign("/login")};load();
   </script>
 </body>
 </html>

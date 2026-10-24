@@ -29,13 +29,13 @@ function findingsPage(findings, url) {
   };
 }
 
-async function openWorkbench(page, { findings = [finding(1)], getScan = () => sourceScan } = {}) {
+async function openWorkbench(page, { findings = [finding(1)], getScan = () => sourceScan, repositoryUrl = "https://github.com/example/api.git" } = {}) {
   const template = await fs.readFile(path.join(__dirname, "../../app/templates/projects.html"), "utf8");
   const html = template.replace(/{% if demo_lab_enabled %}.*?{% endif %}/s, "")
     .replaceAll("{{ request.state.csp_nonce }}", "browser-test");
   const requests = [];
   const projectResponse = (projectId, endpoint, url) => {
-    if (endpoint === "scans") return { scans: [getScan()], latest_source_scan: getScan() };
+    if (endpoint === "scans") return { scans: getScan() ? [getScan()] : [], latest_source_scan: getScan() };
     if (endpoint === "findings") return findingsPage(findings, url);
     if (endpoint === "members") return { members: [{ user_id: projectId, username: `Current member ${projectId}`, role: "operator" }] };
     if (endpoint === "policies") return { policies: [{ id: projectId, version: 1, name: `Current policy ${projectId}`, state: "approved", definition: { fail_on_severities: ["HIGH"] } }] };
@@ -53,7 +53,7 @@ async function openWorkbench(page, { findings = [finding(1)], getScan = () => so
     let json;
     if (url.pathname === "/api/auth/me") json = { username: "project-admin", role: "admin", csrf_token: "browser-test-csrf" };
     else if (url.pathname === "/api/projects") json = { projects: [7, 8].map((id) => ({
-      id, name: `Project ${id}`, default_branch: "main", scan_preset: "standard", role: "admin"
+      id, name: `Project ${id}`, repository_url: repositoryUrl, default_branch: "main", scan_preset: "standard", role: "admin"
     })) };
     else if (url.pathname === "/api/github/status") json = { enabled: false };
     else {
@@ -69,6 +69,33 @@ async function openWorkbench(page, { findings = [finding(1)], getScan = () => so
   await expect(page.locator("#members")).toContainText("Current member 7");
   return { requests, projectResponse };
 }
+
+test("draft projects cannot scan until a repository is saved in Settings", async ({ page }) => {
+  await openWorkbench(page, { repositoryUrl: "", getScan: () => null });
+  await expect(page.locator("#project-repository")).toContainText("Repository not configured");
+  await expect(page.locator("#onboarding-copy")).toContainText("Add a GitHub repository in Settings");
+  await expect(page.getByRole("button", { name: "Run scan", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Start quick scan", exact: true })).toBeDisabled();
+  let repositoryUrl = "";
+  await page.route("**/api/projects/7", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.repository_url).toBe("https://github.com/example/api");
+    repositoryUrl = `${body.repository_url}.git`;
+    return route.fulfill({ json: { id: 7, name: "Project 7", repository_url: repositoryUrl, scan_preset: "quick" } });
+  });
+  await page.route("**/api/projects", (route) => route.fulfill({ json: { projects: [{
+    id: 7, name: "Project 7", repository_url: repositoryUrl, default_branch: "main", scan_preset: "quick", role: "admin"
+  }] } }));
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.locator("#panel-settings").getByLabel("GitHub HTTPS URL").fill("https://github.com/example/api");
+  await page.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(page.locator("#notice")).toHaveText("Project settings saved.");
+  await expect(page.locator("#repository-url")).toHaveValue("https://github.com/example/api.git");
+  await expect(page.locator("#repository-url")).toHaveAttribute("readonly", "");
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Run scan", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Start quick scan", exact: true })).toBeEnabled();
+});
 
 test("findings filters and pages reach the whole queue while summary counts remain complete", async ({ page }) => {
   const findings = [

@@ -9,7 +9,7 @@ async function signInE2EOwner(page) {
   const workspaceName = page.getByLabel("Workspace name");
   if (await workspaceName.isVisible()) {
     await workspaceName.fill("E2E Engineering");
-    await page.getByLabel("Repository URL or path").fill("");
+    await page.getByLabel("GitHub HTTPS URL").fill("");
     await page.getByLabel("Default scan depth").selectOption("standard");
     await page.getByLabel("Administrator username").fill("e2e-owner");
     await page.getByLabel("Administrator password", { exact: true }).fill("e2e-owner-password");
@@ -33,7 +33,7 @@ test("first-run wizard claims the administrator and configures the workspace", a
     expect(accessibility.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
 
     await workspaceName.fill("E2E Engineering");
-    await page.getByLabel("Repository URL or path").fill("https://github.com/example/project");
+    await page.getByLabel("GitHub HTTPS URL").fill("https://github.com/example/project");
     await page.getByLabel("Default scan depth").selectOption("standard");
     await page.getByLabel("Administrator username").fill("e2e-owner");
     await page.getByLabel("Administrator password", { exact: true }).fill("e2e-owner-password");
@@ -163,6 +163,7 @@ test("project scan opens its report and downloads verified evidence", async ({ p
   await page.getByRole("button", { name: "New project" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Project name").fill(projectName);
+  await dialog.getByLabel("GitHub HTTPS URL", { exact: true }).fill("https://github.com/aegis-e2e/scan-fixture.git");
   await dialog.getByLabel("Default branch").fill("main");
   await dialog.getByLabel("Scan preset").selectOption("quick");
   const createProject = page.waitForResponse((response) =>
@@ -206,6 +207,13 @@ test("project scan opens its report and downloads verified evidence", async ({ p
     expect.objectContaining({ name: "report.html", integrity: "verified" }),
     expect.objectContaining({ name: "scan-manifest.json", integrity: "verified" })
   ]));
+  const descriptorResponse = await page.request.get(`/api/projects/${match[1]}/scans/${match[2]}/artifacts/source-descriptor.json`);
+  expect(descriptorResponse.ok()).toBeTruthy();
+  const descriptor = await descriptorResponse.json();
+  expect(descriptor.files.map((file) => file.path)).toEqual(["fixture.py"]);
+  const manifestResponse = await page.request.get(`/api/projects/${match[1]}/scans/${match[2]}/artifacts/scan-manifest.json`);
+  expect(manifestResponse.ok()).toBeTruthy();
+  expect((await manifestResponse.json()).source.identity).toBe("https://github.com/aegis-e2e/scan-fixture.git");
   if (deepScanEnabled) {
     expect(artifacts).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "codeql.sarif", integrity: "verified" }),
@@ -236,6 +244,26 @@ test("project scan opens its report and downloads verified evidence", async ({ p
   const downloadedFile = await download.path();
   const bundle = await fs.readFile(downloadedFile);
   expect(bundle.subarray(0, 2).toString()).toBe("PK");
+
+  await page.getByRole("tab", { name: "Findings" }).click();
+  const finding = page.locator(".finding-row").first();
+  await expect(finding.getByRole("link", { name: "Latest evidence" })).toHaveAttribute("href", reportUrl);
+  await finding.locator(".finding-history summary").click();
+  await expect(finding.locator(".finding-history")).toContainText("created → open");
+  await expect(finding.getByRole("link", { name: "scan evidence" })).toHaveAttribute("href", reportUrl);
+});
+
+test("tablet navigation stays labelled and phones can sign out", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await signInE2EOwner(page);
+  const navigation = page.getByRole("complementary", { name: "Primary navigation" });
+  for (const name of ["Projects", "Account security", "Operations"]) {
+    await expect(navigation.getByRole("link", { name, exact: true })).toBeVisible();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await navigation.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  expect((await page.request.get("/api/auth/me")).status()).toBe(401);
 });
 
 test("operations console issues and revokes API tokens accessibly", async ({ page }) => {

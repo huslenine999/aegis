@@ -6,13 +6,17 @@
   <meta name="theme-color" content="#0a0d0b">
   <meta name="color-scheme" content="dark">
   <title>Operations | Aegis</title>
-  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.0">
+  <link rel="stylesheet" href="/static/aegis-app.css?v=3.0.1">
 </head>
 <body class="app-page">
   <div class="app-shell">
     <aside class="app-sidebar" aria-label="Primary navigation">
       <a class="brand-lockup" href="/projects"><span>Aegis<small>Security workbench</small></span></a>
       <nav class="app-nav"><span class="app-nav-label">Workspace</span><a href="/projects"><span>Projects</span></a><a href="/account/security"><span>Account security</span></a><a class="active" href="/admin" aria-current="page"><span>Operations</span></a></nav>
+      <div class="app-sidebar-footer">
+        <div class="identity-card"><strong id="identity">Loading identity…</strong><small>Authenticated workspace</small></div>
+        <button id="sign-out" class="sign-out" type="button">Sign out</button>
+      </div>
     </aside>
     <div class="app-main">
       <header class="app-topbar"><div class="topbar-context"><small>Administrative boundary</small><strong>Operations</strong></div><button id="refresh" class="primary" type="button">Refresh diagnostics</button></header>
@@ -47,7 +51,7 @@
     async function api(url,options={}){const headers=new Headers(options.headers||{});if(!["GET","HEAD","OPTIONS"].includes(String(options.method||"GET").toUpperCase()))headers.set("X-CSRF-Token",csrf);if(options.body)headers.set("Content-Type","application/json");const response=await fetch(url,{...options,headers,credentials:"same-origin"});if(response.status===401)location.assign("/login");return response}
     function message(text,error=false){el(error?"error":"notice").textContent=text;if(!error)el("error").textContent=""}
     async function load(){
-      const me=await(await api("/api/auth/me")).json();csrf=me.csrf_token||"";
+      const me=await(await api("/api/auth/me")).json();csrf=me.csrf_token||"";el("identity").textContent=`${me.username} · ${me.role}`;
       const [diagnostics,users,tokens,audit,requests]=await Promise.all([
         api("/api/admin/diagnostics").then(r=>r.json()),api("/api/users").then(r=>r.json()),api("/api/tokens").then(r=>r.json()),api("/api/admin/audit").then(r=>r.json()),api("/api/admin/requests").then(r=>r.json())
       ]);
@@ -65,7 +69,7 @@
     async function revokeToken(id){if(!confirm("Revoke this API token?"))return;const response=await api(`/api/tokens/${id}`,{method:"DELETE"});if(!response.ok)return message("Token revocation failed.",true);message("Token revoked.");await load()}
     async function updateUser(id,changes){const response=await api(`/api/users/${id}`,{method:"PATCH",body:JSON.stringify(changes)});const data=await response.json();if(!response.ok){message(data.detail||"User update failed.",true);return load()}message("User updated and active sessions revoked.");await load()}
     el("user-form").onsubmit=async event=>{event.preventDefault();const response=await api("/api/users",{method:"POST",body:JSON.stringify({username:el("username").value,password:el("password").value,role:el("role").value})});const data=await response.json();if(!response.ok)return message(data.detail||"User creation failed.",true);event.target.reset();message("User created.");await load()};
-    el("refresh").onclick=load;load();
+    el("refresh").onclick=load;el("sign-out").onclick=async()=>{await api("/api/auth/logout",{method:"POST"});location.assign("/login")};load();
   </script>
 </body>
 </html>
