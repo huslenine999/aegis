@@ -112,7 +112,7 @@ git clone https://github.com/huslenine999/aegis.git
 cd aegis
 
 make setup
-source venv/bin/activate
+source .venv/bin/activate
 aegis start
 ```
 
@@ -123,20 +123,25 @@ one-time setup wizard at [http://localhost](http://localhost).
 To leave the browser closed or inspect startup directly:
 
 ```bash
-./venv/bin/aegis start --no-open
-./venv/bin/aegis logs --follow
+./.venv/bin/aegis start --no-open
+./.venv/bin/aegis logs --follow
 ```
 
 After signing in:
 
 1. open **Projects**;
-2. create a local project or connect GitHub and import a repository;
+2. create a project with its GitHub repository or connect GitHub and import one;
 3. choose Quick or Standard scanning, or Deep after
    [enabling CodeQL](#enable-deep-codeql-scans);
 4. run a scan from **Scan history**, then open its report in the browser;
 5. review the policy decision and durable findings, assign owners, and create
    GitHub remediation issues;
 6. download the evidence bundle, including its signed manifest, when needed.
+
+A project can be created as a draft without a repository, for example to import
+BAC research. Before a source scan, add its GitHub HTTPS URL in **Settings**.
+Once bound, the repository cannot be changed; create a new project for another
+repository. Local filesystem scans use the CLI.
 
 ### Enable Deep CodeQL scans
 
@@ -157,7 +162,7 @@ and JavaScript/TypeScript; a repository with neither language fails explicitly.
 Stop the stack without deleting its data:
 
 ```bash
-./venv/bin/aegis stop
+./.venv/bin/aegis stop
 ```
 
 ## What the workbench adds
@@ -478,7 +483,7 @@ Install development and browser dependencies:
 
 ```bash
 make setup
-source venv/bin/activate
+source .venv/bin/activate
 npm ci
 npx playwright install chromium
 ```
@@ -511,11 +516,16 @@ in a controlled Python fixture.
 
 The existing 30-case benchmark exercises the Quick Python scanner. Seven
 browser tests cover setup, access control, the dashboard, accessibility, and
-output escaping. The held-out CodeQL corpus has been run: CodeQL 2.27.0 found
-4/4 vulnerable cases with one unrelated alert on a safe case
-([results](benchmarks/results/README.md)). An authenticated Deep browser flow
-and Docker-level adversarial isolation checks remain to be completed before
-claiming production assurance. See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
+output escaping. Two held-out CodeQL corpora have been run. On the fresh
+28-case v2 corpus, CodeQL 2.27.0 found 14/14 vulnerable cases, and its only
+alerts on safe cases were two unrelated rate-limiting alerts. The Aegis Semgrep
+rules found 7/14 with 3 false alarms. A pinned seven-repository inventory and
+a first triage are also recorded
+([results](benchmarks/results/README.md)). Docker-level isolation probes of the
+CodeQL analysis container pass with the pinned image on the developer's Mac.
+An authenticated Deep browser flow remains before claiming production
+assurance, and the Deep worker that starts the container is still privileged
+(F06). See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.
 

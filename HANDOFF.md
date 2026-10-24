@@ -89,9 +89,13 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
 3. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
    Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
    tag, and confirm `pipx install aegis-security-console` works.
-4. **Deep-scan assurance.** Authenticated Deep browser flow and Docker-level
-   adversarial isolation checks. The held-out CodeQL benchmark is done
-   (`benchmarks/results/`); a larger fresh corpus is the next step.
+4. **Deep-scan assurance.** Authenticated Deep browser flow. The isolation
+   probes (`AEGIS_CODEQL_ISOLATION=1 pytest tests/integration/test_codeql_isolation.py`)
+   passed on the developer's Mac with the pinned image on 2026-10-22; re-run
+   them after image, engine, or launch-flag changes. The fresh v2 corpus
+   and a pinned real-repository inventory are in `benchmarks/results/`. The
+   remaining work is a second-reviewer triage and labels for the training
+   labs.
 5. **Per-job OS sandbox.** The last open piece of F06. Signing key, GitHub
    credentials, and database roles are split out (signer, `github-broker`,
    per-service PostgreSQL logins), but scanner subprocesses still run as the
