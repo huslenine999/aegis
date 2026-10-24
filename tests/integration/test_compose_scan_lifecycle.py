@@ -3,7 +3,7 @@
 The regular suite intentionally replaces Redis/RQ and uses SQLite for speed.
 This module is enabled only by the Compose CI job so it can exercise the real
 dashboard, Redis queue/event path, worker, PostgreSQL metadata, and artifact
-API together.
+API together. Once enabled, missing prerequisites fail instead of skipping.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
@@ -20,7 +21,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _configuration() -> tuple[str, str]:
+def _base_url() -> str:
     if os.environ.get("AEGIS_COMPOSE_INTEGRATION", "").lower() not in {
         "1",
         "true",
@@ -28,15 +29,41 @@ def _configuration() -> tuple[str, str]:
         "on",
     }:
         pytest.skip("Compose integration tests are disabled.")
-    base_url = os.environ.get("AEGIS_INTEGRATION_BASE_URL", "http://127.0.0.1:5001")
+    return os.environ.get("AEGIS_INTEGRATION_BASE_URL", "http://127.0.0.1:5001").rstrip("/")
+
+
+def _admin_token(client: httpx.Client) -> str:
+    """Use a supplied token, or mint a short-lived one as the bootstrap admin."""
     token = os.environ.get("AEGIS_INTEGRATION_ADMIN_TOKEN", "")
-    if not token:
-        pytest.skip("AEGIS integration admin token is not configured.")
-    return base_url.rstrip("/"), token
-
-
-def _headers(token: str) -> dict[str, str]:
-    return {"X-Aegis-Token": token}
+    if token:
+        return token
+    password = os.environ.get("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "")
+    if not password:
+        pytest.fail(
+            "Compose integration is enabled, but neither AEGIS_INTEGRATION_ADMIN_TOKEN "
+            "nor AEGIS_BOOTSTRAP_ADMIN_PASSWORD is set."
+        )
+    username = os.environ.get("AEGIS_BOOTSTRAP_ADMIN_USERNAME", "admin")
+    login = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert login.status_code == 200, login.text
+    # The production session cookie is Secure, so send it explicitly over plain HTTP.
+    session = {
+        "Cookie": f"aegis_session={login.cookies['aegis_session']}",
+        "X-CSRF-Token": login.json()["csrf_token"],
+    }
+    users = client.get("/api/users", headers=session)
+    assert users.status_code == 200, users.text
+    user_id = next(user["id"] for user in users.json()["users"] if user["username"] == username)
+    minted = client.post(
+        f"/api/users/{user_id}/tokens",
+        headers=session,
+        json={
+            "name": "compose-integration",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert minted.status_code == 201, minted.text
+    return minted.json()["token"]
 
 
 def _wait_for_ready(client: httpx.Client) -> None:
@@ -101,16 +128,17 @@ def _wait_for_scan(
 
 
 def test_compose_scan_reaches_postgres_artifacts_and_websocket_events() -> None:
-    base_url, token = _configuration()
-    headers = _headers(token)
+    base_url = _base_url()
     project_id: int | None = None
-    with httpx.Client(base_url=base_url, headers=headers, timeout=20) as client:
+    with httpx.Client(base_url=base_url, timeout=20) as client:
         _wait_for_ready(client)
+        token = _admin_token(client)
+        client.headers["X-Aegis-Token"] = token
         created = client.post(
             "/api/projects",
             json={
                 "name": f"Compose lifecycle {uuid4().hex[:10]}",
-                "repository_url": "",
+                "repository_url": "https://github.com/huslenine999/aegis.git",
                 "default_branch": "main",
                 "scan_preset": "quick",
             },
