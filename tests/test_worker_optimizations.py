@@ -208,7 +208,7 @@ def test_queue_failure_fails_scan_instead_of_leaving_it_queued(tmp_path, monkeyp
 
     configure_project_database(tmp_path, monkeypatch)
     project_id = projects.create_project(
-        name="Queue down", repository_url="", github_full_name="", default_branch="main",
+        name="Queue down", repository_url="https://github.com/example/api.git", github_full_name="", default_branch="main",
         scan_preset="quick", user_id=10,
     )
 

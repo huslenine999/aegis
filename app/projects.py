@@ -248,13 +248,18 @@ def update_project(
     if scan_preset not in VALID_PRESETS:
         raise ValueError("Invalid scan preset.")
     repository_url = normalize_github_repository_url(repository_url)
+    repository_name = urlsplit(repository_url).path.strip("/").removesuffix(".git")
     with get_connection() as connection:
         cursor = connection.execute(
             """UPDATE projects SET name = ?, repository_url = ?,
-               default_branch = ?, scan_preset = ? WHERE id = ?""",
-            (name, repository_url or None, default_branch, scan_preset, project_id),
+               default_branch = ?, scan_preset = ? WHERE id = ?
+               AND (repository_url IS NULL OR repository_url = '' OR repository_url = ?)
+               AND (github_full_name IS NULL OR github_full_name = '' OR github_full_name = ?)""",
+            (name, repository_url or None, default_branch, scan_preset, project_id, repository_url, repository_name),
         )
         if not getattr(cursor, "rowcount", 0):
+            if connection.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+                raise ValueError("Project repository cannot be changed. Create a new project for a different repository.")
             raise ValueError("Project not found.")
 
 

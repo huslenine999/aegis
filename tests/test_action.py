@@ -274,7 +274,7 @@ def test_container_smoke_starts_all_readiness_services():
 def test_playwright_uses_the_locked_uv_environment():
     config = (PROJECT_ROOT / "playwright.config.js").read_text()
 
-    assert "uv run --locked python -m uvicorn" in config
+    assert "uv run --locked python -m tests.e2e_server" in config
     assert "venv/bin/python" not in config
 
 

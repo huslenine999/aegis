@@ -98,6 +98,11 @@ def _enqueue_project_scan(
             status_code=503,
             detail="Deep scans require an isolated CodeQL runtime, which is not available.",
         )
+    if not str(project.get("repository_url") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Add a GitHub repository in Project settings before scanning.",
+        )
     try:
         policy = ensure_active_policy(project["id"], principal.user_id)
     except ValueError as exc:
@@ -252,7 +257,7 @@ async def project_update(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     record_audit(principal.user_id, "project.updated", "project", project_id)
-    return {"id": project_id, "name": name, "scan_preset": preset}
+    return {"id": project_id, "name": name, "repository_url": repository_url, "scan_preset": preset}
 
 
 @router.delete("/api/projects/{project_id}")

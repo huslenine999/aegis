@@ -723,7 +723,9 @@ def async_scan_task(
         if project_id:
             if not project:
                 raise RuntimeError("Project no longer exists.")
-            if project["repository_url"]:
+            if not is_custom_scan and not str(project.get("repository_url") or "").strip():
+                raise RuntimeError("Project repository is not configured. Add a GitHub repository before scanning.")
+            if not is_custom_scan:
                 publish_job_event(job_id, "log", {
                     "text": f"[SOURCE] Cloning {project['github_full_name'] or project['repository_url']} at {project['default_branch']}.",
                     "color": "var(--text-muted)",
@@ -764,7 +766,7 @@ def async_scan_task(
                 target_path = str(BASE_DIR / "secure_main.py")
             elif target == "vulnerable":
                 target_path = str(BASE_DIR / "demo_lab.py")
-            elif not external_project_dir:
+            elif not project_id:
                 target_path = str(PROJECT_ROOT)
 
             if target_path is None:

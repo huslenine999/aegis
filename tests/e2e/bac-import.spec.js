@@ -45,6 +45,7 @@ async function openWorkbench(page, { role = "operator", getScans = () => [source
     if (pathname === "/api/auth/me") json = { username: "research-operator", role, csrf_token: "browser-test-csrf" };
     else if (pathname === "/api/projects") json = { projects: [{
       id: 7, name: "Research project", github_full_name: "example/repository",
+      repository_url: "https://github.com/example/repository.git",
       default_branch: "main", scan_preset: "standard", role
     }] };
     else if (pathname === "/api/github/status") json = { enabled: false };

@@ -46,6 +46,98 @@ def test_deep_scan_is_rejected_before_queuing_without_isolated_runtime(monkeypat
     assert "CodeQL" in error.value.detail
 
 
+@pytest.mark.parametrize("repository_url", ["", None, "   "])
+def test_project_scan_requires_a_source_before_creating_policy_or_run(monkeypatch, repository_url):
+    monkeypatch.setattr(project_routes, "ensure_active_policy", lambda *args: pytest.fail("created policy without a source"))
+    monkeypatch.setattr(project_routes, "create_scan_run", lambda **kwargs: pytest.fail("queued scan without a source"))
+
+    with pytest.raises(fastapi.HTTPException) as error:
+        project_routes._enqueue_project_scan(
+            {"id": 1, "repository_url": repository_url}, SimpleNamespace(user_id=10), "quick"
+        )
+
+    assert error.value.status_code == 400
+    assert "repository" in error.value.detail.lower()
+
+
+def test_worker_rejects_queued_project_without_source_before_snapshot(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="Draft", repository_url="", github_full_name="", default_branch="main",
+        scan_preset="quick", user_id=10,
+    )
+    run_id = projects.create_scan_run(
+        job_id="missing-source", project_id=project_id, requested_by=10,
+        target="project", preset="quick",
+    )
+    monkeypatch.setattr(worker, "SCANS_DIR", tmp_path / "scans")
+    monkeypatch.setattr(worker, "create_source_snapshot", lambda *args, **kwargs: pytest.fail("scanned implicit application source"))
+    monkeypatch.setattr(worker, "queue_project_notification", lambda *args: None)
+    monkeypatch.setattr(worker, "_complete_github_scan_check", lambda *args: None)
+
+    with pytest.raises(RuntimeError, match="repository"):
+        worker.async_scan_task(
+            "missing-source", "project", scan_run_id=run_id, project_id=project_id,
+            requested_by=10, preset="quick",
+        )
+
+    assert projects.get_scan_run(run_id)["state"] == "failed"
+    assert not list((tmp_path / "scans").rglob("source-descriptor.json"))
+
+
+def test_draft_project_can_bind_repository_once_without_retargeting_history(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="Draft", repository_url="", github_full_name="", default_branch="main",
+        scan_preset="quick", user_id=10,
+    )
+    projects.update_project(
+        project_id, name="API", repository_url="example/api", default_branch="main", scan_preset="quick",
+    )
+    project = projects.get_project(project_id)
+    assert project["repository_url"] == "https://github.com/example/api.git"
+    assert project["github_full_name"] == ""
+    with database.get_connection() as connection:
+        binding = connection.execute(
+            "SELECT repository_full_name, state FROM github_repository_bindings WHERE project_id = ?", (project_id,)
+        ).fetchone()
+    assert binding is None  # A manual URL does not grant GitHub App routing.
+
+    for repository_url in ("", "example/other"):
+        with pytest.raises(ValueError, match="repository cannot be changed"):
+            projects.update_project(
+                project_id, name="Other", repository_url=repository_url, default_branch="main", scan_preset="quick",
+            )
+        assert projects.get_project(project_id)["repository_url"] == project["repository_url"]
+        assert projects.get_project(project_id)["name"] == "API"
+
+
+def test_saving_imported_project_preserves_its_github_binding(tmp_path, monkeypatch):
+    configure_project_database(tmp_path, monkeypatch)
+    project_id = projects.create_project(
+        name="Imported", repository_url="https://github.com/example/api.git", github_full_name="example/api",
+        default_branch="main", scan_preset="quick", user_id=10,
+    )
+    with database.get_connection() as connection:
+        original_binding = tuple(connection.execute(
+            "SELECT * FROM github_repository_bindings WHERE project_id = ?", (project_id,)
+        ).fetchone())
+    projects.update_project(
+        project_id, name="Imported API", repository_url="https://github.com/example/api",
+        default_branch="main", scan_preset="standard",
+    )
+    with pytest.raises(ValueError, match="repository cannot be changed"):
+        projects.update_project(
+            project_id, name="Other", repository_url="https://github.com/example/other.git",
+            default_branch="main", scan_preset="standard",
+        )
+    assert projects.get_project(project_id)["github_full_name"] == "example/api"
+    with database.get_connection() as connection:
+        assert tuple(connection.execute(
+            "SELECT * FROM github_repository_bindings WHERE project_id = ?", (project_id,)
+        ).fetchone()) == original_binding
+
+
 def test_projects_are_membership_scoped(tmp_path, monkeypatch):
     configure_project_database(tmp_path, monkeypatch)
     project_id = projects.create_project(
@@ -418,7 +510,7 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     scans_dir = tmp_path / "scans"
     project_id = projects.create_project(
         name="Deep audit",
-        repository_url="",
+        repository_url="https://github.com/example/deep-audit.git",
         github_full_name="",
         default_branch="main",
         scan_preset="deep",
@@ -433,6 +525,7 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     )
     monkeypatch.setattr(worker, "SCANS_DIR", scans_dir)
     monkeypatch.setattr(worker, "PROJECT_ROOT", target)
+    monkeypatch.setattr(worker, "_clone_github_project", lambda *args: (str(target), target))
     monkeypatch.setattr(worker, "get_project", projects.get_project)
     monkeypatch.setattr(worker, "update_scan_run", projects.update_scan_run)
     monkeypatch.setattr(worker, "record_scan_artifacts", projects.record_scan_artifacts)

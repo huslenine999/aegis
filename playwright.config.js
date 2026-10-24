@@ -15,7 +15,7 @@ module.exports = defineConfig({
     screenshot: "only-on-failure"
   },
   webServer: {
-    command: "uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 5011",
+    command: "uv run --locked python -m tests.e2e_server",
     url: "http://127.0.0.1:5011/health",
     reuseExistingServer: !process.env.CI && process.env.AEGIS_E2E_DEEP !== "1",
     env: {
