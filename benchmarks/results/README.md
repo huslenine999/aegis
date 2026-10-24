@@ -54,3 +54,146 @@ Files:
 - `codeql-heldout-v1.2026-10-16.held-out.json`: Semgrep rules as committed
   in `44e65d1`.
 - `codeql-heldout-v1.2026-10-16.after-rule-fixes.json`: after the three fixes.
+
+## CodeQL held-out corpus v2 (`codeql-heldout-v2`), 2026-10-22
+
+28 fresh synthetic cases (14 vulnerable, 14 safe twins) in Python (Django,
+Flask, FastAPI) and JavaScript (Express): SQL injection (including a
+cross-function flow), path traversal, SSRF, unsafe deserialization, code
+injection, reflected XSS, open redirect, and cross-function command injection.
+None of these cases appear in v1. They were written without reading
+`rules/semgrep_rules.yaml`, the corpus SHA-256 (`1881cd3c…`) was recorded
+before the first run, and no rules changed afterwards. Do not tune rules
+against v2; measure any rule changes on a new corpus.
+
+How it was run:
+
+- CodeQL CLI 2.27.0, official `linux64` bundle (SHA-256 verified against
+  `scripts/setup_codeql.sh`), same suites as v1, `--build-mode=none`.
+- Semgrep 1.179.0 with `rules/semgrep_rules.yaml` (`b26b5942…`), using the
+  same target selection as production scans.
+- Command:
+  `python scripts/run_codeql_benchmark.py --corpus benchmarks/codeql-heldout-v2.json --codeql-cli <path>/codeql --with-semgrep`
+
+| Detector | Caught (of 14) | False alarms (of 14 safe) |
+| --- | ---: | ---: |
+| CodeQL, any alert counts | 14 | 2 |
+| CodeQL, target classes only | 14 | 0 |
+| Aegis Semgrep rules | 7 | 3 |
+| Aegis Semgrep, without `javascript-express-tainted-request` | 4 | 0 |
+| CodeQL + Semgrep | 14 | 4 |
+
+CodeQL's two false alarms are `js/missing-rate-limiting` on safe Express
+routes, as in v1.
+
+`javascript-express-tainted-request` fired on both members of three Express
+pairs (path traversal, SSRF, open redirect), so it raised an alert without
+telling the vulnerable and safe versions apart. The class-specific Semgrep
+rules caught Django f-string SQL, `pickle.loads`, `eval`, and `execSync`
+command construction. They do not cover Python path traversal, SSRF,
+reflected XSS, or open redirect, Express SQL injection or reflected XSS, or SQL
+built with `.format()` in a helper function. Standard scans (no CodeQL) miss
+those classes on these fixtures; Deep catches them.
+
+Files:
+
+- `codeql-heldout-v2.2026-10-22.held-out.json`: direct CLI plus Semgrep.
+- `codeql-heldout-v2.2026-10-22.isolated-standin.json`: the same corpus through
+  the production isolated runner (`run_codeql_scan_isolated`, offline
+  container) on the stand-in image described below. CodeQL results are
+  identical to the direct run.
+
+## Real-repository inventory (`repositories-v1`), 2026-10-22
+
+Seven public repositories pinned by commit: four training labs with
+documented weaknesses (pygoat, VAmPI, NodeGoat, dvpwa) and three maintained
+applications (microblog, full-stack-fastapi-template,
+node-express-realworld-example-app). All seven scans completed (0 operational
+failures), and a second run produced identical alerts. Counts are flagged
+(file, rule) pairs, the unit a reviewer triages.
+
+Command:
+`python scripts/run_codeql_benchmark.py --repositories --codeql-cli <path>/codeql`
+
+| Repository | Kind | CodeQL pairs | Semgrep pairs |
+| --- | --- | ---: | ---: |
+| pygoat | lab | 33 | 10 |
+| VAmPI | lab | 2 | 0 |
+| NodeGoat | lab | 14 | 2 |
+| dvpwa | lab | 5 | 3 |
+| microblog | app | 4 | 2 |
+| full-stack-fastapi-template | app | 8 | 0 |
+| node-express-realworld-example-app | app | 1 | 0 |
+
+Triage of the three applications (one reviewer, Claude, 2026-10-22; needs a
+second reviewer before it is cited):
+
+| Repository | Detector / rule | Pairs | Verdict |
+| --- | --- | ---: | --- |
+| microblog | CodeQL `py/reflective-xss` | 2 | False: handlers return dicts that Flask serializes as JSON |
+| microblog | CodeQL `py/url-redirection` | 1 | True, low: `next` is checked only for an empty netloc, so `/\evil.example` passes |
+| microblog | CodeQL `py/partial-ssrf` | 1 | True, low: user language codes reach the query string of a fixed translator URL |
+| microblog | Semgrep `python-rce` | 1 | Not exploitable: `os.system` input is a developer CLI argument |
+| microblog | Semgrep `python-weak-hash` | 1 | False: MD5 builds a Gravatar URL, not a security control |
+| full-stack-fastapi-template | CodeQL `js/insecure-randomness` | 7 | False: `Math.random` in Playwright test helpers |
+| full-stack-fastapi-template | CodeQL `py/jinja2/autoescape-false` | 1 | True, low: HTML emails render user fields without autoescaping |
+| node-express-realworld-example-app | CodeQL `js/missing-rate-limiting` | 1 | True, hardening: the login route has no rate limit |
+
+On these applications CodeQL had 4 true and 9 false pairs, and Aegis Semgrep
+had 0 true and 2 false. Seven of CodeQL's false pairs come from test code:
+Deep scans analyze test directories, while Semgrep skips `tests/` by default.
+
+One documented lab flaw was missed by both detectors: VAmPI's SQL injection
+(`models/user_model.py:72`, an f-string passed to `text()`). VAmPI routes
+requests through Connexion's OpenAPI mapping, which CodeQL does not model as a
+request source, and the Aegis `python-sqli` rule requires a request object.
+Ruff `S608`, which runs in every Aegis preset, does flag that line. The labs
+are otherwise inventoried, not labeled, so this run gives no recall figure.
+
+## Deep isolation checks, 2026-10-22
+
+`tests/integration/test_codeql_isolation.py` runs adversarial probes inside the
+CodeQL image with the exact `docker run` flags Aegis uses for analysis. It
+checks that only loopback is up and no IPv4 routes exist, that IPv4, IPv6, and
+DNS egress fail, the user and capabilities, `no_new_privs`, a read-only
+image, unexpected mounts and the Docker socket, environment leakage (a canary
+variable in the Docker client's environment), the 4 GiB memory and 128-process
+limits, and whether two concurrent analysis containers can see each other's
+files or processes.
+
+Run it on each host that runs Deep scans, after `make codeql-setup`:
+
+```
+AEGIS_CODEQL_ISOLATION=1 uv run pytest tests/integration/test_codeql_isolation.py
+```
+
+Result on the developer's Mac: both tests passed on 2026-10-22 with the
+pinned image
+`aegis-codeql@sha256:5e562ed05171ea425b1faa602bbe53c9c6bff525e23bf274534f4e142aeb89e2`
+(test file SHA-256 `84c7ba60…`). The first run there failed one assertion, and
+the cause was the test, not the container. The Mac's Docker kernel adds idle
+tunnel devices (`gre0`, `sit0`, `ip6gre0`, and others) to every network
+namespace, and the test had required `lo` to be the only interface listed.
+Those devices are down, with no addresses or routes. The test now checks
+interfaces that are up and the routing table, adds an IPv6 connection attempt,
+and reports every check in one comparison. pytest records only pass or fail,
+so this run has no per-probe output file.
+
+Result on a stand-in, before that fix: both tests passed. Docker Hub was
+unreachable, so the image was rebuilt to `Dockerfile.codeql`'s recipe from the official Debian
+bookworm-slim root filesystem, Python 3.11.15 (python-build-standalone), and
+the verified CodeQL 2.27.0 `linux64` bundle. Docker 29.9.1 ran nested on
+x86_64 with cgroup v1 and the builtin seccomp profile. Two negative controls
+confirmed the probes can fail: without the isolation flags the container
+reached the network and DNS, wrote to its image, had no memory limit, and
+spawned all 200 processes; with the Docker socket mounted, the mount and
+socket checks failed. Details are in
+`codeql-isolation.2026-10-22.standin.json`, which the earlier probe version
+produced; it lists all interfaces, not just those that are up. After the fix,
+the stand-in passed again, and with networking on the test failed as intended
+(`eth0` up, two routes, TCP and DNS reachable).
+
+Re-run the test after changes to the CodeQL image, Docker engine, or launch
+flags, and on any other host that runs Deep scans. The checks cover the
+analysis container only. The Deep worker that starts it still holds database,
+signing, and Docker-daemon access (F06).

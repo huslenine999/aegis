@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the small held-out source/sink corpus in the isolated CodeQL runtime."""
+"""Run a held-out source/sink corpus, or pinned real repositories, through CodeQL and Semgrep."""
 
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ import tempfile
 import time
 from pathlib import Path
 
-from app.codeql_scanner import run_codeql_scan_isolated
+from app.codeql_scanner import _detected_languages, run_codeql_scan_isolated
+from app.scan_engine import add_semgrep_excludes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORPUS = PROJECT_ROOT / "benchmarks" / "codeql-heldout-v1.json"
+REPOSITORIES = PROJECT_ROOT / "benchmarks" / "repositories-v1.json"
 SEMGREP_RULES = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
 SUITES = {
     "python": "codeql/python-queries:codeql-suites/python-security-extended.qls",
@@ -106,7 +108,9 @@ def _direct_codeql(codeql: Path, source: Path, output: Path) -> tuple[dict[str, 
     ).stdout.strip()
     findings: dict[str, set[str]] = {}
     digests = {}
-    for language, suite in SUITES.items():
+    languages = _detected_languages(source)
+    for language in languages:
+        suite = SUITES[language]
         database = output / f"db-{language}"
         sarif = output / f"{language}.sarif"
         subprocess.run(
@@ -128,8 +132,8 @@ def _direct_codeql(codeql: Path, source: Path, output: Path) -> tuple[dict[str, 
         "runtime": "direct-cli",
         "codeql_version": version,
         "query_suites": SUITES,
-        "languages": sorted(SUITES),
-        "isolation": "not-applicable (fixed benchmark corpus)",
+        "languages": languages,
+        "isolation": "not-applicable (benchmark sources, not untrusted uploads)",
         "sarif_sha256": digests,
     }
 
@@ -142,17 +146,18 @@ def _package_version(name: str) -> str:
         return "unknown"
 
 
-def _semgrep(source: Path) -> tuple[dict[str, set[str]], dict]:
+def _semgrep(source: Path, *, allow_errors: bool = False) -> tuple[dict[str, set[str]], dict]:
     semgrep = shutil.which("semgrep")
     if not semgrep:
         raise RuntimeError("semgrep is not installed.")
+    # Same target selection as production scans, so repository runs match what Aegis reports.
+    command = add_semgrep_excludes([semgrep, "scan", "--metrics", "off", "--disable-version-check",
+                                    "--config", str(SEMGREP_RULES), "--json", "--quiet"])
     completed = subprocess.run(
-        [semgrep, "scan", "--metrics", "off", "--disable-version-check", "--config", str(SEMGREP_RULES),
-         "--json", "--quiet", str(source)],
-        capture_output=True, text=True, timeout=600, check=False,
+        [*command, str(source)], capture_output=True, text=True, timeout=1800, check=False,
     )
     report = json.loads(completed.stdout)
-    if report.get("errors"):
+    if report.get("errors") and not allow_errors:
         raise RuntimeError(f"Semgrep reported errors: {report['errors']}")
     findings: dict[str, set[str]] = {}
     for item in report["results"]:
@@ -161,6 +166,7 @@ def _semgrep(source: Path) -> tuple[dict[str, set[str]], dict]:
     return findings, {
         "rules_sha256": hashlib.sha256(SEMGREP_RULES.read_bytes()).hexdigest(),
         "version": _package_version("semgrep"),
+        "errors": len(report.get("errors") or []),
     }
 
 
@@ -252,14 +258,83 @@ def run_benchmark(
     return report
 
 
+def _inventory(findings: dict[str, set[str]]) -> dict:
+    """List flagged (file, rule) pairs: the unit a reviewer triages."""
+    by_rule: dict[str, list[str]] = {}
+    for path, rules in sorted(findings.items()):
+        for rule in rules:
+            by_rule.setdefault(rule, []).append(path)
+    return {
+        "flagged_files": len(findings),
+        "file_rule_pairs": sum(len(paths) for paths in by_rule.values()),
+        "by_rule": dict(sorted(by_rule.items())),
+    }
+
+
+def _checkout(url: str, commit: str, destination: Path) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Repository commits must be full 40-character SHAs.")
+    destination.mkdir()
+    for arguments in (["init", "-q"], ["fetch", "-q", "--depth", "1", url, commit], ["checkout", "-q", "FETCH_HEAD"]):
+        subprocess.run(["git", "-C", str(destination), *arguments], check=True, timeout=600)
+
+
+def run_repositories(manifest_path: Path = REPOSITORIES, *, codeql_cli: Path | None = None) -> dict:
+    manifest_bytes = manifest_path.read_bytes()
+    repositories = json.loads(manifest_bytes)["repositories"]
+    results = []
+    for repository in repositories:
+        started = time.monotonic()
+        entry = {key: repository[key] for key in ("name", "url", "commit", "kind", "stack")}
+        try:
+            with tempfile.TemporaryDirectory(prefix="aegis-repository-benchmark-") as temporary:
+                source, output = Path(temporary) / "source", Path(temporary) / "output"
+                output.mkdir()
+                _checkout(repository["url"], repository["commit"], source)
+                if codeql_cli:
+                    codeql_findings, codeql_tool = _direct_codeql(codeql_cli, source, output)
+                else:
+                    codeql_findings, codeql_tool = _isolated_codeql(source, output)
+                semgrep_findings, semgrep_tool = _semgrep(source, allow_errors=True)
+            entry.update({
+                "status": "completed",
+                "languages": codeql_tool["languages"],
+                "codeql": _inventory(codeql_findings),
+                "semgrep": {**_inventory(semgrep_findings), "errors": semgrep_tool["errors"]},
+            })
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            entry.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        entry["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        results.append(entry)
+    failures = sum(result["status"] == "failed" for result in results)
+    return {
+        "schema_version": 1,
+        "status": "completed",
+        "passed": failures == 0,
+        "source_scope": "pinned-public-repositories-untriaged",
+        "manifest": manifest_path.name,
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "codeql_runtime": "direct-cli" if codeql_cli else "isolated-container",
+        "semgrep_rules_sha256": hashlib.sha256(SEMGREP_RULES.read_bytes()).hexdigest(),
+        "semgrep_version": _package_version("semgrep"),
+        "operational_failures": failures,
+        "results": results,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=Path, default=CORPUS)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--codeql-cli", type=Path, help="Run a local CodeQL CLI instead of the isolated container")
     parser.add_argument("--with-semgrep", action="store_true", help="Also score the Aegis Semgrep rules")
+    parser.add_argument("--repositories", type=Path, nargs="?", const=REPOSITORIES,
+                        help="Inventory alerts on pinned real repositories instead of scoring the corpus")
     arguments = parser.parse_args()
-    report = run_benchmark(arguments.corpus, codeql_cli=arguments.codeql_cli, with_semgrep=arguments.with_semgrep)
+    if arguments.repositories:
+        report = run_repositories(arguments.repositories, codeql_cli=arguments.codeql_cli)
+    else:
+        report = run_benchmark(arguments.corpus, codeql_cli=arguments.codeql_cli, with_semgrep=arguments.with_semgrep)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if arguments.output:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)

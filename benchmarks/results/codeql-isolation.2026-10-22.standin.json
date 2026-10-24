@@ -1,0 +1,86 @@
+{
+  "date": "2026-10-22",
+  "docker": {
+    "architecture": "x86_64",
+    "cgroup_version": "1",
+    "kernel": "6.18.44-fc-v140",
+    "security_options": [
+      "name=seccomp,profile=builtin"
+    ],
+    "server_version": "29.9.1"
+  },
+  "image": "aegis-codeql-standin@sha256:f177b0a9448cc3052f39f659a3aa5c3c1a943b68d4ca56730c6f6fc8d41b302b",
+  "image_recipe": "Debian bookworm-slim rootfs (layer sha256:11422d7ca1a44390a32bd8d8d9dc5946b4d053b3bbd9507d682e35584ba84a26), python-build-standalone 3.11.15, CodeQL bundle 2.27.0 linux64 (sha256:8e870433e5c80d0e916c3c1aa9005fc88aab990bcdcc649fade9dfc4d7e94305), uid 10001",
+  "runs": {
+    "aegis_flags": {
+      "cap_eff": "0000000000000000",
+      "dns": "gaierror:-3",
+      "docker_socket": false,
+      "environment_has_canary": false,
+      "image_write": "OSError:30",
+      "interfaces": [
+        "lo"
+      ],
+      "memory_limit": "4294967296",
+      "no_new_privs": "1",
+      "root_options": [
+        "ro",
+        "relatime"
+      ],
+      "spawn_error": 11,
+      "spawned": 127,
+      "tcp_egress": "OSError:101",
+      "uid": 10001,
+      "unexpected_mounts": [],
+      "work_write": "allowed"
+    },
+    "negative_control_docker_socket_mounted": {
+      "cap_eff": "0000000000000000",
+      "dns": "gaierror:-3",
+      "docker_socket": true,
+      "environment_has_canary": false,
+      "image_write": "OSError:30",
+      "interfaces": [
+        "lo"
+      ],
+      "memory_limit": "4294967296",
+      "no_new_privs": "1",
+      "root_options": [
+        "ro",
+        "relatime"
+      ],
+      "spawn_error": 11,
+      "spawned": 127,
+      "tcp_egress": "OSError:101",
+      "uid": 10001,
+      "unexpected_mounts": [
+        "/run/docker.sock"
+      ],
+      "work_write": "allowed"
+    },
+    "negative_control_without_isolation_flags": {
+      "cap_eff": "0000000000000000",
+      "dns": "allowed",
+      "docker_socket": false,
+      "environment_has_canary": false,
+      "image_write": "allowed",
+      "interfaces": [
+        "eth0",
+        "lo"
+      ],
+      "memory_limit": "9223372036854771712",
+      "no_new_privs": "0",
+      "root_options": [
+        "rw",
+        "relatime"
+      ],
+      "spawned": 200,
+      "tcp_egress": "allowed",
+      "uid": 10001,
+      "unexpected_mounts": [],
+      "work_write": "allowed"
+    }
+  },
+  "schema_version": 1,
+  "scope": "stand-in image on nested Docker; not the production host"
+}

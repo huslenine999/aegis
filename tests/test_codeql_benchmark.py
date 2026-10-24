@@ -2,7 +2,10 @@
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("run_codeql_benchmark", ROOT / "scripts" / "run_codeql_benchmark.py")
@@ -55,3 +58,37 @@ def test_rejects_corpus_paths_outside_the_workspace(tmp_path, monkeypatch):
         assert "relative" in str(error)
     else:
         raise AssertionError("path traversal was accepted")
+
+
+def test_repository_inventory_counts_triage_units_and_records_failures(tmp_path, monkeypatch):
+    manifest = tmp_path / "repositories.json"
+    manifest.write_text(json.dumps({"schema_version": 1, "repositories": [
+        {"name": "app", "url": "https://example.com/app.git", "commit": "a" * 40, "kind": "application", "stack": "Flask"},
+        {"name": "gone", "url": "https://example.com/gone.git", "commit": "b" * 40, "kind": "application", "stack": "Flask"},
+    ]}))
+
+    def checkout(url, commit, destination):
+        if "gone" in url:
+            raise subprocess.CalledProcessError(128, "git")
+        destination.mkdir()
+
+    codeql = {"a.py": {"py/sql-injection", "py/path-injection"}, "b.py": {"py/sql-injection"}}
+    monkeypatch.setattr(benchmark, "_checkout", checkout)
+    monkeypatch.setattr(benchmark, "_direct_codeql", lambda *args: (codeql, {"languages": ["python"]}))
+    monkeypatch.setattr(benchmark, "_semgrep", lambda source, allow_errors: ({}, {"errors": 2}))
+
+    report = benchmark.run_repositories(manifest, codeql_cli=Path("codeql"))
+
+    app, gone = report["results"]
+    assert app["codeql"] == {
+        "flagged_files": 2, "file_rule_pairs": 3,
+        "by_rule": {"py/path-injection": ["a.py"], "py/sql-injection": ["a.py", "b.py"]},
+    }
+    assert app["semgrep"]["errors"] == 2
+    assert gone["status"] == "failed"
+    assert (report["operational_failures"], report["passed"]) == (1, False)
+
+
+def test_repository_checkout_requires_a_pinned_commit(tmp_path):
+    with pytest.raises(ValueError):
+        benchmark._checkout("https://example.com/app.git", "main", tmp_path / "branch")

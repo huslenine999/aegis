@@ -1,0 +1,318 @@
+{
+  "codeql_target_class_metrics": {
+    "false_negatives": 0,
+    "false_positive_rate": 0.0,
+    "false_positives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "true_negatives": 14,
+    "true_positives": 14
+  },
+  "codeql_version": "2.27.0",
+  "corpus": "codeql-heldout-v2.json",
+  "corpus_sha256": "1881cd3c230b338c3c00d196d7bba509d4658f2f572925705e192382f30e268c",
+  "elapsed_seconds": 73.241,
+  "isolation": "not-applicable (benchmark sources, not untrusted uploads)",
+  "languages": [
+    "javascript-typescript",
+    "python"
+  ],
+  "metrics": {
+    "cases": 28,
+    "false_negatives": 0,
+    "false_positive_rate": 0.14285714285714285,
+    "false_positives": 2,
+    "precision": 0.875,
+    "recall": 1.0,
+    "true_negatives": 12,
+    "true_positives": 14
+  },
+  "passed": false,
+  "query_suites": {
+    "javascript-typescript": "codeql/javascript-queries:codeql-suites/javascript-security-extended.qls",
+    "python": "codeql/python-queries:codeql-suites/python-security-extended.qls"
+  },
+  "results": [
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "django-raw-sql-fstring",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-sqli"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "django-raw-sql-params",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/path-injection"
+      ],
+      "expected_rule_id": "py/path-injection",
+      "id": "fastapi-path-traversal",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "fastapi-path-prefix-check",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/full-ssrf"
+      ],
+      "expected_rule_id": "py/full-ssrf",
+      "id": "flask-ssrf",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-fetch-allowlist",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/unsafe-deserialization"
+      ],
+      "expected_rule_id": "py/unsafe-deserialization",
+      "id": "flask-pickle-body",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-pickle"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-json-body",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/code-injection"
+      ],
+      "expected_rule_id": "py/code-injection",
+      "id": "flask-eval-expression",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-eval"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-literal-eval",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "fastapi-helper-sql-format",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "fastapi-helper-sql-params",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/reflective-xss"
+      ],
+      "expected_rule_id": "py/reflective-xss",
+      "id": "flask-reflected-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-escaped-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/url-redirection"
+      ],
+      "expected_rule_id": "py/url-redirection",
+      "id": "flask-open-redirect",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-mapped-redirect",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/sql-injection"
+      ],
+      "expected_rule_id": "js/sql-injection",
+      "id": "express-mysql-concat",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express-mysql-placeholder",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/path-injection"
+      ],
+      "expected_rule_id": "js/path-injection",
+      "id": "express-readfile-join",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express-readfile-mapped",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/reflected-xss"
+      ],
+      "expected_rule_id": "js/reflected-xss",
+      "id": "express-reflected-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-escaped-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/request-forgery"
+      ],
+      "expected_rule_id": "js/request-forgery",
+      "id": "express-axios-ssrf",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-axios-mapped",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/server-side-unvalidated-url-redirection"
+      ],
+      "expected_rule_id": "js/server-side-unvalidated-url-redirection",
+      "id": "express-open-redirect",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-mapped-redirect",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/command-line-injection"
+      ],
+      "expected_rule_id": "js/command-line-injection",
+      "id": "express-helper-exec-sync",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-command-injection"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-helper-exec-file-sync",
+      "passed": true,
+      "semgrep_rule_ids": []
+    }
+  ],
+  "runtime": "direct-cli",
+  "sarif_sha256": {
+    "javascript-typescript": "0afc7dc5aa73e2733031549a4dcdc16054174d22ba1c76f3b160c5ac83cd9465",
+    "python": "e5b1858f1bc7134e8db36c47ad19b2119c68980c4e184937b15ea8b2b0e2d9d8"
+  },
+  "schema_version": 2,
+  "semgrep": {
+    "combined_with_codeql": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.2857142857142857,
+      "false_positives": 4,
+      "precision": 0.7777777777777778,
+      "recall": 1.0,
+      "true_negatives": 10,
+      "true_positives": 14
+    },
+    "errors": 0,
+    "metrics": {
+      "false_negatives": 7,
+      "false_positive_rate": 0.21428571428571427,
+      "false_positives": 3,
+      "precision": 0.7,
+      "recall": 0.5,
+      "true_negatives": 11,
+      "true_positives": 7
+    },
+    "rules_sha256": "b26b5942f429c9902e7ee3f30f937f4650596e3a8653b58977cdc279c8734754",
+    "version": "1.179.0"
+  },
+  "source_scope": "synthetic-held-out-fixtures",
+  "status": "completed"
+}

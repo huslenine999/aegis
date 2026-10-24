@@ -1,0 +1,387 @@
+{
+  "codeql_runtime": "direct-cli",
+  "manifest": "repositories-v1.json",
+  "manifest_sha256": "a2f16851c111dd61b9cb2fdfcfaa95f90d1f8d78a883904941ee84543e0c1ae4",
+  "operational_failures": 0,
+  "passed": true,
+  "results": [
+    {
+      "codeql": {
+        "by_rule": {
+          "js/clear-text-storage-of-sensitive-data": [
+            "dockerized_labs/sensitive_data_exposure/templates/profile.html"
+          ],
+          "js/functionality-from-untrusted-source": [
+            "dockerized_labs/sensitive_data_exposure/templates/about.html",
+            "dockerized_labs/sensitive_data_exposure/templates/base.html",
+            "dockerized_labs/sensitive_data_exposure/templates/index.html",
+            "dockerized_labs/sensitive_data_exposure/templates/lesson.html",
+            "dockerized_labs/sensitive_data_exposure/templates/login.html",
+            "dockerized_labs/sensitive_data_exposure/templates/profile.html",
+            "dockerized_labs/sensitive_data_exposure/templates/register.html"
+          ],
+          "js/xss-through-dom": [
+            "introduction/templates/mitre/csrf_dashboard.html"
+          ],
+          "py/clear-text-logging-sensitive-data": [
+            "introduction/views.py"
+          ],
+          "py/clear-text-storage-sensitive-data": [
+            "introduction/playground/A9/archive.py"
+          ],
+          "py/client-exposed-cookie": [
+            "introduction/views.py"
+          ],
+          "py/code-injection": [
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ],
+          "py/command-line-injection": [
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ],
+          "py/cookie-injection": [
+            "dockerized_labs/broken_auth_lab/app.py"
+          ],
+          "py/flask-debug": [
+            "dockerized_labs/broken_auth_lab/app.py"
+          ],
+          "py/full-ssrf": [
+            "introduction/views.py"
+          ],
+          "py/insecure-cookie": [
+            "introduction/views.py"
+          ],
+          "py/log-injection": [
+            "introduction/views.py"
+          ],
+          "py/path-injection": [
+            "introduction/playground/ssrf/main.py",
+            "introduction/views.py"
+          ],
+          "py/shell-command-constructed-from-input": [
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ],
+          "py/sql-injection": [
+            "introduction/views.py"
+          ],
+          "py/unsafe-deserialization": [
+            "dockerized_labs/insec_des_lab/main.py",
+            "introduction/views.py"
+          ],
+          "py/weak-sensitive-data-hashing": [
+            "introduction/mitre.py",
+            "introduction/utility.py",
+            "introduction/views.py"
+          ],
+          "py/xml-bomb": [
+            "introduction/views.py"
+          ],
+          "py/xxe": [
+            "introduction/views.py"
+          ]
+        },
+        "file_rule_pairs": 33,
+        "flagged_files": 15
+      },
+      "commit": "19d17cc8874861142b330636d068bbde54e86b85",
+      "elapsed_seconds": 85.909,
+      "kind": "training-lab",
+      "languages": [
+        "javascript-typescript",
+        "python"
+      ],
+      "name": "pygoat",
+      "semgrep": {
+        "by_rule": {
+          "javascript-xss-html-sink": [
+            "introduction/static/js/a9.js"
+          ],
+          "python-eval": [
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ],
+          "python-pickle": [
+            "dockerized_labs/insec_des_lab/main.py",
+            "introduction/views.py"
+          ],
+          "python-rce": [
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ],
+          "python-weak-hash": [
+            "dockerized_labs/broken_auth_lab/app.py",
+            "introduction/mitre.py",
+            "introduction/views.py"
+          ]
+        },
+        "errors": 0,
+        "file_rule_pairs": 10,
+        "flagged_files": 5
+      },
+      "stack": "Django",
+      "status": "completed",
+      "url": "https://github.com/adeyosemanputra/pygoat.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "py/polynomial-redos": [
+            "api_views/users.py"
+          ],
+          "py/redos": [
+            "api_views/users.py"
+          ]
+        },
+        "file_rule_pairs": 2,
+        "flagged_files": 1
+      },
+      "commit": "f16052dce83f05847133ec98f01c5193a41de7d8",
+      "elapsed_seconds": 25.402,
+      "kind": "training-lab",
+      "languages": [
+        "python"
+      ],
+      "name": "VAmPI",
+      "semgrep": {
+        "by_rule": {},
+        "errors": 0,
+        "file_rule_pairs": 0,
+        "flagged_files": 0
+      },
+      "stack": "Flask API",
+      "status": "completed",
+      "url": "https://github.com/erev0s/VAmPI.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "js/clear-text-cookie": [
+            "server.js"
+          ],
+          "js/code-injection": [
+            "app/data/allocations-dao.js",
+            "app/routes/contributions.js"
+          ],
+          "js/indirect-command-line-injection": [
+            "Gruntfile.js"
+          ],
+          "js/log-injection": [
+            "app/routes/session.js"
+          ],
+          "js/missing-rate-limiting": [
+            "app/routes/index.js"
+          ],
+          "js/missing-token-validation": [
+            "server.js"
+          ],
+          "js/polynomial-redos": [
+            "app/routes/profile.js",
+            "app/routes/session.js"
+          ],
+          "js/redos": [
+            "app/routes/profile.js"
+          ],
+          "js/request-forgery": [
+            "app/routes/research.js"
+          ],
+          "js/server-side-unvalidated-url-redirection": [
+            "app/routes/index.js"
+          ],
+          "js/session-fixation": [
+            "app/routes/index.js"
+          ],
+          "js/sql-injection": [
+            "app/data/user-dao.js"
+          ]
+        },
+        "file_rule_pairs": 14,
+        "flagged_files": 9
+      },
+      "commit": "c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
+      "elapsed_seconds": 57.819,
+      "kind": "training-lab",
+      "languages": [
+        "javascript-typescript"
+      ],
+      "name": "NodeGoat",
+      "semgrep": {
+        "by_rule": {
+          "javascript-eval": [
+            "app/routes/contributions.js"
+          ],
+          "javascript-express-tainted-request": [
+            "app/routes/index.js"
+          ]
+        },
+        "errors": 0,
+        "file_rule_pairs": 2,
+        "flagged_files": 2
+      },
+      "stack": "Express",
+      "status": "completed",
+      "url": "https://github.com/OWASP/NodeGoat.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "js/html-constructed-from-input": [
+            "sqli/static/js/materialize.js"
+          ],
+          "js/incomplete-sanitization": [
+            "sqli/static/js/materialize.js"
+          ],
+          "js/overly-large-range": [
+            "sqli/static/js/materialize.js"
+          ],
+          "js/xss-through-dom": [
+            "sqli/static/js/materialize.js"
+          ],
+          "py/weak-sensitive-data-hashing": [
+            "sqli/dao/user.py"
+          ]
+        },
+        "file_rule_pairs": 5,
+        "flagged_files": 2
+      },
+      "commit": "a1d8f89fac2e57093189853c6527c2b01fc1d9c1",
+      "elapsed_seconds": 90.506,
+      "kind": "training-lab",
+      "languages": [
+        "javascript-typescript",
+        "python"
+      ],
+      "name": "dvpwa",
+      "semgrep": {
+        "by_rule": {
+          "javascript-eval": [
+            "sqli/static/js/materialize.js"
+          ],
+          "javascript-xss-html-sink": [
+            "sqli/static/js/materialize.js"
+          ],
+          "python-weak-hash": [
+            "sqli/dao/user.py"
+          ]
+        },
+        "errors": 0,
+        "file_rule_pairs": 3,
+        "flagged_files": 2
+      },
+      "stack": "aiohttp",
+      "status": "completed",
+      "url": "https://github.com/anxolerd/dvpwa.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "py/partial-ssrf": [
+            "app/translate.py"
+          ],
+          "py/reflective-xss": [
+            "app/api/users.py",
+            "app/main/routes.py"
+          ],
+          "py/url-redirection": [
+            "app/auth/routes.py"
+          ]
+        },
+        "file_rule_pairs": 4,
+        "flagged_files": 4
+      },
+      "commit": "a975ef64864354867c88e0ed3a17ba7d17dca752",
+      "elapsed_seconds": 27.628,
+      "kind": "application",
+      "languages": [
+        "python"
+      ],
+      "name": "microblog",
+      "semgrep": {
+        "by_rule": {
+          "python-rce": [
+            "app/cli.py"
+          ],
+          "python-weak-hash": [
+            "app/models.py"
+          ]
+        },
+        "errors": 0,
+        "file_rule_pairs": 2,
+        "flagged_files": 2
+      },
+      "stack": "Flask",
+      "status": "completed",
+      "url": "https://github.com/miguelgrinberg/microblog.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "js/insecure-randomness": [
+            "frontend/tests/admin.spec.ts",
+            "frontend/tests/items.spec.ts",
+            "frontend/tests/login.spec.ts",
+            "frontend/tests/reset-password.spec.ts",
+            "frontend/tests/sign-up.spec.ts",
+            "frontend/tests/user-settings.spec.ts",
+            "frontend/tests/utils/privateApi.ts"
+          ],
+          "py/jinja2/autoescape-false": [
+            "backend/app/utils.py"
+          ]
+        },
+        "file_rule_pairs": 8,
+        "flagged_files": 8
+      },
+      "commit": "b1125d8839482cb7bbae603ddc6d0081bf87532e",
+      "elapsed_seconds": 83.532,
+      "kind": "application",
+      "languages": [
+        "javascript-typescript",
+        "python"
+      ],
+      "name": "full-stack-fastapi-template",
+      "semgrep": {
+        "by_rule": {},
+        "errors": 0,
+        "file_rule_pairs": 0,
+        "flagged_files": 0
+      },
+      "stack": "FastAPI + React/TypeScript",
+      "status": "completed",
+      "url": "https://github.com/fastapi/full-stack-fastapi-template.git"
+    },
+    {
+      "codeql": {
+        "by_rule": {
+          "js/missing-rate-limiting": [
+            "src/app/routes/auth/auth.controller.ts"
+          ]
+        },
+        "file_rule_pairs": 1,
+        "flagged_files": 1
+      },
+      "commit": "30b68e1e881462b2f4164ea09ab4c4f5699c7b0b",
+      "elapsed_seconds": 51.086,
+      "kind": "application",
+      "languages": [
+        "javascript-typescript"
+      ],
+      "name": "node-express-realworld-example-app",
+      "semgrep": {
+        "by_rule": {},
+        "errors": 0,
+        "file_rule_pairs": 0,
+        "flagged_files": 0
+      },
+      "stack": "Express + Prisma/TypeScript",
+      "status": "completed",
+      "url": "https://github.com/gothinkster/node-express-realworld-example-app.git"
+    }
+  ],
+  "schema_version": 1,
+  "semgrep_rules_sha256": "b26b5942f429c9902e7ee3f30f937f4650596e3a8653b58977cdc279c8734754",
+  "semgrep_version": "1.179.0",
+  "source_scope": "pinned-public-repositories-untriaged",
+  "status": "completed"
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "description": "Public repositories pinned by commit for real-code alert inventories. Training labs have documented weaknesses; the applications are maintained projects where most alerts need triage before they count as true positives. Inventories are not accuracy scores until findings are labeled.",
+  "repositories": [
+    {"name": "pygoat", "url": "https://github.com/adeyosemanputra/pygoat.git", "commit": "19d17cc8874861142b330636d068bbde54e86b85", "kind": "training-lab", "stack": "Django"},
+    {"name": "VAmPI", "url": "https://github.com/erev0s/VAmPI.git", "commit": "f16052dce83f05847133ec98f01c5193a41de7d8", "kind": "training-lab", "stack": "Flask API"},
+    {"name": "NodeGoat", "url": "https://github.com/OWASP/NodeGoat.git", "commit": "c5cb68a7084e4ae7dcc60e6a98768720a81841e8", "kind": "training-lab", "stack": "Express"},
+    {"name": "dvpwa", "url": "https://github.com/anxolerd/dvpwa.git", "commit": "a1d8f89fac2e57093189853c6527c2b01fc1d9c1", "kind": "training-lab", "stack": "aiohttp"},
+    {"name": "microblog", "url": "https://github.com/miguelgrinberg/microblog.git", "commit": "a975ef64864354867c88e0ed3a17ba7d17dca752", "kind": "application", "stack": "Flask"},
+    {"name": "full-stack-fastapi-template", "url": "https://github.com/fastapi/full-stack-fastapi-template.git", "commit": "b1125d8839482cb7bbae603ddc6d0081bf87532e", "kind": "application", "stack": "FastAPI + React/TypeScript"},
+    {"name": "node-express-realworld-example-app", "url": "https://github.com/gothinkster/node-express-realworld-example-app.git", "commit": "30b68e1e881462b2f4164ea09ab4c4f5699c7b0b", "kind": "application", "stack": "Express + Prisma/TypeScript"}
+  ]
+}

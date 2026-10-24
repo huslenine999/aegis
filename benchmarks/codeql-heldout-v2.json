@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "description": "Fresh held-out synthetic source/sink pairs (v2). Written before any scanner ran on them and without reading the Aegis Semgrep rules; do not tune rules against these cases. They measure query behavior on small fixtures, not production-repository accuracy.",
+  "cases": [
+    {
+      "id": "django-raw-sql-fstring",
+      "file": "python/django_raw_sql.py",
+      "expected_rule_id": "py/sql-injection",
+      "source": "from django.db import connection\nfrom django.http import JsonResponse\nfrom django.urls import path\n\n\ndef search(request):\n    term = request.GET.get(\"q\", \"\")\n    with connection.cursor() as cursor:\n        cursor.execute(f\"SELECT id, title FROM articles WHERE title LIKE '%{term}%'\")\n        rows = cursor.fetchall()\n    return JsonResponse({\"rows\": rows})\n\n\nurlpatterns = [path(\"search/\", search)]\n"
+    },
+    {
+      "id": "django-raw-sql-params",
+      "file": "python/django_raw_sql_params.py",
+      "expected_rule_id": null,
+      "source": "from django.db import connection\nfrom django.http import JsonResponse\nfrom django.urls import path\n\n\ndef search(request):\n    term = request.GET.get(\"q\", \"\")\n    with connection.cursor() as cursor:\n        cursor.execute(\"SELECT id, title FROM articles WHERE title LIKE %s\", [f\"%{term}%\"])\n        rows = cursor.fetchall()\n    return JsonResponse({\"rows\": rows})\n\n\nurlpatterns = [path(\"search/\", search)]\n"
+    },
+    {
+      "id": "fastapi-path-traversal",
+      "file": "python/fastapi_download.py",
+      "expected_rule_id": "py/path-injection",
+      "source": "import os\n\nfrom fastapi import FastAPI\nfrom fastapi.responses import PlainTextResponse\n\napp = FastAPI()\nEXPORT_DIR = \"/srv/exports\"\n\n\n@app.get(\"/exports\", response_class=PlainTextResponse)\ndef read_export(name: str):\n    with open(os.path.join(EXPORT_DIR, name), encoding=\"utf-8\") as handle:\n        return handle.read()\n"
+    },
+    {
+      "id": "fastapi-path-prefix-check",
+      "file": "python/fastapi_download_checked.py",
+      "expected_rule_id": null,
+      "source": "import os\n\nfrom fastapi import FastAPI, HTTPException\nfrom fastapi.responses import PlainTextResponse\n\napp = FastAPI()\nEXPORT_DIR = \"/srv/exports\"\n\n\n@app.get(\"/exports\", response_class=PlainTextResponse)\ndef read_export(name: str):\n    candidate = os.path.realpath(os.path.join(EXPORT_DIR, name))\n    if not candidate.startswith(EXPORT_DIR + os.sep):\n        raise HTTPException(status_code=404)\n    with open(candidate, encoding=\"utf-8\") as handle:\n        return handle.read()\n"
+    },
+    {
+      "id": "flask-ssrf",
+      "file": "python/flask_fetch.py",
+      "expected_rule_id": "py/full-ssrf",
+      "source": "import requests\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.get(\"/preview\")\ndef preview():\n    target = request.args.get(\"url\", \"\")\n    response = requests.get(target, timeout=5)\n    return response.text[:500]\n"
+    },
+    {
+      "id": "flask-fetch-allowlist",
+      "file": "python/flask_fetch_allowlist.py",
+      "expected_rule_id": null,
+      "source": "import requests\nfrom flask import Flask, abort, request\n\napp = Flask(__name__)\nFEEDS = {\n    \"status\": \"https://status.example.com/feed.json\",\n    \"changelog\": \"https://example.com/changelog.json\",\n}\n\n\n@app.get(\"/preview\")\ndef preview():\n    feed = FEEDS.get(request.args.get(\"feed\", \"\"))\n    if feed is None:\n        abort(404)\n    response = requests.get(feed, timeout=5)\n    return response.text[:500]\n"
+    },
+    {
+      "id": "flask-pickle-body",
+      "file": "python/flask_session_restore.py",
+      "expected_rule_id": "py/unsafe-deserialization",
+      "source": "import pickle\n\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.post(\"/restore\")\ndef restore():\n    state = pickle.loads(request.get_data())\n    return {\"keys\": sorted(state)}\n"
+    },
+    {
+      "id": "flask-json-body",
+      "file": "python/flask_session_restore_json.py",
+      "expected_rule_id": null,
+      "source": "import json\n\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.post(\"/restore\")\ndef restore():\n    state = json.loads(request.get_data())\n    return {\"keys\": sorted(state)}\n"
+    },
+    {
+      "id": "flask-eval-expression",
+      "file": "python/flask_calculator.py",
+      "expected_rule_id": "py/code-injection",
+      "source": "from flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.post(\"/calculate\")\ndef calculate():\n    expression = request.form.get(\"expression\", \"0\")\n    return {\"result\": eval(expression)}\n"
+    },
+    {
+      "id": "flask-literal-eval",
+      "file": "python/flask_calculator_literal.py",
+      "expected_rule_id": null,
+      "source": "import ast\n\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n\n@app.post(\"/calculate\")\ndef calculate():\n    expression = request.form.get(\"expression\", \"0\")\n    return {\"result\": ast.literal_eval(expression)}\n"
+    },
+    {
+      "id": "fastapi-helper-sql-format",
+      "file": "python/fastapi_orders.py",
+      "expected_rule_id": "py/sql-injection",
+      "source": "import sqlite3\n\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n\ndef orders_for(customer: str) -> list:\n    connection = sqlite3.connect(\"orders.db\")\n    query = \"SELECT id, total FROM orders WHERE customer = '{}'\".format(customer)\n    return connection.execute(query).fetchall()\n\n\n@app.get(\"/orders\")\ndef list_orders(customer: str):\n    return {\"orders\": orders_for(customer)}\n"
+    },
+    {
+      "id": "fastapi-helper-sql-params",
+      "file": "python/fastapi_orders_params.py",
+      "expected_rule_id": null,
+      "source": "import sqlite3\n\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n\ndef orders_for(customer: str) -> list:\n    connection = sqlite3.connect(\"orders.db\")\n    return connection.execute(\n        \"SELECT id, total FROM orders WHERE customer = ?\", (customer,)\n    ).fetchall()\n\n\n@app.get(\"/orders\")\ndef list_orders(customer: str):\n    return {\"orders\": orders_for(customer)}\n"
+    },
+    {
+      "id": "flask-reflected-html",
+      "file": "python/flask_greeting.py",
+      "expected_rule_id": "py/reflective-xss",
+      "source": "from flask import Flask, make_response, request\n\napp = Flask(__name__)\n\n\n@app.get(\"/hello\")\ndef hello():\n    name = request.args.get(\"name\", \"friend\")\n    return make_response(\"<h1>Hello, \" + name + \"</h1>\")\n"
+    },
+    {
+      "id": "flask-escaped-html",
+      "file": "python/flask_greeting_escaped.py",
+      "expected_rule_id": null,
+      "source": "from flask import Flask, make_response, request\nfrom markupsafe import escape\n\napp = Flask(__name__)\n\n\n@app.get(\"/hello\")\ndef hello():\n    name = request.args.get(\"name\", \"friend\")\n    return make_response(\"<h1>Hello, \" + escape(name) + \"</h1>\")\n"
+    },
+    {
+      "id": "flask-open-redirect",
+      "file": "python/flask_login_redirect.py",
+      "expected_rule_id": "py/url-redirection",
+      "source": "from flask import Flask, redirect, request\n\napp = Flask(__name__)\n\n\n@app.get(\"/after-login\")\ndef after_login():\n    return redirect(request.args.get(\"next\", \"/\"))\n"
+    },
+    {
+      "id": "flask-mapped-redirect",
+      "file": "python/flask_login_redirect_mapped.py",
+      "expected_rule_id": null,
+      "source": "from flask import Flask, redirect, request\n\napp = Flask(__name__)\nDESTINATIONS = {\"projects\": \"/projects\", \"settings\": \"/settings\"}\n\n\n@app.get(\"/after-login\")\ndef after_login():\n    return redirect(DESTINATIONS.get(request.args.get(\"next\", \"\"), \"/\"))\n"
+    },
+    {
+      "id": "express-mysql-concat",
+      "file": "javascript/express_mysql.js",
+      "expected_rule_id": "js/sql-injection",
+      "source": "const express = require('express');\nconst mysql = require('mysql');\n\nconst app = express();\nconst pool = mysql.createPool({ host: 'db', user: 'app', database: 'shop' });\n\napp.get('/products', (req, res) => {\n  const sql = \"SELECT id, name FROM products WHERE category = '\" + req.query.category + \"'\";\n  pool.query(sql, (error, rows) => res.json(rows));\n});\n"
+    },
+    {
+      "id": "express-mysql-placeholder",
+      "file": "javascript/express_mysql_placeholder.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst mysql = require('mysql');\n\nconst app = express();\nconst pool = mysql.createPool({ host: 'db', user: 'app', database: 'shop' });\n\napp.get('/products', (req, res) => {\n  pool.query('SELECT id, name FROM products WHERE category = ?', [req.query.category], (error, rows) => res.json(rows));\n});\n"
+    },
+    {
+      "id": "express-readfile-join",
+      "file": "javascript/express_attachments.js",
+      "expected_rule_id": "js/path-injection",
+      "source": "const express = require('express');\nconst fs = require('fs');\nconst path = require('path');\n\nconst app = express();\n\napp.get('/attachments', (req, res) => {\n  fs.readFile(path.join(__dirname, 'attachments', req.query.name), (error, data) => res.send(data));\n});\n"
+    },
+    {
+      "id": "express-readfile-mapped",
+      "file": "javascript/express_attachments_mapped.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst fs = require('fs');\nconst path = require('path');\n\nconst app = express();\nconst ATTACHMENTS = { invoice: 'invoice.pdf', terms: 'terms.pdf' };\n\napp.get('/attachments', (req, res) => {\n  const file = ATTACHMENTS[String(req.query.name)];\n  if (!file) return res.sendStatus(404);\n  fs.readFile(path.join(__dirname, 'attachments', file), (error, data) => res.send(data));\n});\n"
+    },
+    {
+      "id": "express-reflected-html",
+      "file": "javascript/express_greeting.js",
+      "expected_rule_id": "js/reflected-xss",
+      "source": "const express = require('express');\n\nconst app = express();\n\napp.get('/hello', (req, res) => {\n  res.send('<h1>Hello, ' + req.query.name + '</h1>');\n});\n"
+    },
+    {
+      "id": "express-escaped-html",
+      "file": "javascript/express_greeting_escaped.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst escapeHtml = require('escape-html');\n\nconst app = express();\n\napp.get('/hello', (req, res) => {\n  res.send('<h1>Hello, ' + escapeHtml(String(req.query.name)) + '</h1>');\n});\n"
+    },
+    {
+      "id": "express-axios-ssrf",
+      "file": "javascript/express_webhook_test.js",
+      "expected_rule_id": "js/request-forgery",
+      "source": "const express = require('express');\nconst axios = require('axios');\n\nconst app = express();\n\napp.get('/webhooks/test', async (req, res) => {\n  const response = await axios.get(req.query.url);\n  res.json({ status: response.status });\n});\n"
+    },
+    {
+      "id": "express-axios-mapped",
+      "file": "javascript/express_webhook_test_mapped.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst axios = require('axios');\n\nconst app = express();\nconst ENDPOINTS = { primary: 'https://hooks.example.com/primary', backup: 'https://hooks.example.com/backup' };\n\napp.get('/webhooks/test', async (req, res) => {\n  const endpoint = ENDPOINTS[String(req.query.target)];\n  if (!endpoint) return res.sendStatus(404);\n  const response = await axios.get(endpoint);\n  res.json({ status: response.status });\n});\n"
+    },
+    {
+      "id": "express-open-redirect",
+      "file": "javascript/express_return_to.js",
+      "expected_rule_id": "js/server-side-unvalidated-url-redirection",
+      "source": "const express = require('express');\n\nconst app = express();\n\napp.get('/return', (req, res) => {\n  res.redirect(req.query.to);\n});\n"
+    },
+    {
+      "id": "express-mapped-redirect",
+      "file": "javascript/express_return_to_mapped.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\n\nconst app = express();\nconst DESTINATIONS = { projects: '/projects', settings: '/settings' };\n\napp.get('/return', (req, res) => {\n  res.redirect(DESTINATIONS[String(req.query.to)] || '/');\n});\n"
+    },
+    {
+      "id": "express-helper-exec-sync",
+      "file": "javascript/express_reports.js",
+      "expected_rule_id": "js/command-line-injection",
+      "source": "const express = require('express');\nconst { execSync } = require('child_process');\n\nconst app = express();\n\nfunction renderReport(name) {\n  return execSync('report-tool --render ' + name).toString();\n}\n\napp.get('/reports', (req, res) => {\n  res.type('text/plain').send(renderReport(req.query.name));\n});\n"
+    },
+    {
+      "id": "express-helper-exec-file-sync",
+      "file": "javascript/express_reports_args.js",
+      "expected_rule_id": null,
+      "source": "const express = require('express');\nconst { execFileSync } = require('child_process');\n\nconst app = express();\n\nfunction renderReport(name) {\n  return execFileSync('report-tool', ['--render', String(name)]).toString();\n}\n\napp.get('/reports', (req, res) => {\n  res.type('text/plain').send(renderReport(req.query.name));\n});\n"
+    }
+  ]
+}
