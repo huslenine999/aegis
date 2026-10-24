@@ -1,11 +1,11 @@
-"""Start the evidence signer: an RQ worker that holds only the signing key."""
+"""Start the fixed-operation service that holds only the signing key."""
 
 import os
-import sys
 
 from .database import require_least_privilege_role
 from .evidence import evidence_public_key
-from .evidence_signer import SIGNING_QUEUE
+from .evidence_signer import SIGNING_QUEUE, sign_requested_manifest
+from .service_rpc import serve_service
 
 
 # The signer needs the database, Redis, the evidence volume (read-only), and
@@ -42,12 +42,7 @@ def validate_signer_configuration() -> None:
 
 def main() -> None:
     validate_signer_configuration()
-    arguments = [
-        "rq", "worker", "--name", f"aegis-signer-{os.uname().nodename}",
-        "--worker-ttl", "900", "--maintenance-interval", "60",
-        *sys.argv[1:], SIGNING_QUEUE,
-    ]
-    os.execvp(arguments[0], arguments)
+    serve_service(SIGNING_QUEUE, {"sign_manifest": sign_requested_manifest})
 
 
 if __name__ == "__main__":

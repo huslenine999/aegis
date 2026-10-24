@@ -118,7 +118,7 @@ def test_remote_mode_sends_only_the_run_id_to_the_broker_queue(runs, monkeypatch
     )
 
     assert github_broker.clone_token(runs.app) == "t"
-    assert calls == [("github-credentials", issue_clone_token, {"scan_run_id": runs.app})]
+    assert calls == [("github-credentials", "clone_token", {"scan_run_id": runs.app})]
 
 
 def test_worker_clones_with_the_brokered_token_and_never_without_a_run(runs, tmp_path, monkeypatch):

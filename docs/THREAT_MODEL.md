@@ -56,6 +56,12 @@ and prevent one project from reading another project's results.
 
 ## Residual risks
 
+- Privileged services accept only fixed JSON operations; executable RQ jobs are
+  restricted to scanner workers. Shared Redis access can still disrupt service,
+  read returned clone tokens, or forge transport responses. It cannot introduce
+  a new service handler or execute a pickle payload in the signer, broker, or
+  notifier. Signing and broker requests still pass their database/evidence
+  checks; signed evidence must be verified with the pinned public key.
 - The tenant-scoped local artifact backend is suitable for one tenant per
   controlled deployment, not an untrusted public multi-tenant service. Public operation should use an
   object store with per-tenant keys, encryption, quotas, and lifecycle rules.

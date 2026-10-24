@@ -3,6 +3,7 @@ PYTHON := $(UV) run python
 SECURITY_BOUNDARY_COVERAGE := --cov=app.observability --cov=app.preflight --cov=app.rate_limit --cov=app.scan_engine --cov=app.security_middleware --cov=app.artifact_storage --cov=app.reporting --cov=app.resource_budgets --cov=app.github_lifecycle
 SECURITY_BOUNDARY_COVERAGE += --cov=app.bac --cov=app.bac_config --cov=app.bac_lab --cov=app.bac_reports --cov=app.bac_benchmark
 SECURITY_BOUNDARY_COVERAGE += --cov=app.bac_imports --cov=app.bac_projects
+SECURITY_BOUNDARY_COVERAGE += --cov=app.service_rpc
 
 .PHONY: setup codeql-setup verify verify-fast lock lock-check export-requirements lint types test e2e clean
 
@@ -11,7 +12,7 @@ setup:
 	$(UV) pip install -e ".[dev,scanner]"
 	@echo "\n✅ Aegis setup complete!"
 	@echo "Activate the environment in your shell with:"
-	@echo "  source venv/bin/activate"
+	@echo "  source .venv/bin/activate"
 	@echo "Then run:"
 	@echo "  aegis start"
 

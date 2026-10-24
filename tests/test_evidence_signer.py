@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import database, evidence_signer, projects, service_rpc, signer_entrypoint, worker
+from app import database, evidence_signer, projects, signer_entrypoint, worker
 from app.evidence import canonical_json, evidence_public_key, sign_manifest, verify_manifest
 from app.evidence_signer import SigningRefused, sign_requested_manifest, validate_signing_request
 from app.scan_engine import ScanJobPayload
@@ -211,62 +211,30 @@ def test_worker_fails_the_scan_when_the_signer_refuses(tmp_path, monkeypatch):
     assert not list((tmp_path / "scans").rglob("scan-manifest.json"))
 
 
-class FakeJob:
-    def __init__(self, statuses, value=None):
-        self.statuses = list(statuses)
-        self.value = value
-        self.cancelled = False
-
-    def get_status(self, refresh=True):
-        return self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
-
-    def return_value(self):
-        return self.value
-
-    def cancel(self):
-        self.cancelled = True
-
-
-def use_fake_queue(monkeypatch, job):
-    import rq
-
-    class FakeQueue:
-        def __init__(self, name, connection=None):
-            assert name == "evidence-signing"
-
-        def enqueue(self, func, *args, **kwargs):
-            assert func is evidence_signer.sign_requested_manifest
-            return job
-
-    monkeypatch.setattr(rq, "Queue", FakeQueue)
-    monkeypatch.setattr(service_rpc.time, "sleep", lambda _seconds: None)
-
-
 def test_remote_request_returns_the_signed_manifest(monkeypatch):
-    use_fake_queue(monkeypatch, FakeJob(["queued", "started", "finished"], {"signature": {}, "a": 1}))
+    calls = []
+    monkeypatch.setattr(
+        evidence_signer, "call_service",
+        lambda service, operation, payload, **kwargs: calls.append((service, operation, payload)) or {"signature": {}, "a": 1},
+    )
 
     assert evidence_signer._request_remote_signature({"a": 1}) == {"signature": {}, "a": 1}
+    assert calls == [("evidence-signing", "sign_manifest", {"a": 1})]
 
 
-@pytest.mark.parametrize(("statuses", "value", "message"), [
-    (["failed"], None, "refused or failed"),
-    (["finished"], {"unsigned": True}, "invalid manifest"),
-])
-def test_remote_request_fails_closed(monkeypatch, statuses, value, message):
-    use_fake_queue(monkeypatch, FakeJob(statuses, value))
-
-    with pytest.raises(SigningRefused, match=message):
+def test_remote_request_rejects_an_unsigned_response(monkeypatch):
+    monkeypatch.setattr(evidence_signer, "call_service", lambda *args, **kwargs: {"unsigned": True})
+    with pytest.raises(SigningRefused, match="invalid manifest"):
         evidence_signer._request_remote_signature({})
 
 
-def test_remote_request_times_out_and_cancels(monkeypatch):
-    job = FakeJob(["queued"])
-    use_fake_queue(monkeypatch, job)
-    monkeypatch.setattr(evidence_signer, "SIGNING_TIMEOUT_SECONDS", 0.01)
+def test_remote_request_propagates_service_failures(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise SigningRefused("did not respond")
 
+    monkeypatch.setattr(evidence_signer, "call_service", refuse)
     with pytest.raises(SigningRefused, match="did not respond"):
         evidence_signer._request_remote_signature({})
-    assert job.cancelled
 
 
 def test_signer_holds_only_the_signing_key_in_production(monkeypatch):

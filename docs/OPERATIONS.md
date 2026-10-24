@@ -12,6 +12,23 @@ encrypted in PostgreSQL.
 SMTP uses `AEGIS_SMTP_HOST`, `AEGIS_SMTP_PORT`, `AEGIS_SMTP_USERNAME`,
 `AEGIS_SMTP_PASSWORD`, and `AEGIS_SMTP_FROM`.
 
+### Upgrading privileged service queues
+
+The signer, GitHub broker, and notifier now consume fixed JSON operations in
+the `aegis:service:v1:` Redis namespace. They do not consume executable RQ jobs.
+Pause new scans and finish in-flight work before upgrading. Rebuild and recreate
+the dashboard, scanner workers (including an enabled Deep worker), signer,
+GitHub broker, and notifier together. Do not leave old privileged RQ consumers
+running alongside the new services. Legacy RQ requests are never deserialized
+or migrated; unfinished scans must be retried after the coordinated restart.
+
+Notification requests can wait up to 24 hours; execution is separately limited
+to 60 seconds. Expired, malformed, or refused notifications increment the
+notification-failure metric. Queues hold at most 1,000 pending requests, and a
+full queue refuses new work explicitly. Synchronous signing and broker calls
+retain their 60-second deadline. Responses expire after 60 seconds; readiness
+uses service heartbeats that expire after 90 seconds.
+
 ## Service objectives
 
 Choose and record an RPO and RTO before a pilot handles production repositories. A

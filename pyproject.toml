@@ -138,6 +138,7 @@ source = [
   "app.reporting",
   "app.resource_budgets",
   "app.github_lifecycle",
+  "app.service_rpc",
 ]
 
 [tool.coverage.report]

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
+from . import service_rpc
 from .auth import principal_from_request
 from .database import REDIS_AVAILABLE, get_connection, redis_client
 from .observability import render_metrics
@@ -139,23 +140,18 @@ def readiness():
                 detail="Notifier readiness requires Redis.",
             )
         try:
-            from rq import Worker
-
-            workers = Worker.all(connection=redis_client)
+            notifier_available = service_rpc.service_available("notifications", connection=redis_client)
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
                 detail="Notifier readiness could not be verified.",
             ) from exc
-        notifier_workers = [
-            worker for worker in workers if "notifications" in worker.queue_names()
-        ]
-        if not notifier_workers:
+        if not notifier_available:
             raise HTTPException(
                 status_code=503,
                 detail="No notifier RQ workers are available.",
             )
-        notifier_state = f"{len(notifier_workers)} available"
+        notifier_state = "1 available"
 
     signer_state = _service_state("AEGIS_REQUIRE_SIGNER", "evidence-signing", "evidence signer")
     broker_state = _service_state("AEGIS_REQUIRE_GITHUB_BROKER", "github-credentials", "GitHub credential broker")
@@ -172,20 +168,18 @@ def readiness():
 
 
 def _service_state(flag: str, queue: str, label: str) -> str:
-    """Readiness of a narrow RQ service such as the evidence signer."""
+    """Readiness of a fixed-operation service such as the evidence signer."""
     if os.environ.get(flag, "false").lower() not in {"1", "true", "yes", "on"}:
         return "not-required"
     if not REDIS_AVAILABLE:
         raise HTTPException(status_code=503, detail=f"{label[0].upper() + label[1:]} readiness requires Redis.")
     try:
-        from rq import Worker
-
-        workers = [worker for worker in Worker.all(connection=redis_client) if queue in worker.queue_names()]
+        available = service_rpc.service_available(queue, connection=redis_client)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"{label} readiness could not be verified.") from exc
-    if not workers:
+    if not available:
         raise HTTPException(status_code=503, detail=f"No {label} is available.")
-    return f"{len(workers)} available"
+    return "1 available"
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

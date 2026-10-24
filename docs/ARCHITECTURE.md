@@ -6,6 +6,13 @@ PostgreSQL stores identity, project, scan and audit metadata. Redis transports
 jobs. Scanner workers process hostile source and write signed evidence. A
 separate notifier worker owns outbound delivery credentials.
 
+Only scanner jobs use RQ. The signer, GitHub broker, and notifier accept bounded
+JSON data through versioned Redis channels and dispatch only operations registered
+by their entrypoints. Messages cannot name Python functions, imports, or callbacks.
+Their existing database and artifact validation still authorizes each operation.
+See the [coordinated queue upgrade procedure](OPERATIONS.md#upgrading-privileged-service-queues)
+before replacing an older deployment.
+
 PostgreSQL connections use a process-local native pool with at most four
 connections and five-second connection/acquisition limits. Transactions finish
 before connections return to the pool. Dashboard shutdown closes the pool;

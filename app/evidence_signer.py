@@ -60,7 +60,7 @@ def sign_scan_manifest(payload: dict) -> dict:
 def _request_remote_signature(payload: dict) -> dict:
     signed = call_service(
         SIGNING_QUEUE,
-        sign_requested_manifest,
+        "sign_manifest",
         payload,
         label="evidence signer",
         timeout=SIGNING_TIMEOUT_SECONDS,
@@ -144,7 +144,7 @@ def validate_signing_request(payload: Any) -> dict:
 
 
 def sign_requested_manifest(payload: dict) -> dict:
-    """RQ job run by the signer process."""
+    """Fixed operation run by the signer process."""
     validate_signing_request(payload)
     signed = sign_manifest(payload)
     key_id = evidence_public_key()["key_id"]

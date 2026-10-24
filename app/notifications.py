@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import urllib3
 from cryptography.fernet import Fernet
 
+from . import service_rpc
 from .database import get_connection
 from .resource_budgets import ResourceLimitError
 from .observability import record_notification_failure
@@ -307,21 +308,10 @@ def queue_project_notification(project_id: int, event: str, payload: dict) -> bo
         send_project_notification(project_id, event, payload)
         return True
     try:
-        from redis import Redis
-        from rq import Queue
-
-        queue = Queue(
-            "notifications",
-            connection=Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
-        )
-        queue.enqueue(
-            send_project_notification,
-            project_id,
-            event,
-            payload,
-            job_timeout=60,
-            result_ttl=300,
-            failure_ttl=86400,
+        service_rpc.enqueue_service(
+            "notifications", "project_notification",
+            {"project_id": project_id, "event": event, "payload": payload},
+            timeout=86400,
         )
         return True
     except Exception:
@@ -356,19 +346,10 @@ def queue_test_channel(channel_id: int, project_id: int) -> bool:
         test_channel(channel_id, project_id)
         return True
     try:
-        from redis import Redis
-        from rq import Queue
-
-        Queue(
-            "notifications",
-            connection=Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
-        ).enqueue(
-            test_channel,
-            channel_id,
-            project_id,
-            job_timeout=60,
-            result_ttl=300,
-            failure_ttl=86400,
+        service_rpc.enqueue_service(
+            "notifications", "test_channel",
+            {"channel_id": channel_id, "project_id": project_id},
+            timeout=86400,
         )
         return True
     except Exception:
@@ -378,3 +359,27 @@ def queue_test_channel(channel_id: int, project_id: int) -> bool:
             extra={"project_id": project_id, "channel_id": channel_id},
         )
         return False
+
+
+def dispatch_project_notification(request: dict) -> None:
+    """Validate untrusted notification data before accessing channel credentials."""
+    if not isinstance(request, dict) or set(request) != {"project_id", "event", "payload"}:
+        raise ValueError("Malformed project notification request.")
+    if (
+        type(request["project_id"]) is not int
+        or request["project_id"] < 1
+        or not isinstance(request["event"], str)
+        or request["event"] not in EVENT_TYPES
+        or not isinstance(request["payload"], dict)
+    ):
+        raise ValueError("Invalid project notification request.")
+    send_project_notification(request["project_id"], request["event"], request["payload"])
+
+
+def dispatch_test_channel(request: dict) -> None:
+    """Test only a channel belonging to the requested project."""
+    if not isinstance(request, dict) or set(request) != {"channel_id", "project_id"}:
+        raise ValueError("Malformed test notification request.")
+    if any(type(request[name]) is not int or request[name] < 1 for name in ("channel_id", "project_id")):
+        raise ValueError("Invalid test notification request.")
+    test_channel(request["channel_id"], request["project_id"])

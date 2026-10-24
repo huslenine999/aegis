@@ -184,6 +184,7 @@ jobs:
             --cov=app.rate_limit \
             --cov=app.scan_engine \
             --cov=app.security_middleware \
+            --cov=app.service_rpc \
             --cov=app.github_lifecycle \
             --cov-report=term-missing
 

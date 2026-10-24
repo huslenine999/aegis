@@ -1,10 +1,10 @@
-"""Start the GitHub credential broker: an RQ worker that holds GitHub secrets."""
+"""Start the fixed-operation service that holds GitHub secrets."""
 
 import os
-import sys
 
 from .database import require_least_privilege_role
-from .github_broker import BROKER_QUEUE
+from .github_broker import BROKER_QUEUE, complete_run_check, issue_clone_token
+from .service_rpc import serve_service
 
 
 # The broker needs the database, Redis, the GitHub App key, and the key that
@@ -38,12 +38,7 @@ def validate_broker_configuration() -> None:
 
 def main() -> None:
     validate_broker_configuration()
-    arguments = [
-        "rq", "worker", "--name", f"aegis-github-broker-{os.uname().nodename}",
-        "--worker-ttl", "900", "--maintenance-interval", "60",
-        *sys.argv[1:], BROKER_QUEUE,
-    ]
-    os.execvp(arguments[0], arguments)
+    serve_service(BROKER_QUEUE, {"clone_token": issue_clone_token, "complete_check": complete_run_check})
 
 
 if __name__ == "__main__":

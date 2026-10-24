@@ -222,7 +222,7 @@ services:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
     entrypoint: ["python", "-m", "app.signer_entrypoint"]
-    command: ["--url", "redis://redis:6379/0", "--path", "/app/app"]
+    command: []
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -248,7 +248,7 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('evidence-signing' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from app.service_rpc import service_available; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert service_available('evidence-signing', connection=connection)"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -261,7 +261,7 @@ services:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
     entrypoint: ["python", "-m", "app.github_broker_entrypoint"]
-    command: ["--url", "redis://redis:6379/0", "--path", "/app/app"]
+    command: []
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -284,7 +284,7 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('github-credentials' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from app.service_rpc import service_available; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert service_available('github-credentials', connection=connection)"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -294,7 +294,7 @@ services:
     image: ${AEGIS_IMAGE:-aegis-local:latest}
     build: .
     entrypoint: ["python", "-m", "app.notifier_entrypoint"]
-    command: ["--url", "redis://redis:6379/0", "--path", "/app/app", "notifications"]
+    command: []
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -323,7 +323,7 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; from redis import Redis; from rq import Worker; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert any('notifications' in worker.queue_names() for worker in Worker.all(connection=connection))"]
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; from app.service_rpc import service_available; connection=Redis.from_url(os.environ['REDIS_URL']); connection.ping(); assert service_available('notifications', connection=connection)"]
       interval: 10s
       timeout: 5s
       retries: 6

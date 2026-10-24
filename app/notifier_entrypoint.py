@@ -1,5 +1,7 @@
 import os
-import sys
+
+from . import service_rpc
+from .notifications import dispatch_project_notification, dispatch_test_channel
 
 
 FORBIDDEN_PRODUCTION_SECRETS = {
@@ -38,11 +40,10 @@ def validate_notifier_configuration() -> None:
 
 def main() -> None:
     validate_notifier_configuration()
-    arguments = [
-        "rq", "worker", "--worker-ttl", "900", "--maintenance-interval", "60",
-        *sys.argv[1:],
-    ]
-    os.execvp(arguments[0], arguments)
+    service_rpc.serve_service("notifications", {
+        "project_notification": dispatch_project_notification,
+        "test_channel": dispatch_test_channel,
+    })
 
 
 if __name__ == "__main__":

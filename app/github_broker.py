@@ -61,7 +61,7 @@ def _run_and_project(scan_run_id: Any) -> dict:
 
 
 def issue_clone_token(request: dict) -> dict:
-    """RQ job: a read-only credential for the run's own repository."""
+    """Fixed operation: a read-only credential for the run's own repository."""
     if not isinstance(request, dict) or set(request) != {"scan_run_id"}:
         raise BrokerRefused("Clone requests may contain only a scan run ID.")
     run = _run_and_project(request["scan_run_id"])
@@ -81,7 +81,7 @@ def issue_clone_token(request: dict) -> dict:
 
 
 def complete_run_check(request: dict) -> dict:
-    """RQ job: report a run's verdict on its GitHub check."""
+    """Fixed operation: report a run's verdict on its GitHub check."""
     allowed = {"scan_run_id", "conclusion", "title", "summary", "details_url", "annotations"}
     if not isinstance(request, dict) or not set(request) <= allowed or "scan_run_id" not in request:
         raise BrokerRefused("Malformed check completion request.")
@@ -108,11 +108,11 @@ def complete_run_check(request: dict) -> dict:
     return {"completed": True}
 
 
-def _call(function, request: dict) -> dict:
+def _call(operation: str, function, request: dict) -> dict:
     if not remote_broker_enabled():
         return function(request)
     result = call_service(
-        BROKER_QUEUE, function, request,
+        BROKER_QUEUE, operation, request,
         label="GitHub credential broker", timeout=BROKER_TIMEOUT_SECONDS, error=BrokerRefused,
     )
     if not isinstance(result, dict):
@@ -122,10 +122,10 @@ def _call(function, request: dict) -> dict:
 
 def clone_token(scan_run_id: int) -> str | None:
     """Worker-side: a credential for cloning the run's repository, if one exists."""
-    token = _call(issue_clone_token, {"scan_run_id": scan_run_id}).get("token")
+    token = _call("clone_token", issue_clone_token, {"scan_run_id": scan_run_id}).get("token")
     return str(token) if token else None
 
 
 def complete_check(scan_run_id: int, **fields: Any) -> bool:
     """Worker-side: report the run's verdict on its GitHub check, if it has one."""
-    return bool(_call(complete_run_check, {"scan_run_id": scan_run_id, **fields}).get("completed"))
+    return bool(_call("complete_check", complete_run_check, {"scan_run_id": scan_run_id, **fields}).get("completed"))

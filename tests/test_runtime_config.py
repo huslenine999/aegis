@@ -36,27 +36,97 @@ def test_readiness_fails_when_required_redis_is_unavailable(monkeypatch):
     assert response.json()["detail"] == "Redis is required but unavailable."
 
 
-def test_readiness_requires_an_evidence_signer_when_configured(monkeypatch):
+@pytest.mark.parametrize(("flag", "service", "field", "missing_detail"), [
+    ("AEGIS_REQUIRE_NOTIFIER", "notifications", "notifier", "No notifier RQ workers are available."),
+    ("AEGIS_REQUIRE_SIGNER", "evidence-signing", "signer", "No evidence signer is available."),
+    ("AEGIS_REQUIRE_GITHUB_BROKER", "github-credentials", "github_broker", "No GitHub credential broker is available."),
+])
+def test_readiness_requires_privileged_service_heartbeat(
+    monkeypatch, flag, service, field, missing_detail,
+):
     import rq
     from types import SimpleNamespace
 
     from app import health_routes
 
-    for name in ("AEGIS_REQUIRE_REDIS", "AEGIS_REQUIRE_WORKER", "AEGIS_REQUIRE_NOTIFIER"):
+    for name in (
+        "AEGIS_REQUIRE_REDIS", "AEGIS_REQUIRE_WORKER", "AEGIS_REQUIRE_NOTIFIER",
+        "AEGIS_REQUIRE_SIGNER", "AEGIS_REQUIRE_GITHUB_BROKER",
+    ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AEGIS_REQUIRE_SIGNER", "true")
+    monkeypatch.setenv(flag, "true")
+    monkeypatch.setattr(health_routes, "REDIS_AVAILABLE", True)
+    # An arbitrary RQ registration cannot stand in for a fixed-operation service.
+    workers = [SimpleNamespace(queue_names=lambda: [service])]
+    monkeypatch.setattr(rq.Worker, "all", staticmethod(lambda connection=None: workers))
+    available = set()
+    calls = []
+
+    def service_available(name, connection=None):
+        calls.append((name, connection))
+        return name in available
+
+    monkeypatch.setattr(health_routes.service_rpc, "service_available", service_available, raising=False)
+
+    missing = TestClient(app_main.app).get("/ready")
+    available.add(service)
+    ready = TestClient(app_main.app).get("/ready")
+
+    assert missing.status_code == 503
+    assert missing.json()["detail"] == missing_detail
+    assert ready.status_code == 200
+    assert ready.json()[field] == "1 available"
+    assert calls == [(service, health_routes.redis_client)] * 2
+
+
+@pytest.mark.parametrize(("flag", "detail"), [
+    ("AEGIS_REQUIRE_NOTIFIER", "Notifier readiness could not be verified."),
+    ("AEGIS_REQUIRE_SIGNER", "evidence signer readiness could not be verified."),
+    ("AEGIS_REQUIRE_GITHUB_BROKER", "GitHub credential broker readiness could not be verified."),
+])
+def test_readiness_fails_closed_when_privileged_service_cannot_be_verified(monkeypatch, flag, detail):
+    from app import health_routes
+
+    for name in (
+        "AEGIS_REQUIRE_REDIS", "AEGIS_REQUIRE_WORKER", "AEGIS_REQUIRE_NOTIFIER",
+        "AEGIS_REQUIRE_SIGNER", "AEGIS_REQUIRE_GITHUB_BROKER",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(flag, "true")
+    monkeypatch.setattr(health_routes, "REDIS_AVAILABLE", True)
+
+    def unavailable(*args, **kwargs):
+        raise ConnectionError("Redis connection lost")
+
+    monkeypatch.setattr(health_routes.service_rpc, "service_available", unavailable, raising=False)
+
+    response = TestClient(app_main.app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == detail
+
+
+def test_readiness_keeps_scanner_workers_on_rq(monkeypatch):
+    from types import SimpleNamespace
+
+    import rq
+    from app import health_routes
+
+    for name in (
+        "AEGIS_REQUIRE_NOTIFIER", "AEGIS_REQUIRE_SIGNER", "AEGIS_REQUIRE_GITHUB_BROKER",
+        "AEGIS_ALLOW_DEEP_SCANS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AEGIS_REQUIRE_WORKER", "true")
     monkeypatch.setattr(health_routes, "REDIS_AVAILABLE", True)
     workers = [SimpleNamespace(queue_names=lambda: ["default"])]
     monkeypatch.setattr(rq.Worker, "all", staticmethod(lambda connection=None: workers))
 
-    missing = TestClient(app_main.app).get("/ready")
-    workers.append(SimpleNamespace(queue_names=lambda: ["evidence-signing"]))
-    ready = TestClient(app_main.app).get("/ready")
+    response = TestClient(app_main.app).get("/ready")
 
-    assert missing.status_code == 503
-    assert missing.json()["detail"] == "No evidence signer is available."
-    assert ready.status_code == 200
-    assert ready.json()["signer"] == "1 available"
+    assert response.status_code == 200
+    assert response.json()["worker"] == "1 available"
+    assert response.json()["notifier"] == response.json()["signer"] == response.json()["github_broker"] == "not-required"
 
 
 def test_security_txt_exposes_disclosure_policy_without_authentication(monkeypatch):
@@ -262,7 +332,11 @@ def test_container_runtime_is_hardened_and_persistent():
         "-m",
         "app.notifier_entrypoint",
     ]
-    assert services["notifier"]["command"][:2] == ["--url", "redis://redis:6379/0"]
+    for name in ("notifier", "signer", "github-broker"):
+        assert services[name]["command"] == []
+        healthcheck = services[name]["healthcheck"]["test"][-1]
+        assert "service_available" in healthcheck
+        assert "rq" not in healthcheck
     assert services["postgres"]["image"].endswith(
         "@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa"
     )
