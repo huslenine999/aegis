@@ -53,15 +53,15 @@ docs/                  Operations, security, and deployment documentation
 docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ```
 
-## Current verification status (2026-10-16)
+## Current verification status (2026-10-26)
 
 ```
-pytest:      1062 passed, 4 skipped (Compose x2, PostgreSQL opt-in x2)
+pytest:      1152 passed, 8 skipped (opt-in or root-only)
              includes Hypothesis fuzz tests and a 500-request API monkey test
 PostgreSQL:  the full suite passes with AEGIS_TEST_POSTGRES_URL on PostgreSQL 16
              (Linux x86_64), including per-service login checks
-e2e:         33 passed (Playwright, Chromium)
-coverage:    89.2% over the gated modules
+e2e:         35 passed (Playwright, Chromium; also 35 with AEGIS_E2E_DEEP=1)
+coverage:    89.4% over the gated modules
 ruff:        clean
 mypy:        clean (configured modules)
 ```

@@ -503,9 +503,9 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-16 recorded 1,062 passing Python tests and
-4 skipped integration tests (Compose, and PostgreSQL unless
-`AEGIS_TEST_POSTGRES_URL` is set), passing Ruff and mypy checks, and 89.2%
+The last local validation on 2026-10-26 recorded 1,152 passing Python tests and
+8 skipped opt-in or root-only tests (Compose, Deep isolation, PostgreSQL unless
+`AEGIS_TEST_POSTGRES_URL` is set), passing Ruff and mypy checks, and 89.4%
 coverage over the configured modules (not whole-project coverage). The suite
 includes property-based fuzz tests of untrusted-input parsers, an API monkey
 test across every route and role, and an end-to-end scan of a repository that
