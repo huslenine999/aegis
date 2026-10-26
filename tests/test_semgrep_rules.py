@@ -34,7 +34,7 @@ def load_rules():
 def fixture_labels():
     expected, safe = set(), set()
     for path in sorted(FIXTURES.iterdir()):
-        if path.suffix == ".md":
+        if path.suffix == ".md" or path.is_dir():
             continue
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             match = ANNOTATION.search(line)
