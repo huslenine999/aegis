@@ -755,7 +755,7 @@
       socket.onmessage = async (event) => {
         const payload = JSON.parse(event.data);
         if (payload.type === "state") await loadScans();
-        if (payload.type === "result") await Promise.all([loadScans(), loadFindings(), loadPolicies()]);
+        if (payload.type === "result") { await loadScans(); await Promise.all([loadFindings(), loadPolicies()]); }
       };
       await loadScans();
     };
