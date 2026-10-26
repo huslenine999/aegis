@@ -441,7 +441,8 @@ async def websocket_scan(websocket: WebSocket, job_id: str):
                 await websocket.send_json(data)
                 if data.get("type") == "state" and data.get("state") in ("completed", "failed", "cancelled"):
                     break
-            await asyncio.sleep(0.05)
+            else:
+                await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         pass
     finally:
