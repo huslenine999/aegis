@@ -522,9 +522,10 @@ alerts on safe cases were two unrelated rate-limiting alerts. The Aegis Semgrep
 rules found 7/14 with 3 false alarms. A pinned seven-repository inventory and
 a first triage are also recorded
 ([results](benchmarks/results/README.md)). Docker-level isolation probes of the
-CodeQL analysis container pass with the pinned image on the developer's Mac.
-An authenticated Deep browser flow remains before claiming production
-assurance, and the Deep worker that starts the container is still privileged
+CodeQL analysis container pass with the pinned image on the developer's Mac,
+and on 2026-10-26 the authenticated Deep browser flow and the Docker pilot
+rehearsal (backup, restore, restart) passed there too (Docker 29.9.2, image
+`aegis-codeql@sha256:cdb756b8…`). The Deep worker that starts the container is still privileged
 (F06). See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.

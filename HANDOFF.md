@@ -89,10 +89,12 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
 3. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
    Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
    tag, and confirm `pipx install aegis-security-console` works.
-4. **Deep-scan assurance.** Authenticated Deep browser flow. The isolation
-   probes (`AEGIS_CODEQL_ISOLATION=1 pytest tests/integration/test_codeql_isolation.py`)
-   passed on the developer's Mac with the pinned image on 2026-10-22; re-run
-   them after image, engine, or launch-flag changes. The fresh v2 corpus
+4. **Deep-scan assurance.** On 2026-10-26 (Docker 29.9.2, Mac, image rebuilt
+   as `aegis-codeql@sha256:cdb756b8…`) the Deep browser flow passed (35/35,
+   twice), the isolation probes
+   (`AEGIS_CODEQL_ISOLATION=1 pytest tests/integration/test_codeql_isolation.py`)
+   passed, and `pilot_readiness.py --docker-smoke` passed, including backup,
+   restore and restart. Re-run after image, engine, or launch-flag changes. The fresh v2 corpus
    and a pinned real-repository inventory are in `benchmarks/results/`. The
    remaining work is a second-reviewer triage and labels for the training
    labs.
