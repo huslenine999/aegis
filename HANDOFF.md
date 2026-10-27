@@ -80,12 +80,14 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    `docs/research/THESIS_OUTLINE.md`. External targets (crAPI, VAmPI) are
    planned, not implemented; the runner still accepts only its own loopback lab.
    Training runs and passing tests are not final results.
-2. **Re-pin CI trust anchors after review.** The approval gate scans with
-   trusted revision `ed6b080`, whose `aegis.yml` predates
-   `app/finding_queries.py`, so it blocks until re-pinned to a reviewed
-   commit. `action-e2e.yml` pins `b2f00d3`, from before the `--no-docker` fix.
-   Push first, review, then update both SHAs (`docs/RELEASE_CHECKLIST.md`
-   step 12).
+2. **Clear the approval gate's dependency findings.** Both CI pins now point
+   at reviewed commit `0d07776` (2026-10-27) and Action E2E passes. The
+   approval gate still blocks on new OSV advisories for locked dependencies:
+   `certifi` 2026.6.17 (GHSA-6q48-6c7w-9gw2, CRITICAL), `mcp` 1.29.0
+   (GHSA-84m7-p3x7-pcfv, HIGH) and `opentelemetry-api` 1.37.0
+   (GHSA-xcq7-p3pf-p88h, MEDIUM). Upgrade them in `uv.lock`, or suppress each
+   with a reviewed reason. After any later pin change, update both SHAs and
+   `tests/test_action.py` (`docs/RELEASE_CHECKLIST.md` step 12).
 3. **First PyPI release.** `v2.5.0` is tagged locally. Register the PyPI
    Trusted Publisher (see `docs/RELEASE_CHECKLIST.md`), push `main` and the
    tag, and confirm `pipx install aegis-security-console` works.
