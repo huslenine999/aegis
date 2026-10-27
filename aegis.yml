@@ -110,3 +110,17 @@ scan:
       approved_by: security-owner
       ticket: AEGIS-RISK-013
       expires_at: 2027-07-20
+    - tool: Ruff
+      rule: S607
+      path: scripts/run_codeql_benchmark.py
+      reason: Benchmark checkout runs git from the developer PATH on pinned, full-SHA public repositories.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-015
+      expires_at: 2027-07-20
+    - tool: Secrets
+      rule: Hex High Entropy String
+      path: benchmarks/repositories-v1.json
+      reason: Values are public git commit SHAs pinning the benchmark repositories; the file is a frozen inventory.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-016
+      expires_at: 2027-07-20
