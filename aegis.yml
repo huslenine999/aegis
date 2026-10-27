@@ -124,3 +124,15 @@ scan:
       approved_by: security-owner
       ticket: AEGIS-RISK-016
       expires_at: 2027-07-20
+    - tool: OSV Dependency Audit
+      rule: GHSA-84m7-p3x7-pcfv
+      reason: mcp is installed only as a semgrep dependency (semgrep pins mcp==1.29.0; fixed in 1.30.0); Aegis never imports mcp or runs semgrep's MCP server. Remove once semgrep allows mcp>=1.30.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-017
+      expires_at: 2027-01-27
+    - tool: OSV Dependency Audit
+      rule: GHSA-xcq7-p3pf-p88h
+      reason: opentelemetry-api is installed only as a semgrep dependency (semgrep requires ~=1.37.0); Aegis does not parse tracestate from untrusted input. Remove once semgrep allows a fixed release.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-018
+      expires_at: 2027-01-27
