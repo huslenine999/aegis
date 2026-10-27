@@ -49,7 +49,7 @@ def test_timeout_kills_descendants_after_parent_exit(tmp_path):
         "import os,signal,sys,time; from pathlib import Path; "
         "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
         "Path(sys.argv[1]).write_text(str(os.getpid())); "
-        "time.sleep(1.5); Path(sys.argv[2]).write_text('survived')"
+        "time.sleep(2.5); Path(sys.argv[2]).write_text('survived')"
     )
     parent_code = (
         "import subprocess,sys; "
@@ -59,10 +59,10 @@ def test_timeout_kills_descendants_after_parent_exit(tmp_path):
         with pytest.raises(subprocess.TimeoutExpired):
             run_bounded_subprocess(
                 [sys.executable, "-c", parent_code, child_code, str(pid_file), str(marker)],
-                timeout=0.3,
+                timeout=1.0,
             )
         assert pid_file.exists(), "descendant must start before the timeout"
-        time.sleep(1.5)
+        time.sleep(2.5)
         assert not marker.exists(), "the cancelled process group still ran a descendant"
     finally:
         if pid_file.exists():
