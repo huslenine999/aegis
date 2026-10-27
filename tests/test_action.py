@@ -211,7 +211,7 @@ def test_security_gate_uses_trusted_scanner_and_policy_revision():
     scan_script = scan_step["run"]
 
     assert "uses: ./" not in workflow
-    assert "ref: 0d07776f51833abedd5689f71400224df3dfc205" in workflow
+    assert "ref: b96e341591dedc36272af3d9427fcdea584b75c9" in workflow
     assert 'python -m pip install "./trusted-aegis[scanner]"' in workflow
     assert "cp trusted-aegis/aegis.yml target/.aegis-trusted.yml" in workflow
     assert "--config target/.aegis-trusted.yml" in workflow
@@ -281,7 +281,7 @@ def test_playwright_uses_the_locked_uv_environment():
 def test_published_action_e2e_asserts_outputs_and_reports():
     workflow = (WORKFLOWS_PATH / "action-e2e.yml").read_text()
 
-    assert "huslenine999/aegis@0d07776f51833abedd5689f71400224df3dfc205" in workflow
+    assert "huslenine999/aegis@b96e341591dedc36272af3d9427fcdea584b75c9" in workflow
     assert "steps.aegis.outputs.decision" in workflow
     assert "steps.aegis.outputs.exit-code" in workflow
     assert "steps.aegis.outputs.summary-json" in workflow
