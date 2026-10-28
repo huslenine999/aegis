@@ -193,8 +193,9 @@ The web application turns one-off scanner output into an operational workflow:
 Deep scans are unavailable in the default local topology. `make codeql-setup`
 provisions the pinned local image and trusted query suites for the optional
 Deep worker. An unavailable runtime is an operational error, never a pass.
-CodeQL still scans `test/`, `tests/` and `testsuite/` folders (and `*_test.go`),
-but findings there are marked `test_code` and do not block a release.
+Test folders (`test/`, `tests/`, `testsuite/`, `*_test.go`) are scanned and
+block like any other code. To make a test root non-blocking, add a suppression
+with a folder path such as `path: tests/` to the trusted config.
 
 ## Scanner coverage
 
@@ -297,7 +298,7 @@ scan:
 A suppression is active only when it includes a meaningful reason, approver,
 tracking ticket, and future ISO-8601 expiry. Applied, invalid, and expired
 exceptions are written to `suppressions-report.json`; malformed exceptions never
-hide findings.
+hide findings. A `path` that ends in `/` covers every file under that folder.
 
 Each completed scan also writes `source-descriptor.json` and a schema-3,
 source-bound `scan-manifest.json`. The descriptor records the admitted regular

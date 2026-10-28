@@ -37,6 +37,11 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Security
 
+- Test folders no longer hide code. Semgrep scans `test/`, `tests/`,
+  `testsuite/` and `*_test.go`, and CodeQL findings there block. A trusted-config
+  suppression with a folder path (`path: tests/`) and a named approver is the only
+  way to make a test root non-blocking; suppressions now also apply to CodeQL.
+
 - Finished scan runs and their artifact records are immutable at the database
   level (migrations 24 and 25), and scan-state updates no longer touch
   finished runs.

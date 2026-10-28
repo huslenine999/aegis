@@ -1871,7 +1871,6 @@
                                 <span class="severity-badge {% if example.severity == 'HIGH' or example.severity == 'CRITICAL' %}badge-high{% elif example.severity == 'MEDIUM' %}badge-medium{% endif %}" data-severity="{{ example.severity }}">
                                     {{ example.severity }}
                                 </span>
-                                {% if example.test_code %}<span class="severity-badge">Test code &middot; not blocking</span>{% endif %}
                                 <span class="finding-title">
                                     {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
                                         {{ example.issue_text }}

@@ -15,7 +15,7 @@ The product becomes a source, dependency, and secret security workbench. Removin
 | Deep | Standard plus CodeQL for Python and JavaScript/TypeScript | CodeQL is required for supported source languages; unavailable or incomplete analysis is an error. |
 | Optional signature analysis | YARA, explicitly enabled | Report the actual engine/rules and scope; no antivirus claim. |
 
-CodeQL findings under test paths (`test/`, `tests/`, `testsuite/`, `*_test.go`, the same set Semgrep skips) are reported with `test_code: true` and never block. Unsupported languages and absent dependency manifests are visible coverage limitations. A Deep scan with no supported CodeQL language is not a successful CodeQL scan. Do not advertise whole-repository coverage when other source languages were omitted. Single-file scans retain an explicit limited scope; do not infer a complete project from one uploaded file.
+Test paths (`test/`, `tests/`, `testsuite/`, `*_test.go`) are scanned by Semgrep and CodeQL and block like other code; only a folder suppression in trusted config, with an approver, makes them non-blocking. Unsupported languages and absent dependency manifests are visible coverage limitations. A Deep scan with no supported CodeQL language is not a successful CodeQL scan. Do not advertise whole-repository coverage when other source languages were omitted. Single-file scans retain an explicit limited scope; do not infer a complete project from one uploaded file.
 
 ## Phase 1 — Freeze the coverage and compatibility contract
 
