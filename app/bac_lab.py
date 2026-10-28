@@ -314,7 +314,7 @@ def local_bac_lab(mode: str) -> Iterator[RunningLab]:
         listener.listen(128)
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(
-            app, host="127.0.0.1", port=port, loop="asyncio", lifespan="off", access_log=False,
+            app, host="127.0.0.1", port=port, loop="asyncio", lifespan="off", ws="none", access_log=False,
             log_level="error", timeout_keep_alive=1, timeout_graceful_shutdown=1,
         ))
 
