@@ -6,6 +6,12 @@ All notable changes to the Aegis project will be documented in this file.
 
 ### Fixed
 
+- JavaScript rules missed common Express/Koa code. Request input is now tracked
+  in named handler functions and controller methods (class, static and object
+  methods) whose parameter is named `req`, `request` or `ctx`. Reflected XSS is
+  found when the HTML is built in a variable first. `unescape`, `encodeURI`,
+  `escapeRegExp` and calls in general no longer count as HTML escapers, and
+  `encodeURIComponent` no longer sanitizes a URL whose host it builds.
 - `pipx install` failed on Python 3.14 and later: `psycopg-binary` 3.2.10 and
   `yara-python` 4.5.0 have no wheels there. psycopg is now 3.3.6, yara-python
   4.5.4 (adds Python 3.13), and `requires-python` is `>=3.11,<3.14`, so newer
