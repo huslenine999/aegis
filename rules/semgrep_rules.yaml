@@ -67,7 +67,7 @@ rules:
 
   - id: python-tainted-request
     mode: taint
-    pattern-sources: &python-request-sources
+    pattern-sources:
       - pattern: $REQUEST.query_params
       - pattern: $REQUEST.path_params
       - pattern: $REQUEST.query
@@ -149,7 +149,34 @@ rules:
 
   - id: python-reflected-xss
     mode: taint
-    pattern-sources: *python-request-sources
+    pattern-sources:
+      - pattern: $REQUEST.query_params
+      - pattern: $REQUEST.path_params
+      - pattern: $REQUEST.query
+      - pattern: $REQUEST.match_info
+      - pattern: $REQUEST.form(...)
+      - pattern: $REQUEST.json(...)
+      - pattern: flask.request.args
+      - pattern: flask.request.form
+      - pattern: flask.request.values
+      - pattern: flask.request.view_args
+      - pattern: flask.request.get_json(...)
+      - pattern: $REQUEST.GET
+      - pattern: $REQUEST.POST
+      # Query and path parameters of a routed handler (FastAPI, Flask).
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              def $F(..., $ARG, ...):
+                  ...
+          - pattern-not-inside: |
+              def $F(..., $ARG=Depends(...), ...):
+                  ...
+          # The request object itself is not user input.
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?!(request|req|self|cls|response)$)
+          - focus-metavariable: $ARG
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -367,7 +394,7 @@ rules:
 
   - id: javascript-express-tainted-request
     mode: taint
-    pattern-sources: &express-request-sources
+    pattern-sources:
       - patterns:
           - pattern-either:
               - pattern-inside: function ($REQ, $RES, ...) { ... }
@@ -445,7 +472,35 @@ rules:
 
   - id: javascript-express-sql-injection
     mode: taint
-    pattern-sources: *express-request-sources
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($REQ, $RES, ...) { ... }
+              - pattern-inside: ($REQ, $RES, ...) => { ... }
+              - pattern-inside: async function ($REQ, $RES, ...) { ... }
+              - pattern-inside: async ($REQ, $RES, ...) => { ... }
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
+      # Koa handlers take one context argument, conventionally named ctx.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($CTX, ...) { ... }
+              - pattern-inside: ($CTX, ...) => { ... }
+              - pattern-inside: async function ($CTX, ...) { ... }
+              - pattern-inside: async ($CTX, ...) => { ... }
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: ^ctx$
+          - pattern-either:
+              - pattern: $CTX.query
+              - pattern: $CTX.params
+              - pattern: $CTX.request.query
+              - pattern: $CTX.request.body
+              - pattern: $CTX.headers
     pattern-sinks:
       - patterns:
           - pattern: $DB.$METHOD($QUERY, ...)
@@ -471,7 +526,35 @@ rules:
 
   - id: javascript-express-reflected-xss
     mode: taint
-    pattern-sources: *express-request-sources
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($REQ, $RES, ...) { ... }
+              - pattern-inside: ($REQ, $RES, ...) => { ... }
+              - pattern-inside: async function ($REQ, $RES, ...) { ... }
+              - pattern-inside: async ($REQ, $RES, ...) => { ... }
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
+      # Koa handlers take one context argument, conventionally named ctx.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($CTX, ...) { ... }
+              - pattern-inside: ($CTX, ...) => { ... }
+              - pattern-inside: async function ($CTX, ...) { ... }
+              - pattern-inside: async ($CTX, ...) => { ... }
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: ^ctx$
+          - pattern-either:
+              - pattern: $CTX.query
+              - pattern: $CTX.params
+              - pattern: $CTX.request.query
+              - pattern: $CTX.request.body
+              - pattern: $CTX.headers
     pattern-sinks:
       - patterns:
           - pattern-either:
