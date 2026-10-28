@@ -25,6 +25,165 @@ rules:
     languages: [python]
     severity: ERROR
 
+  # A helper that builds SQL from its own parameter has no request source in
+  # scope, so python-sqli cannot see the flow.
+  - id: python-sql-string-from-parameter
+    patterns:
+      - pattern-inside: |
+          def $F(..., $P, ...):
+              ...
+      - pattern-either:
+          - pattern: $CALL("...".format(..., $P, ...), ...)
+          - pattern: $CALL("..." % $P, ...)
+          - pattern: $CALL("..." % (..., $P, ...), ...)
+          - pattern: $CALL(f"...{$P}...", ...)
+          - pattern: $CALL("..." + $P, ...)
+          - patterns:
+              - pattern: $CALL($Q, ...)
+              - pattern-either:
+                  - pattern-inside: |
+                      $Q = "...".format(..., $P, ...)
+                      ...
+                  - pattern-inside: |
+                      $Q = "..." % $P
+                      ...
+                  - pattern-inside: |
+                      $Q = "..." % (..., $P, ...)
+                      ...
+                  - pattern-inside: |
+                      $Q = f"...{$P}..."
+                      ...
+                  - pattern-inside: |
+                      $Q = "..." + $P
+                      ...
+      - metavariable-regex:
+          metavariable: $CALL
+          regex: ^(.*\.)?(execute|executemany|executescript|raw|text|read_sql|read_sql_query)$
+    message: "A SQL statement is built from a function parameter with string formatting. Pass values as bound parameters instead."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+
+  - id: python-tainted-request
+    mode: taint
+    pattern-sources: &python-request-sources
+      - pattern: $REQUEST.query_params
+      - pattern: $REQUEST.path_params
+      - pattern: $REQUEST.query
+      - pattern: $REQUEST.match_info
+      - pattern: $REQUEST.form(...)
+      - pattern: $REQUEST.json(...)
+      - pattern: flask.request.args
+      - pattern: flask.request.form
+      - pattern: flask.request.values
+      - pattern: flask.request.view_args
+      - pattern: flask.request.get_json(...)
+      - pattern: $REQUEST.GET
+      - pattern: $REQUEST.POST
+      # Query and path parameters of a routed handler (FastAPI, Flask).
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              def $F(..., $ARG, ...):
+                  ...
+          - pattern-not-inside: |
+              def $F(..., $ARG=Depends(...), ...):
+                  ...
+          # The request object itself is not user input.
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: ^(?!(request|req|self|cls|response)$)
+          - focus-metavariable: $ARG
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: open($ARG, ...)
+              - pattern: os.remove($ARG)
+              - pattern: os.unlink($ARG)
+              - pattern: send_file($ARG, ...)
+              - pattern: FileResponse($ARG, ...)
+              - pattern: web.FileResponse($ARG, ...)
+              - pattern: urllib.request.urlopen($ARG, ...)
+              - pattern: redirect($ARG, ...)
+              - pattern: RedirectResponse($ARG, ...)
+              - pattern: HttpResponseRedirect($ARG, ...)
+              - pattern: web.HTTPFound($ARG)
+              - pattern: web.HTTPFound(..., location=$ARG, ...)
+          - focus-metavariable: $ARG
+      - patterns:
+          - pattern: $CLIENT.$M($ARG, ...)
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(requests|httpx|session|client|self\.session|self\.client)$
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(get|post|put|patch|delete|head|options|stream)$
+          - focus-metavariable: $ARG
+    pattern-sanitizers:
+      - pattern: os.path.basename(...)
+      - pattern: secure_filename(...)
+      - pattern: url_for(...)
+      - pattern: reverse(...)
+      # A lookup in a constant table returns only values the program chose.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE.get(...)
+              - pattern: $TABLE[...]
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^[A-Z][A-Z0-9_]*$
+      # A prefix check against a computed base; a literal like "/" is bypassable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X.startswith($BASE, ...)
+              - pattern: $X.is_relative_to(...)
+          - pattern-not: $X.startswith("...", ...)
+          - focus-metavariable: $X
+    message: "Request input reaches a file path, outbound URL, or redirect. Validate it against an allowlist (path traversal, SSRF, or open redirect risk)."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-22 / CWE-918 / CWE-601"
+
+  - id: python-reflected-xss
+    mode: taint
+    pattern-sources: *python-request-sources
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: HTMLResponse($ARG, ...)
+              - pattern: Markup($ARG)
+              - pattern: mark_safe($ARG)
+              - pattern: render_template_string($ARG, ...)
+          - focus-metavariable: $ARG
+      # Other responses are HTML only when the string is built as markup.
+      - patterns:
+          - pattern-either:
+              - pattern: return $ARG
+              - pattern: make_response($ARG, ...)
+              - pattern: HttpResponse($ARG, ...)
+              - pattern: web.Response(..., text=$ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s).*<[A-Za-z/!]
+          - focus-metavariable: $ARG
+    pattern-sanitizers:
+      - pattern: escape(...)
+      - pattern: html.escape(...)
+      - pattern: conditional_escape(...)
+      - pattern: format_html(...)
+      - pattern: bleach.clean(...)
+      - pattern: jsonify(...)
+      - pattern: json.dumps(...)
+      - pattern: render_template(...)
+    message: "Request input is written into an HTML response without escaping. Escape it or render it through an autoescaping template."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+
   - id: python-rce
     patterns:
       - pattern-either:
@@ -208,7 +367,7 @@ rules:
 
   - id: javascript-express-tainted-request
     mode: taint
-    pattern-sources:
+    pattern-sources: &express-request-sources
       - patterns:
           - pattern-either:
               - pattern-inside: function ($REQ, $RES, ...) { ... }
@@ -248,11 +407,76 @@ rules:
       - pattern: encodeURIComponent(...)
       - pattern: Number(...)
       - pattern: parseInt(...)
+      # A lookup in a constant table returns only values the program chose.
+      - patterns:
+          - pattern-either:
+              - pattern: $TABLE[...]
+              - pattern: $TABLE.get(...)
+          - metavariable-regex:
+              metavariable: $TABLE
+              regex: ^[A-Z][A-Z0-9_]*$
+      # A prefix check against a computed base; a literal like "/" is bypassable.
+      - by-side-effect: true
+        patterns:
+          - pattern: $X.startsWith($BASE, ...)
+          - pattern-not: $X.startsWith("...", ...)
+          - focus-metavariable: $X
     message: "Request input reaches a file path, outbound URL, or redirect. Validate it against an allowlist (path traversal, SSRF, or open redirect risk)."
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
       cwe: "CWE-22 / CWE-918 / CWE-601"
+
+  - id: javascript-express-sql-injection
+    mode: taint
+    pattern-sources: *express-request-sources
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.$METHOD($QUERY, ...)
+          # The direct forms are javascript-sql-injection's.
+          - pattern-not: $DB.$METHOD(`...${$X}...`, ...)
+          - pattern-not: $DB.$METHOD("..." + $X, ...)
+          - pattern-not: $DB.$METHOD($X + "...", ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|raw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe|exec)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: (?i)(db|database|conn|connection|client|pool|sequelize|knex|prisma|sql|pg|mysql|tx|trx|transaction)
+          - focus-metavariable: $QUERY
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+    message: "Request input is concatenated into a SQL query. Pass values as bound parameters instead."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+
+  - id: javascript-express-reflected-xss
+    mode: taint
+    pattern-sources: *express-request-sources
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($ARG)
+              - pattern: $RES.end($ARG)
+              - pattern: $RES.write($ARG)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?s).*<[A-Za-z/!]
+          - focus-metavariable: $ARG
+    pattern-sanitizers:
+      - patterns:
+          - pattern: $ESCAPE(...)
+          - metavariable-regex:
+              metavariable: $ESCAPE
+              regex: (?i).*(escape|sanitize|encode|purify)
+    message: "Request input is written into an HTML response without escaping. Escape it or render it through an autoescaping template."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
 
   - id: javascript-tls-verification-disabled
     pattern-either:

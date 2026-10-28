@@ -154,3 +154,17 @@ scan:
       approved_by: security-owner
       ticket: AEGIS-RISK-018
       expires_at: 2027-01-27
+    - tool: Semgrep
+      rule: python-sql-string-from-parameter
+      path: app/finding_queries.py
+      reason: The interpolated WHERE clause comes only from _finding_filters, which joins fixed clauses with ? placeholders; user values travel in the parameters list.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-022
+      expires_at: 2027-07-20
+    - tool: Semgrep
+      rule: python-tainted-request
+      path: app/routes/auth_routes.py
+      reason: The redirects go to the identity provider URL built from server configuration, and to the return_to value that begin_oidc validated with _safe_return_to before storing it.
+      approved_by: security-owner
+      ticket: AEGIS-RISK-023
+      expires_at: 2027-07-20
