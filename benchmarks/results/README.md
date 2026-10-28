@@ -263,3 +263,15 @@ for tuning: measure further rule changes on a new corpus.
 Files:
 
 - `codeql-heldout-v3.2026-10-28.held-out.json`: isolated runner plus Semgrep.
+
+## Koa context sources (2026-10-28)
+
+`javascript-express-tainted-request` and the Express SQL/XSS rules shared its
+sources, which only knew `(req, res)` handlers. They now also treat `ctx.query`,
+`ctx.params`, `ctx.request.query`, `ctx.request.body` and `ctx.headers` as
+request input inside a handler whose first parameter is named `ctx`. This was
+written after reading the v3 miss `koa_exit_redirect-vuln`, so v3 no longer
+measures it: re-running v3 catches 14/14 with no false alarms, which is only a
+regression check. The labeled fixture `tests/fixtures/semgrep/koa_routes.js`
+covers the change. Held-out recall for Koa is unmeasured until a fresh corpus
+is written.

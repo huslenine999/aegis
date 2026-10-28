@@ -56,7 +56,7 @@ docs/research/         Thesis outline, team guide, BAC protocol, capstone review
 ## Current verification status (2026-10-26)
 
 ```
-pytest:      1152 passed, 8 skipped (opt-in or root-only)
+pytest:      1162 passed, 11 skipped (opt-in or root-only)
              includes Hypothesis fuzz tests and a 500-request API monkey test
 PostgreSQL:  the full suite passes with AEGIS_TEST_POSTGRES_URL on PostgreSQL 16
              (Linux x86_64), including per-service login checks
@@ -113,9 +113,11 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
 6. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.
 7. **Held-out v3 done (2026-10-28).** Semgrep caught 13/14 with 0 false alarms,
-   CodeQL 9/14 (misses all Starlette), combined 14/14. Semgrep miss: Koa open
-   redirect. v3 is now a regression set; measure further rule changes on a
-   new corpus. See `benchmarks/results/README.md`.
+   CodeQL 9/14 (misses all Starlette), combined 14/14. The Semgrep miss (Koa open
+   redirect) is closed by a `ctx` source added after the run, covered by a
+   fixture and 14/14 on v3 as a regression check only. v3 is a regression set;
+   measure Koa recall and further rule changes on a new corpus. See
+   `benchmarks/results/README.md`.
 
 ## Environment gotchas
 

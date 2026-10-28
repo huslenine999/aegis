@@ -380,6 +380,22 @@ rules:
               - pattern: $REQ.body
               - pattern: $REQ.headers
               - pattern: $REQ.cookies
+      # Koa handlers take one context argument, conventionally named ctx.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function ($CTX, ...) { ... }
+              - pattern-inside: ($CTX, ...) => { ... }
+              - pattern-inside: async function ($CTX, ...) { ... }
+              - pattern-inside: async ($CTX, ...) => { ... }
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: ^ctx$
+          - pattern-either:
+              - pattern: $CTX.query
+              - pattern: $CTX.params
+              - pattern: $CTX.request.query
+              - pattern: $CTX.request.body
+              - pattern: $CTX.headers
     pattern-sinks:
       - patterns:
           - pattern-either:
