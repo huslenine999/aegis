@@ -4,6 +4,8 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-28
+
 ### Added
 
 - Evidence signing runs in a separate `signer` service; scanner workers no
