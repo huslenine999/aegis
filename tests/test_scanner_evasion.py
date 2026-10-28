@@ -31,6 +31,10 @@ def test_hostile_repository_cannot_hide_code_from_the_standard_scan(tmp_path, mo
     (target / "nosem.js").write_text("module.exports = (code) => eval(code); // nosemgrep\n")
     (target / "semgrepignored.js").write_text("module.exports = (code) => eval(code);\n")
     (target / ".semgrepignore").write_text("semgrepignored.js\n")
+    # Semgrep: test folders, which its own default ignore list skips.
+    for folder in ("test", "tests", "testsuite"):
+        (target / folder).mkdir()
+        (target / folder / "handler.js").write_text("module.exports = (code) => eval(code);\n")
     # detect-secrets: an inline allowlist pragma.
     (target / "settings.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"  # pragma: allowlist secret\n')
     output = tmp_path / "out"
@@ -45,5 +49,6 @@ def test_hostile_repository_cannot_hide_code_from_the_standard_scan(tmp_path, mo
     assert {"noqa.py", "dotignore.py", "gitignored.py"} <= names(ruff, "filename")
     semgrep = json.loads((output / "semgrep-report.json").read_text())["results"]
     assert {"nosem.js", "semgrepignored.js"} <= names(semgrep, "path")
+    assert {"test", "tests", "testsuite"} <= {str(item["path"]).rsplit("/", 2)[-2] for item in semgrep}
     secrets = json.loads((output / "secrets-report.json").read_text())["results"]
     assert "settings.py" in secrets

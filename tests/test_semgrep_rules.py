@@ -144,9 +144,8 @@ def test_scanned_repository_cannot_choose_what_semgrep_skips(tmp_path):
         add_semgrep_excludes(command) + [str(target)], capture_output=True, text=True, timeout=300, check=False,
     )
     found = {Path(item["path"]).name for item in json.loads(completed.stdout)["results"]}
-    # nosemgrep comments and .semgrepignore are ignored; Semgrep's own default
-    # (skip tests/) is now applied by Aegis instead.
-    assert found == {"hidden.py", "ignored.py"}
+    # nosemgrep comments, .semgrepignore and Semgrep's default skip of tests/ are all ignored.
+    assert found == {"hidden.py", "ignored.py", "fixture.py"}
 
 
 def test_semgrep_timeouts_and_fatal_errors_are_coverage_gaps():

@@ -57,18 +57,12 @@ SEMGREP_VERSION = "1.179.0"
 # large files (a slow file becomes a Timeout error instead; see
 # scanners.semgrep_coverage_gaps). Pinned Semgrep supports the ``--x-`` flag.
 SEMGREP_TRUSTED_TARGETING = ("--disable-nosem", "--x-ignore-semgrepignore-files", "--max-target-bytes=0")
-# Semgrep's own default .semgrepignore, applied by Aegis instead of the repository.
+# Semgrep's own default .semgrepignore, applied by Aegis instead of the repository,
+# minus its test paths: a repository must not hide code by naming a folder ``tests``.
 SEMGREP_DEFAULT_EXCLUDES = (
     ".git", ".svn", "_darcs", "build/", "vendor/", "dist/", "*.min.js", ".env/", ".tox/", "node_modules/",
-    ".npm/", ".yarn/", ".venv/", "_opam/", "_build/", "_cargo/", "test/", "tests/", "testsuite/", "*_test.go",
+    ".npm/", ".yarn/", ".venv/", "_opam/", "_build/", "_cargo/",
 )
-# Mirrors the test paths above: Deep still scans them, but findings there do not block.
-TEST_DIRS = frozenset({"test", "tests", "testsuite"})
-
-
-def is_test_path(path: str) -> bool:
-    parts = Path(path).parts
-    return any(part in TEST_DIRS for part in parts[:-1]) or parts[-1].endswith("_test.go")
 
 
 def add_semgrep_excludes(

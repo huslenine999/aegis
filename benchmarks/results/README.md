@@ -200,7 +200,9 @@ signing, and Docker-daemon access (F06).
 
 ## CodeQL held-out corpus v3 (`codeql-heldout-v3`), 2026-10-28
 
-Status: **run once on 2026-10-28; no rules changed afterwards.**
+Status: **run once on 2026-10-28; the Koa source rules changed afterwards (see
+[Koa context sources](#koa-context-sources-2026-10-28)), so v3 is now a
+regression set, not a held-out measure.**
 
 `benchmarks/codeql-heldout-v3.json` has 28 cases: 14 vulnerable and 14 safe
 twins. Each twin keeps the framework and data source and removes the dangerous
@@ -257,8 +259,9 @@ Misses:
 - Semgrep caught `starlette_proxy-vuln` and `starlette_login_redirect-vuln`
   through the generic `python-tainted-request` rule, not a class-specific rule.
 
-This is a single run. No rules changed after it, and the corpus is now used up
-for tuning: measure further rule changes on a new corpus.
+This is a single run. The numbers above are from the rules before the Koa
+change below. The corpus is now used up for tuning: measure further rule
+changes on a new corpus.
 
 Files:
 

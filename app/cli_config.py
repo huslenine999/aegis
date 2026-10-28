@@ -154,7 +154,9 @@ def suppression_matches(suppression: dict, *, tool: str, rule: str = "", path: s
         return False
     if suppression["resolved_path"]:
         expected = suppression["resolved_path"]
-        if resolved_path != expected and not resolved_path.endswith(f"{os.sep}{suppression['path']}"):
+        # A path ending in "/" (for example "tests/") covers every file under that folder.
+        in_folder = suppression["path"].endswith("/") and f"/{suppression['path']}" in f"/{Path(path_value).as_posix()}"
+        if resolved_path != expected and not resolved_path.endswith(f"{os.sep}{suppression['path']}") and not in_folder:
             return False
     elif suppression["path"] and not path_value.endswith(suppression["path"]):
         return False
@@ -283,6 +285,16 @@ def apply_suppressions(
                 if not results[filename]:
                     del results[filename]
             write_json_fn(secrets_path, secrets, safe_output=safe_output)
+
+    codeql_path = scan_dir / "codeql-report.json"
+    if codeql_path.exists() and read_json_fn and write_json_fn:
+        codeql = read_json_fn(codeql_path)
+        if isinstance(codeql, dict) and isinstance(codeql.get("findings"), list):
+            codeql["findings"] = [
+                item for item in codeql["findings"]
+                if not (isinstance(item, dict) and suppress_item("CodeQL", item, rule_keys=("rule_id",), path_keys=("filename",)))
+            ]
+            write_json_fn(codeql_path, codeql, safe_output=safe_output)
 
     osv_path = scan_dir / "osv-report.json"
     if osv_path.exists() and read_json_fn and write_json_fn:

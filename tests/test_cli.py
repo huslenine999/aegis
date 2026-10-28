@@ -365,6 +365,32 @@ def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
     }
 
 
+def test_folder_suppression_covers_only_files_under_that_folder(tmp_path):
+    scan_dir = tmp_path / "reports"
+    scan_dir.mkdir()
+    finding = {"rule_id": "py/sql-injection", "severity": "HIGH", "line_number": 1}
+    (scan_dir / "codeql-report.json").write_text(json.dumps({"findings": [
+        {**finding, "filename": name} for name in ("tests/test_db.py", "src/tests/db.py", "app/tests_helper.py")
+    ]}))
+    suppressions = cli.normalize_suppressions({
+        "_config_path": str(tmp_path / "aegis.yml"),
+        "scan": {"suppressions": [{
+            "path": "tests/",
+            "reason": "Test fixtures run only in CI and never ship.",
+            "approved_by": "security-reviewer",
+            "ticket": "SEC-101",
+            "expires_at": "2099-01-01",
+        }]},
+    }, tmp_path)
+
+    cli.apply_suppressions(scan_dir, suppressions)
+
+    kept = json.loads((scan_dir / "codeql-report.json").read_text())["findings"]
+    assert [item["filename"] for item in kept] == ["app/tests_helper.py"]
+    applied = json.loads((scan_dir / "suppressions-report.json").read_text())["applied"]
+    assert {item["approved_by"] for item in applied} == {"security-reviewer"}
+
+
 def test_expired_suppression_is_reported_and_does_not_hide_finding(tmp_path):
     target_file = tmp_path / "unsafe.py"
     target_file.write_text("eval(input())\n")

@@ -293,7 +293,7 @@ def test_findings_summary_includes_accepted_risk_and_excludes_bac_blockers(tmp_p
     assert page["summary"] == {"open": 3, "blockers": 2}
 
 
-def test_codeql_findings_in_test_folders_are_marked_and_not_counted_as_blockers(tmp_path, monkeypatch):
+def test_codeql_findings_in_test_folders_count_as_blockers(tmp_path, monkeypatch):
     project_id = configure_database(tmp_path, monkeypatch)
     run_id = create_run(project_id, "test-code")
     findings.sync_findings(run_id, {"ruff": [ruff_result(str(index))["ruff"][0] for index in range(3)]})
@@ -306,10 +306,7 @@ def test_codeql_findings_in_test_folders_are_marked_and_not_counted_as_blockers(
     page = project_routes.project_findings(
         project_id, principal=SimpleNamespace(user_id=10, role="operator", tenant_id=1),
     )
-    assert {item["path"]: item["test_code"] for item in page["findings"]} == {
-        "tests/test_db.py": True, "app/db.py": False, "tests/db.py": False,
-    }
-    assert page["summary"] == {"open": 3, "blockers": 2}
+    assert page["summary"] == {"open": 3, "blockers": 3}
 
 
 @pytest.mark.parametrize("prior_run_count", (1, 2))

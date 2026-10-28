@@ -40,7 +40,7 @@ def test_active_report_set_ignores_retired_scanners_and_keeps_codeql_full_findin
     assert len(analyzed["examples"]) == 5
 
 
-def test_codeql_findings_in_test_folders_show_but_do_not_block():
+def test_codeql_findings_in_test_folders_block():
     def report(*filenames):
         return {
             "status": "completed",
@@ -52,15 +52,8 @@ def test_codeql_findings_in_test_folders_show_but_do_not_block():
         }
 
     only_tests = analyze_codeql(report("tests/test_db.py", "pkg/test/helper.py", "x/db_test.go"))
-    assert only_tests["status"] == "PASS"
-    assert only_tests["total_issues"] == 3
-    assert all(item["test_code"] for item in only_tests["findings"])
-
-    mixed = analyze_codeql(report("tests/test_db.py", "app/db.py", "app/tests_helper.py"))
-    assert mixed["status"] == "FAIL"
-    assert mixed["total_issues"] == 3
-    assert mixed["blocking_issues"] == 2
-    assert [item["test_code"] for item in mixed["findings"]] == [True, False, False]
+    assert only_tests["status"] == "FAIL"
+    assert only_tests["blocking_issues"] == 3
 
 
 def test_codeql_incomplete_or_malformed_report_is_error():
