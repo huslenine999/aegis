@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const escapeHtml = require('escape-html');
 const mysql = require('mysql');
+const axios = require('axios');
 
 const app = express();
 const pool = mysql.createPool({ host: 'db' });
@@ -68,4 +69,84 @@ app.get('/return-mapped', (req, res) => {
 app.get('/return-checked', (req, res) => {
   // ruleid: javascript-express-tainted-request
   res.redirect(req.query.to);
+});
+
+function downloadReport(req, res) {
+  // ruleid: javascript-express-tainted-request
+  res.sendFile(req.params.file);
+}
+
+class UserController {
+  async show(req, res) {
+    // ruleid: javascript-express-tainted-request
+    res.redirect(req.query.next);
+  }
+
+  static search(req, res) {
+    const sql = "SELECT id FROM users WHERE name = '" + req.query.name + "'";
+    // ruleid: javascript-express-sql-injection
+    pool.query(sql, (error, rows) => res.json(rows));
+  }
+}
+
+const profileController = {
+  greet(req, res) {
+    // ruleid: javascript-express-reflected-xss
+    res.send('<p>' + req.query.name + '</p>');
+  },
+};
+
+function mergeDefaults(target, source) {
+  // ok: javascript-express-tainted-request
+  fs.readFile(target.query, () => source);
+}
+
+app.get('/greeting-variable', (req, res) => {
+  const html = `<h1>Hello, ${req.query.name}</h1>`;
+  // ruleid: javascript-express-reflected-xss
+  res.send(html);
+});
+
+app.get('/greeting-built', (req, res) => {
+  let html = '<ul>';
+  html += '<li>' + req.query.item + '</li>';
+  // ruleid: javascript-express-reflected-xss
+  res.send(html);
+});
+
+app.get('/greeting-escaped-variable', (req, res) => {
+  const html = `<h1>Hello, ${escapeHtml(String(req.query.name))}</h1>`;
+  // ok: javascript-express-reflected-xss
+  res.send(html);
+});
+
+app.get('/user-record', async (req, res) => {
+  const user = await pool.query('SELECT name FROM users WHERE id = ?', [req.params.id]);
+  // ok: javascript-express-reflected-xss
+  res.send(user);
+});
+
+app.get('/greeting-unescaped', (req, res) => {
+  // ruleid: javascript-express-reflected-xss
+  res.send('<h1>' + unescape(req.query.name) + '</h1>');
+});
+
+app.get('/link-uri-encoded', (req, res) => {
+  // ruleid: javascript-express-reflected-xss
+  res.send("<a href='" + encodeURI(req.query.url) + "'>next</a>");
+});
+
+app.get('/proxy-host', async (req, res) => {
+  // ruleid: javascript-express-tainted-request
+  res.json(await axios.get('https://' + encodeURIComponent(req.query.host) + '/status'));
+});
+
+app.get('/proxy-user', async (req, res) => {
+  // ok: javascript-express-tainted-request
+  res.json(await axios.get(`https://api.example.com/users/${encodeURIComponent(req.query.id)}`));
+});
+
+app.get('/search-redirect', (req, res) => {
+  // ok: javascript-express-tainted-request
+  res.redirect('/search?q=' + encodeURIComponent(req.query.q));
 });

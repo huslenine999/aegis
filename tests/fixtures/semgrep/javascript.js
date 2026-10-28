@@ -70,6 +70,12 @@ function render(element, comment, safe) {
   element.innerHTML = `<p>${escapeHtml(comment)}</p>`;
   // ok: javascript-xss-html-sink
   element.innerHTML = `<p>static</p>`;
+  // ruleid: javascript-xss-html-sink
+  element.innerHTML = String(comment);
+  // ruleid: javascript-xss-html-sink
+  element.innerHTML = "<b>" + unescape(comment) + "</b>";
+  // ruleid: javascript-xss-html-sink
+  element.innerHTML = "<b>" + escapeRegExp(comment) + "</b>";
 }
 
 app.get('/file', (req, res) => {

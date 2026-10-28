@@ -365,13 +365,13 @@ rules:
       - pattern-not: $EL.insertAdjacentHTML($POS, "...")
       - pattern-not: document.write("...")
       - pattern-not: $EL.innerHTML = $SANITIZER.sanitize(...)
-      - pattern-not: $EL.innerHTML = $ESC(...)
       - metavariable-pattern:
           metavariable: $HTML
           patterns:
             # A template literal with no ${...} is a constant.
             - pattern-not-regex: ^`[^$]*`$
-            - pattern-not-regex: (?i)(escape|sanitize|purify)
+            # A call to an HTML escaper or sanitizer, not unescape() or escapeRegExp().
+            - pattern-not-regex: (?i)\b(escape(html)?|sanitize(html)?|purify)\s*\(
     message: "Non-constant HTML is written to the DOM. Use textContent, a DOM API, or a vetted sanitizer such as DOMPurify."
     languages: [javascript, typescript]
     severity: WARNING
@@ -407,6 +407,20 @@ rules:
               - pattern: $REQ.body
               - pattern: $REQ.headers
               - pattern: $REQ.cookies
+      # Named handlers and controller methods, when the parameter is named like a request.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F($REQ, ...) { ... }
+              - pattern-inside: $M($REQ, ...) { ... }
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
       # Koa handlers take one context argument, conventionally named ctx.
       - patterns:
           - pattern-either:
@@ -414,6 +428,8 @@ rules:
               - pattern-inside: ($CTX, ...) => { ... }
               - pattern-inside: async function ($CTX, ...) { ... }
               - pattern-inside: async ($CTX, ...) => { ... }
+              - pattern-inside: function $F($CTX, ...) { ... }
+              - pattern-inside: $M($CTX, ...) { ... }
           - metavariable-regex:
               metavariable: $CTX
               regex: ^ctx$
@@ -447,7 +463,16 @@ rules:
           - focus-metavariable: $PATH
     pattern-sanitizers:
       - pattern: path.basename(...)
-      - pattern: encodeURIComponent(...)
+      # encodeURIComponent only helps after a fixed origin or a local path; it cannot fix a host.
+      - patterns:
+          - pattern-either:
+              - pattern: '"$P" + encodeURIComponent(...)'
+              - patterns:
+                  - pattern: '`...${encodeURIComponent(...)}...`'
+                  - pattern: $P
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^["'`]?(/[^/\\]|https?://[^/"'`$]+/)
       - pattern: Number(...)
       - pattern: parseInt(...)
       # A lookup in a constant table returns only values the program chose.
@@ -485,6 +510,20 @@ rules:
               - pattern: $REQ.body
               - pattern: $REQ.headers
               - pattern: $REQ.cookies
+      # Named handlers and controller methods, when the parameter is named like a request.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F($REQ, ...) { ... }
+              - pattern-inside: $M($REQ, ...) { ... }
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
       # Koa handlers take one context argument, conventionally named ctx.
       - patterns:
           - pattern-either:
@@ -492,6 +531,8 @@ rules:
               - pattern-inside: ($CTX, ...) => { ... }
               - pattern-inside: async function ($CTX, ...) { ... }
               - pattern-inside: async ($CTX, ...) => { ... }
+              - pattern-inside: function $F($CTX, ...) { ... }
+              - pattern-inside: $M($CTX, ...) { ... }
           - metavariable-regex:
               metavariable: $CTX
               regex: ^ctx$
@@ -527,7 +568,8 @@ rules:
   - id: javascript-express-reflected-xss
     mode: taint
     pattern-sources:
-      - patterns:
+      - label: INPUT
+        patterns:
           - pattern-either:
               - pattern-inside: function ($REQ, $RES, ...) { ... }
               - pattern-inside: ($REQ, $RES, ...) => { ... }
@@ -539,13 +581,31 @@ rules:
               - pattern: $REQ.body
               - pattern: $REQ.headers
               - pattern: $REQ.cookies
+      # Named handlers and controller methods, when the parameter is named like a request.
+      - label: INPUT
+        patterns:
+          - pattern-either:
+              - pattern-inside: function $F($REQ, ...) { ... }
+              - pattern-inside: $M($REQ, ...) { ... }
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.cookies
       # Koa handlers take one context argument, conventionally named ctx.
-      - patterns:
+      - label: INPUT
+        patterns:
           - pattern-either:
               - pattern-inside: function ($CTX, ...) { ... }
               - pattern-inside: ($CTX, ...) => { ... }
               - pattern-inside: async function ($CTX, ...) { ... }
               - pattern-inside: async ($CTX, ...) => { ... }
+              - pattern-inside: function $F($CTX, ...) { ... }
+              - pattern-inside: $M($CTX, ...) { ... }
           - metavariable-regex:
               metavariable: $CTX
               regex: ^ctx$
@@ -555,22 +615,34 @@ rules:
               - pattern: $CTX.request.query
               - pattern: $CTX.request.body
               - pattern: $CTX.headers
+      # HTML markup in a string, so an HTML-building variable is tracked too.
+      - label: HTML
+        patterns:
+          - pattern: '"$S"'
+          - metavariable-regex:
+              metavariable: $S
+              regex: <[A-Za-z/!]
+      - label: HTML
+        patterns:
+          - pattern: $T
+          - pattern: '`...`'
+          - metavariable-regex:
+              metavariable: $T
+              regex: <[A-Za-z/!]
     pattern-sinks:
-      - patterns:
+      - requires: INPUT and HTML
+        patterns:
           - pattern-either:
               - pattern: $RES.send($ARG)
               - pattern: $RES.end($ARG)
               - pattern: $RES.write($ARG)
-          - metavariable-regex:
-              metavariable: $ARG
-              regex: (?s).*<[A-Za-z/!]
           - focus-metavariable: $ARG
     pattern-sanitizers:
       - patterns:
           - pattern: $ESCAPE(...)
           - metavariable-regex:
               metavariable: $ESCAPE
-              regex: (?i).*(escape|sanitize|encode|purify)
+              regex: (?i)^((.*\.)?(escape|escapehtml|htmlescape|encodehtml|htmlencode|sanitize|sanitizehtml|filterxss)|he\.encode|xss)$
     message: "Request input is written into an HTML response without escaping. Escape it or render it through an autoescaping template."
     languages: [javascript, typescript]
     severity: ERROR

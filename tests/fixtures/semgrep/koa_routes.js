@@ -28,3 +28,8 @@ app.use(async (item) => {
   // ok: javascript-express-tainted-request
   item.redirect(item.query.to);
 });
+
+async function exitController(ctx) {
+  // ruleid: javascript-express-tainted-request
+  ctx.redirect(ctx.query.to);
+}
