@@ -352,11 +352,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_tar(source: Path, destination: Path) -> None:
-    """Stream only regular files from the admitted snapshot into CodeQL."""
+def _source_tar(source: Path, destination: Path, prefix: str = "") -> None:
+    """Stream only regular files from the admitted snapshot into a container."""
     with tarfile.open(destination, "w", dereference=False) as archive:
         if source.is_file():
-            archive.add(source, arcname=source.name, recursive=False)
+            archive.add(source, arcname=Path(prefix, source.name), recursive=False)
             return
         for root, dirs, files in os.walk(source):
             dirs[:] = [name for name in dirs if name not in IGNORED_DIRS]
@@ -364,7 +364,7 @@ def _source_tar(source: Path, destination: Path) -> None:
             for name in files:
                 path = base / name
                 if path.is_file() and not path.is_symlink():
-                    archive.add(path, arcname=path.relative_to(source), recursive=False)
+                    archive.add(path, arcname=Path(prefix, path.relative_to(source)), recursive=False)
 
 
 def _docker_base(binary: Path, image: str, name: str, mounts: list[str]) -> list[str]:

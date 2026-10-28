@@ -208,6 +208,8 @@ services:
       AEGIS_CODEQL_PYTHON_SUITE: ${AEGIS_CODEQL_PYTHON_SUITE:-codeql/python-queries:codeql-suites/python-security-extended.qls}
       AEGIS_CODEQL_JAVASCRIPT_SUITE: ${AEGIS_CODEQL_JAVASCRIPT_SUITE:-codeql/javascript-queries:codeql-suites/javascript-security-extended.qls}
       AEGIS_CODEQL_DOCKER_HOST: unix:///var/run/docker.sock
+      AEGIS_SANDBOX_SCANNERS: ${AEGIS_SANDBOX_SCANNERS:-false}
+      AEGIS_SCANNER_IMAGE: ${AEGIS_SCANNER_IMAGE:-}
     group_add:
       - "0"
     volumes:

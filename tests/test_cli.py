@@ -25,6 +25,8 @@ def fake_scanner_command(
     label="Scanner",
     accepted_return_codes=None,
     cwd=None,
+    sandbox_target=None,
+    sandbox_rules=None,
 ):
     report_path = Path(stdout_output_path or output_path) if (stdout_output_path or output_path) else None
     if "ruff" in command:
@@ -239,6 +241,8 @@ def test_execute_scan_uses_config_for_sarif_and_excludes(tmp_path, monkeypatch):
         label="Scanner",
         accepted_return_codes=None,
         cwd=None,
+        sandbox_target=None,
+        sandbox_rules=None,
     ):
         commands.append(command)
         return fake_scanner_command(
@@ -465,6 +469,8 @@ def test_execute_scan_fast_mode_skips_slow_scanners(tmp_path, monkeypatch):
         label="Scanner",
         accepted_return_codes=None,
         cwd=None,
+        sandbox_target=None,
+        sandbox_rules=None,
     ):
         labels.append(label)
         return fake_scanner_command(
@@ -555,6 +561,8 @@ def test_strict_scan_returns_operational_error_for_invalid_scanner_output(tmp_pa
         label="Scanner",
         accepted_return_codes=None,
         cwd=None,
+        sandbox_target=None,
+        sandbox_rules=None,
     ):
         if label == "Secrets" and stdout is not None:
             stdout.write('{"results": {}}')
@@ -596,6 +604,8 @@ def test_non_strict_scan_surfaces_operational_failures(tmp_path, monkeypatch):
         label="Scanner",
         accepted_return_codes=None,
         cwd=None,
+        sandbox_target=None,
+        sandbox_rules=None,
     ):
         if label == "Ruff":
             return 2

@@ -5,7 +5,7 @@ SECURITY_BOUNDARY_COVERAGE += --cov=app.bac --cov=app.bac_config --cov=app.bac_l
 SECURITY_BOUNDARY_COVERAGE += --cov=app.bac_imports --cov=app.bac_projects
 SECURITY_BOUNDARY_COVERAGE += --cov=app.service_rpc
 
-.PHONY: setup codeql-setup verify verify-fast lock lock-check export-requirements lint types test e2e clean
+.PHONY: setup codeql-setup scanner-setup verify verify-fast lock lock-check export-requirements lint types test e2e clean
 
 setup:
 	$(UV) venv
@@ -18,6 +18,9 @@ setup:
 
 codeql-setup:
 	./scripts/setup_codeql.sh
+
+scanner-setup:
+	./scripts/setup_scanner.sh
 
 verify: lock-check lint types test e2e
 	git diff --check

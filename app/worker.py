@@ -33,6 +33,7 @@ from .scanners import DEFAULT_IGNORED_DIRS
 from .scanners import configure_semgrep_environment, semgrep_coverage_gaps
 from .scanners import find_runtime_executable
 from .scanners import scanner_subprocess_environment
+from .scanner_sandbox import run_in_sandbox, sandbox_enabled
 from .codeql_scanner import (
     CodeQLScanError,
     operator_runtime_configuration,
@@ -226,6 +227,8 @@ def execute_subprocess_log(
     output_path: Path | None = None,
     stdout_output_path: Path | None = None,
     accepted_return_codes: set[int] | None = None,
+    sandbox_target: Path | None = None,
+    sandbox_rules: Path | None = None,
 ):
     publish_job_event(job_id, "log", {"text": f"[{tool_name}] Executing: {' '.join(cmd)}", "color": "var(--text-muted)"})
     try:
@@ -239,7 +242,17 @@ def execute_subprocess_log(
 
         if output_path is not None and stdout_output_path is not None:
             raise ValueError("Choose one scanner output transport.")
-        if stdout_output_path is not None:
+        if stdout_output_path is not None and sandbox_target is not None:
+            completed = run_in_sandbox(
+                cmd,
+                sandbox_target,
+                stdout_output_path,
+                timeout=timeout,
+                rules=sandbox_rules,
+                accepted_return_codes=accepted_return_codes,
+                check_callback=lambda: _check_cancelled(job_id),
+            )
+        elif stdout_output_path is not None:
             completed = run_bounded_subprocess_stdout_to_file(
                 cmd,
                 stdout_output_path,
@@ -713,7 +726,9 @@ def async_scan_task(
                 )
             except GitHubLifecycleError as exc:
                 raise RuntimeError(str(exc)) from exc
-        python_bin = sys.executable
+        sandbox = sandbox_enabled()
+        # Inside the scanner image the tools are on PATH; host paths do not exist there.
+        python_bin = "python" if sandbox else sys.executable
         is_custom_scan = custom_file_path is not None
         target_path = custom_file_path if is_custom_scan else None
         skip_external_scanners = os.environ.get(
@@ -853,10 +868,11 @@ def async_scan_task(
                 "SAST:Ruff (SAST)",
                 stdout_output_path=ruff_report_path,
                 accepted_return_codes={0, 1},
+                sandbox_target=Path(target_path) if sandbox else None,
             )
             ruff_report = load_json_report(ruff_report_path)
             if return_code in {0, 1} and isinstance(ruff_report, list):
-                mark_tool("Ruff", "completed", return_code=return_code)
+                mark_tool("Ruff", "completed", detail="sandboxed" if sandbox else None, return_code=return_code)
             else:
                 write_json(ruff_report_path, [])
                 mark_tool("Ruff", "failed", detail="scanner did not produce a valid report", return_code=return_code)
@@ -873,11 +889,8 @@ def async_scan_task(
                 if not semgrep_rules_path.is_file():
                     raise FileNotFoundError("Aegis Semgrep rules are missing; reinstall Aegis.")
                 
-                semgrep_bin = find_runtime_executable("semgrep", python_bin)
-                if not semgrep_bin:
-                    semgrep_cmd = ["semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
-                else:
-                    semgrep_cmd = [semgrep_bin, "scan", "--config", str(semgrep_rules_path), "--json"]
+                semgrep_bin = None if sandbox else find_runtime_executable("semgrep", python_bin)
+                semgrep_cmd = [semgrep_bin or "semgrep", "scan", "--config", str(semgrep_rules_path), "--json"]
                 semgrep_environment = scanner_subprocess_environment()
                 configure_semgrep_environment(semgrep_environment)
                 semgrep_cmd[2:2] = ["--metrics", "off", "--disable-version-check"]
@@ -890,6 +903,8 @@ def async_scan_task(
                     "SAST:Semgrep",
                     env=semgrep_environment,
                     stdout_output_path=semgrep_report_path,
+                    sandbox_target=Path(target_path) if sandbox else None,
+                    sandbox_rules=semgrep_rules_path,
                 )
                 semgrep_report = load_json_report(semgrep_report_path)
                 gaps = semgrep_coverage_gaps(semgrep_report) if isinstance(semgrep_report, dict) else []
@@ -897,7 +912,7 @@ def async_scan_task(
                     mark_tool("Semgrep", "failed", detail="incomplete coverage: " + "; ".join(gaps[:5]),
                               return_code=return_code)
                 elif return_code == 0 and isinstance(semgrep_report, dict):
-                    mark_tool("Semgrep", "completed", return_code=return_code)
+                    mark_tool("Semgrep", "completed", detail="sandboxed" if sandbox else None, return_code=return_code)
                 else:
                     write_json(semgrep_report_path, {"results": []})
                     mark_tool("Semgrep", "failed", detail="scanner did not produce a valid report", return_code=return_code)
@@ -927,17 +942,20 @@ def async_scan_task(
                     secrets_target,
                 ]
                 publish_job_event(job_id, "log", {"text": f"[Secrets] Executing detect-secrets on {target_path}", "color": "var(--text-muted)"})
-                with secrets_report_path.open("w") as report_file:
-                    completed = run_bounded_subprocess(
-                        secrets_cmd,
-                        cwd=secrets_root,
-                        stdout_sink=report_file,
-                        timeout=120,
-                        env=scanner_subprocess_environment(),
-                    )
+                if sandbox:
+                    completed = run_in_sandbox(secrets_cmd, target_path, secrets_report_path, timeout=120)
+                else:
+                    with secrets_report_path.open("w") as report_file:
+                        completed = run_bounded_subprocess(
+                            secrets_cmd,
+                            cwd=secrets_root,
+                            stdout_sink=report_file,
+                            timeout=120,
+                            env=scanner_subprocess_environment(),
+                        )
                 secrets_report = load_json_report(secrets_report_path)
                 if completed.returncode == 0 and isinstance(secrets_report, dict):
-                    mark_tool("Secrets", "completed", return_code=completed.returncode)
+                    mark_tool("Secrets", "completed", detail="sandboxed" if sandbox else None, return_code=completed.returncode)
                     publish_job_event(job_id, "log", {"text": "[Secrets] Scan complete.", "color": "var(--primary)"})
                 else:
                     write_json(secrets_report_path, {"results": {}})

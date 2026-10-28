@@ -53,6 +53,7 @@ from .scan_engine import (
     build_ruff_command,
 )
 from .scan_status import ToolStatusTracker
+from .scanner_sandbox import run_in_sandbox, sandbox_enabled
 from .scanners import (
     configure_semgrep_environment,
     find_runtime_executable,
@@ -167,11 +168,22 @@ def run_scanner_command(
     timeout: int = DEFAULT_TOOL_TIMEOUT,
     label: str = "Scanner",
     cwd: Path | None = None,
+    sandbox_target: Path | None = None,
+    sandbox_rules: Path | None = None,
 ) -> int:
     try:
         if output_path is not None and stdout_output_path is not None:
             raise ValueError("Choose one scanner output transport.")
-        if stdout_output_path is not None:
+        if stdout_output_path is not None and sandbox_target is not None:
+            result = run_in_sandbox(
+                command,
+                sandbox_target,
+                stdout_output_path,
+                timeout=timeout,
+                rules=sandbox_rules,
+                accepted_return_codes=accepted_return_codes,
+            )
+        elif stdout_output_path is not None:
             result = run_bounded_subprocess_stdout_to_file(
                 command,
                 stdout_output_path,
@@ -460,12 +472,16 @@ def _execute_scan(
         record_timing(timings, "OSV", time.perf_counter(), "skipped")
         mark_tool("OSV", "skipped", detail="dependency manifest not found")
 
+    sandbox = sandbox_enabled()
+    sandbox_target = Path(target_path) if sandbox else None
+    detail = "sandboxed" if sandbox else None
+
     # 2. Python SAST (Ruff)
     with timed_step(timings, "Ruff"):
         print("🔍 [SAST] Running Ruff (SAST) code security audits...")
         ruff_report_path = safe_output.file("ruff-report.json")
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
-        ruff_cmd = build_ruff_command(sys.executable, str(target_path), ruff_excludes)
+        ruff_cmd = build_ruff_command("python" if sandbox else sys.executable, str(target_path), ruff_excludes)
         ruff_report_path.unlink(missing_ok=True)
         ruff_return_code = _cli_func("run_scanner_command", run_scanner_command)(
             ruff_cmd,
@@ -473,10 +489,11 @@ def _execute_scan(
             accepted_return_codes={0, 1},
             timeout=tool_timeout,
             label="Ruff",
+            sandbox_target=sandbox_target,
         )
         ruff_report = read_json(ruff_report_path)
         if ruff_return_code in {0, 1} and isinstance(ruff_report, list):
-            mark_tool("Ruff", "completed", return_code=ruff_return_code)
+            mark_tool("Ruff", "completed", detail=detail, return_code=ruff_return_code)
         else:
             write_json(ruff_report_path, [], safe_output=safe_output)
             mark_tool(
@@ -491,7 +508,7 @@ def _execute_scan(
     semgrep_report_path = safe_output.file("semgrep-report.json")
     semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
 
-    semgrep_bin = find_runtime_executable("semgrep")
+    semgrep_bin = "semgrep" if sandbox else find_runtime_executable("semgrep")
     if fast:
         print("ℹ️  [SAST:Semgrep] Fast mode enabled, skipping Semgrep rule check.")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
@@ -523,6 +540,8 @@ def _execute_scan(
                 stdout_output_path=semgrep_report_path,
                 timeout=tool_timeout,
                 label="Semgrep",
+                sandbox_target=sandbox_target,
+                sandbox_rules=semgrep_rules_path,
             )
             semgrep_report = read_json(semgrep_report_path)
             gaps = semgrep_coverage_gaps(semgrep_report) if isinstance(semgrep_report, dict) else []
@@ -530,7 +549,7 @@ def _execute_scan(
                 mark_tool("Semgrep", "failed", detail="incomplete coverage: " + "; ".join(gaps[:5]),
                           return_code=semgrep_return_code)
             elif semgrep_return_code == 0 and isinstance(semgrep_report, dict):
-                mark_tool("Semgrep", "completed", return_code=semgrep_return_code)
+                mark_tool("Semgrep", "completed", detail=detail, return_code=semgrep_return_code)
             else:
                 write_json(semgrep_report_path, {"results": []}, safe_output=safe_output)
                 mark_tool(
@@ -559,7 +578,7 @@ def _execute_scan(
         pass
     secrets_root, secrets_target = detect_secrets_target(target_path)
     secrets_cmd = [
-        sys.executable,
+        "python" if sandbox else sys.executable,
         "-I",
         "-m",
         "detect_secrets",
@@ -574,18 +593,27 @@ def _execute_scan(
     with timed_step(timings, "Secrets"):
         secrets_raw_path = safe_output.file("secrets-report.raw.json")
         try:
-            with secrets_raw_path.open("w") as f:
+            if sandbox:
                 secrets_return_code = _cli_func("run_scanner_command", run_scanner_command)(
                     secrets_cmd,
-                    stdout=f,
+                    stdout_output_path=secrets_raw_path,
                     timeout=tool_timeout,
                     label="Secrets",
-                    cwd=secrets_root,
+                    sandbox_target=sandbox_target,
                 )
+            else:
+                with secrets_raw_path.open("w") as f:
+                    secrets_return_code = _cli_func("run_scanner_command", run_scanner_command)(
+                        secrets_cmd,
+                        stdout=f,
+                        timeout=tool_timeout,
+                        label="Secrets",
+                        cwd=secrets_root,
+                    )
             secrets_report = read_json(secrets_raw_path)
             if secrets_return_code == 0 and isinstance(secrets_report, dict):
                 write_json(secrets_report_path, secrets_report, safe_output=safe_output)
-                mark_tool("Secrets", "completed", return_code=secrets_return_code)
+                mark_tool("Secrets", "completed", detail=detail, return_code=secrets_return_code)
             else:
                 write_json(secrets_report_path, {"results": {}}, safe_output=safe_output)
                 mark_tool(
