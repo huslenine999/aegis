@@ -293,6 +293,25 @@ def test_findings_summary_includes_accepted_risk_and_excludes_bac_blockers(tmp_p
     assert page["summary"] == {"open": 3, "blockers": 2}
 
 
+def test_codeql_findings_in_test_folders_are_marked_and_not_counted_as_blockers(tmp_path, monkeypatch):
+    project_id = configure_database(tmp_path, monkeypatch)
+    run_id = create_run(project_id, "test-code")
+    findings.sync_findings(run_id, {"ruff": [ruff_result(str(index))["ruff"][0] for index in range(3)]})
+    with database.get_connection() as connection:
+        records = connection.execute("SELECT id FROM security_findings ORDER BY id").fetchall()
+        connection.executemany("UPDATE security_findings SET tool = 'CodeQL', path = ? WHERE id = ?", [
+            ("tests/test_db.py", records[0][0]), ("app/db.py", records[1][0]), ("tests/db.py", records[2][0]),
+        ])
+        connection.execute("UPDATE security_findings SET tool = 'Ruff' WHERE id = ?", (records[2][0],))
+    page = project_routes.project_findings(
+        project_id, principal=SimpleNamespace(user_id=10, role="operator", tenant_id=1),
+    )
+    assert {item["path"]: item["test_code"] for item in page["findings"]} == {
+        "tests/test_db.py": True, "app/db.py": False, "tests/db.py": False,
+    }
+    assert page["summary"] == {"open": 3, "blockers": 2}
+
+
 @pytest.mark.parametrize("prior_run_count", (1, 2))
 def test_findings_reconciliation_loads_reports_and_provenance_once(tmp_path, monkeypatch, prior_run_count):
     project_id = configure_database(tmp_path, monkeypatch)

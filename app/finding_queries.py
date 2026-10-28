@@ -1,6 +1,12 @@
 from typing import Any
 
 from . import database
+from .scan_engine import is_test_path
+
+
+def _is_test_code(tool: str, path: str | None) -> bool:
+    """Deep (CodeQL) findings in test folders show but never block."""
+    return tool == "CodeQL" and path is not None and is_test_path(path)
 
 
 FINDING_STATUSES = {"open", "acknowledged", "accepted", "false_positive", "resolved"}
@@ -76,7 +82,8 @@ def _read_findings(connection, where: str, parameters: list[Any], limit: int, of
         {
             "id": int(row[0]), "fingerprint": row[1], "tool": row[2],
             "rule_id": row[3], "title": row[4], "severity": row[5],
-            "path": row[6], "line_number": row[7], "status": row[8],
+            "path": row[6], "test_code": _is_test_code(row[2], row[6]),
+            "line_number": row[7], "status": row[8],
             "owner_id": int(row[9]) if row[9] is not None else None,
             "owner": row[10], "due_at": row[11], "ticket_url": row[12],
             "resolution_note": row[13], "accepted_until": row[14],
@@ -123,14 +130,17 @@ def query_findings_page(
         f"""SELECT COUNT(*) FROM security_findings f
             LEFT JOIN auth_users u ON u.id = f.owner_id WHERE {where}""", tuple(parameters),
     ).fetchone()[0]
-    summary = connection.execute(
-        """SELECT COUNT(*),
-                  COUNT(CASE WHEN severity IN ('HIGH', 'CRITICAL') AND tool != 'BAC' THEN 1 END)
-           FROM security_findings
-           WHERE project_id = ? AND status NOT IN ('resolved', 'false_positive')""",
+    open_count = connection.execute(
+        "SELECT COUNT(*) FROM security_findings WHERE project_id = ? AND status NOT IN ('resolved', 'false_positive')",
         (project_id,),
-    ).fetchone()
+    ).fetchone()[0]
+    blockers = sum(not _is_test_code(tool, path) for tool, path in connection.execute(
+        """SELECT tool, path FROM security_findings
+           WHERE project_id = ? AND status NOT IN ('resolved', 'false_positive')
+                 AND severity IN ('HIGH', 'CRITICAL') AND tool != 'BAC'""",
+        (project_id,),
+    ).fetchall())
     return {
         "findings": records, "total": int(total), "limit": limit, "offset": offset,
-        "summary": {"open": int(summary[0]), "blockers": int(summary[1])},
+        "summary": {"open": int(open_count), "blockers": blockers},
     }
