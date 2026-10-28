@@ -24,6 +24,7 @@ from app.findings import (
     strip_baseline_findings,
 )
 from app.safe_output import SafeOutputRoot
+from app.scan_engine import is_test_path
 from app.version import get_package_version
 from app.resource_budgets import (
     ResourceLimitError,
@@ -432,9 +433,10 @@ def analyze_codeql(report: Any, fail_on: set[str] | None = None) -> Dict[str, An
             **item,
             "test_id": item["rule_id"],
             "severity": severity,
+            "test_code": is_test_path(item["filename"]),
         }))
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
-    blocking = [item for item in findings if item["severity"] in threshold]
+    blocking = [item for item in findings if item["severity"] in threshold and not item["test_code"]]
     return {
         "tool": "CodeQL", "total_issues": len(findings),
         "blocking_issues": len(blocking),

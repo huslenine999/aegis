@@ -40,6 +40,29 @@ def test_active_report_set_ignores_retired_scanners_and_keeps_codeql_full_findin
     assert len(analyzed["examples"]) == 5
 
 
+def test_codeql_findings_in_test_folders_show_but_do_not_block():
+    def report(*filenames):
+        return {
+            "status": "completed",
+            "coverage": {"complete": True, "languages": ["python"], "isolation": "verified"},
+            "findings": [
+                {"rule_id": "py/sql-injection", "severity": "HIGH", "filename": name, "line_number": 1, "issue_text": "SQL injection", "code_flows": []}
+                for name in filenames
+            ],
+        }
+
+    only_tests = analyze_codeql(report("tests/test_db.py", "pkg/test/helper.py", "x/db_test.go"))
+    assert only_tests["status"] == "PASS"
+    assert only_tests["total_issues"] == 3
+    assert all(item["test_code"] for item in only_tests["findings"])
+
+    mixed = analyze_codeql(report("tests/test_db.py", "app/db.py", "app/tests_helper.py"))
+    assert mixed["status"] == "FAIL"
+    assert mixed["total_issues"] == 3
+    assert mixed["blocking_issues"] == 2
+    assert [item["test_code"] for item in mixed["findings"]] == [True, False, False]
+
+
 def test_codeql_incomplete_or_malformed_report_is_error():
     assert analyze_codeql(None)["status"] == "ERROR"
     assert analyze_codeql({"status": "completed", "findings": [], "coverage": {"complete": False}})["status"] == "ERROR"

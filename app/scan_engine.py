@@ -62,6 +62,13 @@ SEMGREP_DEFAULT_EXCLUDES = (
     ".git", ".svn", "_darcs", "build/", "vendor/", "dist/", "*.min.js", ".env/", ".tox/", "node_modules/",
     ".npm/", ".yarn/", ".venv/", "_opam/", "_build/", "_cargo/", "test/", "tests/", "testsuite/", "*_test.go",
 )
+# Mirrors the test paths above: Deep still scans them, but findings there do not block.
+TEST_DIRS = frozenset({"test", "tests", "testsuite"})
+
+
+def is_test_path(path: str) -> bool:
+    parts = Path(path).parts
+    return any(part in TEST_DIRS for part in parts[:-1]) or parts[-1].endswith("_test.go")
 
 
 def add_semgrep_excludes(

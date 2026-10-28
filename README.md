@@ -193,6 +193,8 @@ The web application turns one-off scanner output into an operational workflow:
 Deep scans are unavailable in the default local topology. `make codeql-setup`
 provisions the pinned local image and trusted query suites for the optional
 Deep worker. An unavailable runtime is an operational error, never a pass.
+CodeQL still scans `test/`, `tests/` and `testsuite/` folders (and `*_test.go`),
+but findings there are marked `test_code` and do not block a release.
 
 ## Scanner coverage
 
