@@ -54,10 +54,18 @@ def test_scanner_subprocess_is_terminated_when_output_budget_is_exceeded(
     assert result != 0
 
 
+def _without_child_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The 32-byte output limit also caps the child's file size, which would
+    # truncate its coverage data and make the final combine warn.
+    for name in [key for key in os.environ if key.startswith("COV_CORE")]:
+        monkeypatch.delenv(name)
+
+
 def test_scanner_file_output_is_bounded_and_partial_report_is_discarded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES", "32")
+    _without_child_coverage(monkeypatch)
     report = tmp_path / "report.json"
     command = [
         sys.executable,
@@ -81,6 +89,7 @@ def test_scanner_file_output_commits_only_a_bounded_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AEGIS_MAX_SUBPROCESS_OUTPUT_BYTES", "32")
+    _without_child_coverage(monkeypatch)
     report = tmp_path / "report.json"
     command = [
         sys.executable,

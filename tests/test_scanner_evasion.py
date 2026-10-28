@@ -4,6 +4,7 @@ Each trick here once worked against Aegis; the scan must still block on all of t
 """
 
 import json
+import os
 import sys
 
 import pytest
@@ -15,6 +16,9 @@ pytestmark = pytest.mark.skipif(not find_runtime_executable("semgrep"), reason="
 
 
 def test_hostile_repository_cannot_hide_code_from_the_standard_scan(tmp_path, monkeypatch):
+    # Semgrep and Ruff exit abruptly; a covered child would leave a malformed coverage shard.
+    for name in [key for key in os.environ if key.startswith("COV_CORE")]:
+        monkeypatch.delenv(name)
     target = tmp_path / "repo"
     (target / "ignored").mkdir(parents=True)
     # Ruff: inline noqa, a .ignore file, and .gitignore inside a git work tree.
