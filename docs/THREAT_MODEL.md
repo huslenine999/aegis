@@ -95,11 +95,18 @@ and prevent one project from reading another project's results.
   still misreport a run that is in progress, and its login can still write
   scan state for any in-flight run, because PostgreSQL grants are per column,
   not per row.
-- Scanner subprocesses run as the worker's user. The worker marks itself
-  non-dumpable (`PR_SET_DUMPABLE=0`) so they cannot read its environment or
-  memory through `/proc`, but there is no per-job OS sandbox (gVisor, seccomp,
-  or a separate user per job). A scanner exploit runs with the worker's
-  database login and network access.
+- By default, scanner subprocesses (Ruff, Semgrep, detect-secrets) run as the
+  worker's user. The worker marks itself non-dumpable (`PR_SET_DUMPABLE=0`) so
+  they cannot read its environment or memory through `/proc`, but a scanner
+  exploit then runs with the worker's database login and network access.
+  Setting `AEGIS_SANDBOX_SCANNERS=true` with a digest-pinned
+  `AEGIS_SCANNER_IMAGE` (`make scanner-setup`) runs each of the three in its own
+  offline, read-only, capability-free container with the source copied in over
+  stdin, like CodeQL. It needs the Docker socket, so in Compose it applies to
+  the `deep-worker` (Deep scans) only; the default worker does not mount the
+  socket and, if the flag is set there, scans fail closed. The supervisor that
+  holds the socket and the database login is still trusted, and there is no
+  gVisor or seccomp layer against a container escape.
 - A database superuser can disable triggers or replace both audit data and the
   application-held audit key. Aegis exports chain-head checkpoints
   (`/api/admin/audit/checkpoint`) that detect truncation and rollback when

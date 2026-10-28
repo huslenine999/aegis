@@ -101,12 +101,15 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    and a pinned real-repository inventory are in `benchmarks/results/`. The
    remaining work is a second-reviewer triage and labels for the training
    labs.
-5. **Per-job OS sandbox.** The last open piece of F06. Signing key, GitHub
-   credentials, and database roles are split out (signer, `github-broker`,
-   per-service PostgreSQL logins), but scanner subprocesses still run as the
-   worker's user. Next step: gVisor or a seccomp profile per job, tested on the
-   target host. See the 2026-10-16 follow-up table in
-   `docs/research/CAPSTONE_REVIEW.md`.
+5. **Per-job OS sandbox (F06).** Ruff, Semgrep and detect-secrets now run in an
+   offline scanner container when `AEGIS_SANDBOX_SCANNERS=true` and
+   `AEGIS_SCANNER_IMAGE` is set (`make scanner-setup`;
+   `docs/research/SCANNER_SANDBOX_DESIGN.md`). Isolation probes:
+   `AEGIS_SCANNER_ISOLATION=1 pytest tests/integration/test_scanner_isolation.py`
+   (passed 2026-10-28, Docker 29.9.2, Mac). Open: only the Deep worker and CLI
+   have the Docker socket, so standard Compose scans stay unsandboxed; the
+   supervisor is still privileged; no gVisor/seccomp; record the image digest
+   per tool; re-run the browser/Compose flow with the flag on.
 6. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.
 7. **Held-out v3 done (2026-10-28).** Semgrep caught 13/14 with 0 false alarms,
