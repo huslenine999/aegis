@@ -197,3 +197,29 @@ Re-run the test after changes to the CodeQL image, Docker engine, or launch
 flags, and on any other host that runs Deep scans. The checks cover the
 analysis container only. The Deep worker that starts it still holds database,
 signing, and Docker-daemon access (F06).
+
+## CodeQL held-out corpus v3 (`codeql-heldout-v3`), 2026-10-28
+
+Status: **v3 corpus frozen, not yet run.**
+
+`benchmarks/codeql-heldout-v3.json` has 28 cases: 14 vulnerable and 14 safe
+twins. Each twin keeps the framework and data source and removes the dangerous
+flow with an allowlist lookup, escaping, a parameterized query, a `realpath`
+prefix check, or an argument list instead of a shell string.
+
+| Class | Python (aiohttp, Starlette) | JavaScript (Express, Koa) |
+|---|---|---|
+| Path traversal | `py/path-injection` | `js/path-injection` |
+| SSRF | `py/full-ssrf` | `js/request-forgery` |
+| Reflected XSS | `py/reflective-xss` | `js/reflected-xss` |
+| Open redirect | `py/url-redirection` | `js/server-side-unvalidated-url-redirection` |
+| SQL injection | `py/sql-injection` (`.format()` helper, `%` helper) | `js/sql-injection` |
+| Command injection | `py/command-line-injection` | `js/command-line-injection` |
+| Unsafe deserialization | `py/unsafe-deserialization` | |
+
+SHA-256: `45eab3bc6103e2616fd4e511e38ddd5763cd1ca7351ca5582b2acfb878d34436`
+
+No scanner has been run on this corpus. The Semgrep rules for these classes
+are written in a separate session that does not read the corpus. The corpus
+was written without opening `rules/semgrep_rules.yaml`, the Semgrep fixtures,
+`tests/test_semgrep_rules.py` or any earlier corpus.

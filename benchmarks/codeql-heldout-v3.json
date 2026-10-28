@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "description": "Held-out v3: 14 vulnerable cases and 14 safe twins (same framework and data source, dangerous flow removed). Python on aiohttp and Starlette, JavaScript on Express and Koa. Written before Semgrep rule work for v3; frozen before any scanner run.",
+  "cases": [
+    {
+      "id": "aiohttp_download-vuln",
+      "file": "py/aiohttp_download_vuln.py",
+      "expected_rule_id": "py/path-injection",
+      "source": "import os\nfrom aiohttp import web\n\nBASE_DIR = \"/srv/reports\"\n\n\nasync def download(request):\n    name = request.query[\"name\"]\n    path = os.path.join(BASE_DIR, name)\n    with open(path, \"rb\") as handle:\n        return web.Response(body=handle.read())\n\n\napp = web.Application()\napp.add_routes([web.get(\"/download\", download)])\n"
+    },
+    {
+      "id": "aiohttp_download-safe",
+      "file": "py/aiohttp_download_safe.py",
+      "expected_rule_id": null,
+      "source": "import os\nfrom aiohttp import web\n\nBASE_DIR = os.path.realpath(\"/srv/reports\")\n\n\nasync def download(request):\n    name = request.query[\"name\"]\n    path = os.path.realpath(os.path.join(BASE_DIR, name))\n    if not path.startswith(BASE_DIR + os.sep):\n        raise web.HTTPForbidden()\n    with open(path, \"rb\") as handle:\n        return web.Response(body=handle.read())\n\n\napp = web.Application()\napp.add_routes([web.get(\"/download\", download)])\n"
+    },
+    {
+      "id": "starlette_proxy-vuln",
+      "file": "py/starlette_proxy_vuln.py",
+      "expected_rule_id": "py/full-ssrf",
+      "source": "import httpx\nfrom starlette.applications import Starlette\nfrom starlette.responses import PlainTextResponse\nfrom starlette.routing import Route\n\n\nasync def preview(request):\n    target = request.query_params[\"url\"]\n    async with httpx.AsyncClient() as client:\n        upstream = await client.get(target)\n    return PlainTextResponse(upstream.text[:2000])\n\n\napp = Starlette(routes=[Route(\"/preview\", preview)])\n"
+    },
+    {
+      "id": "starlette_proxy-safe",
+      "file": "py/starlette_proxy_safe.py",
+      "expected_rule_id": null,
+      "source": "import httpx\nfrom starlette.applications import Starlette\nfrom starlette.responses import PlainTextResponse\nfrom starlette.routing import Route\n\nUPSTREAMS = {\n    \"status\": \"https://status.example.com/api/summary\",\n    \"docs\": \"https://docs.example.com/api/index\",\n}\n\n\nasync def preview(request):\n    target = UPSTREAMS.get(request.query_params.get(\"source\", \"\"))\n    if target is None:\n        return PlainTextResponse(\"unknown source\", status_code=400)\n    async with httpx.AsyncClient() as client:\n        upstream = await client.get(target)\n    return PlainTextResponse(upstream.text[:2000])\n\n\napp = Starlette(routes=[Route(\"/preview\", preview)])\n"
+    },
+    {
+      "id": "starlette_greeting-vuln",
+      "file": "py/starlette_greeting_vuln.py",
+      "expected_rule_id": "py/reflective-xss",
+      "source": "from starlette.applications import Starlette\nfrom starlette.responses import HTMLResponse\nfrom starlette.routing import Route\n\n\nasync def greeting(request):\n    name = request.query_params.get(\"name\", \"guest\")\n    return HTMLResponse(f\"<html><body><h1>Welcome back, {name}</h1></body></html>\")\n\n\napp = Starlette(routes=[Route(\"/welcome\", greeting)])\n"
+    },
+    {
+      "id": "starlette_greeting-safe",
+      "file": "py/starlette_greeting_safe.py",
+      "expected_rule_id": null,
+      "source": "import html\n\nfrom starlette.applications import Starlette\nfrom starlette.responses import HTMLResponse\nfrom starlette.routing import Route\n\n\nasync def greeting(request):\n    name = html.escape(request.query_params.get(\"name\", \"guest\"))\n    return HTMLResponse(f\"<html><body><h1>Welcome back, {name}</h1></body></html>\")\n\n\napp = Starlette(routes=[Route(\"/welcome\", greeting)])\n"
+    },
+    {
+      "id": "starlette_login_redirect-vuln",
+      "file": "py/starlette_login_redirect_vuln.py",
+      "expected_rule_id": "py/url-redirection",
+      "source": "from starlette.applications import Starlette\nfrom starlette.responses import RedirectResponse\nfrom starlette.routing import Route\n\n\nasync def after_login(request):\n    destination = request.query_params.get(\"next\", \"/\")\n    return RedirectResponse(destination)\n\n\napp = Starlette(routes=[Route(\"/after-login\", after_login)])\n"
+    },
+    {
+      "id": "starlette_login_redirect-safe",
+      "file": "py/starlette_login_redirect_safe.py",
+      "expected_rule_id": null,
+      "source": "from starlette.applications import Starlette\nfrom starlette.responses import RedirectResponse\nfrom starlette.routing import Route\n\nDESTINATIONS = {\"home\": \"/\", \"billing\": \"/account/billing\", \"profile\": \"/account/profile\"}\n\n\nasync def after_login(request):\n    destination = DESTINATIONS.get(request.query_params.get(\"next\", \"\"), \"/\")\n    return RedirectResponse(destination)\n\n\napp = Starlette(routes=[Route(\"/after-login\", after_login)])\n"
+    },
+    {
+      "id": "aiohttp_sql_format_helper-vuln",
+      "file": "py/aiohttp_sql_format_helper_vuln.py",
+      "expected_rule_id": "py/sql-injection",
+      "source": "import sqlite3\nfrom aiohttp import web\n\n\ndef find_accounts(connection, status):\n    query = \"SELECT id, email FROM accounts WHERE status = '{}'\".format(status)\n    return connection.execute(query).fetchall()\n\n\nasync def accounts(request):\n    connection = sqlite3.connect(\"app.db\")\n    rows = find_accounts(connection, request.query[\"status\"])\n    return web.json_response([{\"id\": row[0], \"email\": row[1]} for row in rows])\n\n\napp = web.Application()\napp.add_routes([web.get(\"/accounts\", accounts)])\n"
+    },
+    {
+      "id": "aiohttp_sql_format_helper-safe",
+      "file": "py/aiohttp_sql_format_helper_safe.py",
+      "expected_rule_id": null,
+      "source": "import sqlite3\nfrom aiohttp import web\n\n\ndef find_accounts(connection, status):\n    query = \"SELECT id, email FROM accounts WHERE status = ?\"\n    return connection.execute(query, (status,)).fetchall()\n\n\nasync def accounts(request):\n    connection = sqlite3.connect(\"app.db\")\n    rows = find_accounts(connection, request.query[\"status\"])\n    return web.json_response([{\"id\": row[0], \"email\": row[1]} for row in rows])\n\n\napp = web.Application()\napp.add_routes([web.get(\"/accounts\", accounts)])\n"
+    },
+    {
+      "id": "starlette_sql_percent_helper-vuln",
+      "file": "py/starlette_sql_percent_helper_vuln.py",
+      "expected_rule_id": "py/sql-injection",
+      "source": "from sqlalchemy import create_engine, text\nfrom starlette.applications import Starlette\nfrom starlette.responses import JSONResponse\nfrom starlette.routing import Route\n\nengine = create_engine(\"sqlite:///app.db\")\n\n\ndef search_orders(connection, customer):\n    statement = \"SELECT id, total FROM orders WHERE customer = '%s'\" % customer\n    return connection.execute(text(statement)).fetchall()\n\n\nasync def orders(request):\n    with engine.connect() as connection:\n        rows = search_orders(connection, request.query_params[\"customer\"])\n    return JSONResponse([{\"id\": row[0], \"total\": row[1]} for row in rows])\n\n\napp = Starlette(routes=[Route(\"/orders\", orders)])\n"
+    },
+    {
+      "id": "starlette_sql_percent_helper-safe",
+      "file": "py/starlette_sql_percent_helper_safe.py",
+      "expected_rule_id": null,
+      "source": "from sqlalchemy import create_engine, text\nfrom starlette.applications import Starlette\nfrom starlette.responses import JSONResponse\nfrom starlette.routing import Route\n\nengine = create_engine(\"sqlite:///app.db\")\n\n\ndef search_orders(connection, customer):\n    statement = text(\"SELECT id, total FROM orders WHERE customer = :customer\")\n    return connection.execute(statement, {\"customer\": customer}).fetchall()\n\n\nasync def orders(request):\n    with engine.connect() as connection:\n        rows = search_orders(connection, request.query_params[\"customer\"])\n    return JSONResponse([{\"id\": row[0], \"total\": row[1]} for row in rows])\n\n\napp = Starlette(routes=[Route(\"/orders\", orders)])\n"
+    },
+    {
+      "id": "aiohttp_ping-vuln",
+      "file": "py/aiohttp_ping_vuln.py",
+      "expected_rule_id": "py/command-line-injection",
+      "source": "import subprocess\nfrom aiohttp import web\n\n\nasync def ping(request):\n    host = request.query[\"host\"]\n    result = subprocess.run(\"ping -c 1 \" + host, shell=True, capture_output=True, text=True)\n    return web.Response(text=result.stdout)\n\n\napp = web.Application()\napp.add_routes([web.get(\"/ping\", ping)])\n"
+    },
+    {
+      "id": "aiohttp_ping-safe",
+      "file": "py/aiohttp_ping_safe.py",
+      "expected_rule_id": null,
+      "source": "import subprocess\nfrom aiohttp import web\n\n\nasync def ping(request):\n    host = request.query[\"host\"]\n    result = subprocess.run([\"ping\", \"-c\", \"1\", host], capture_output=True, text=True)\n    return web.Response(text=result.stdout)\n\n\napp = web.Application()\napp.add_routes([web.get(\"/ping\", ping)])\n"
+    },
+    {
+      "id": "starlette_import_session-vuln",
+      "file": "py/starlette_import_session_vuln.py",
+      "expected_rule_id": "py/unsafe-deserialization",
+      "source": "import pickle\n\nfrom starlette.applications import Starlette\nfrom starlette.responses import JSONResponse\nfrom starlette.routing import Route\n\n\nasync def import_session(request):\n    payload = await request.body()\n    session = pickle.loads(payload)\n    return JSONResponse({\"user\": session.get(\"user\")})\n\n\napp = Starlette(routes=[Route(\"/session/import\", import_session, methods=[\"POST\"])])\n"
+    },
+    {
+      "id": "starlette_import_session-safe",
+      "file": "py/starlette_import_session_safe.py",
+      "expected_rule_id": null,
+      "source": "import json\n\nfrom starlette.applications import Starlette\nfrom starlette.responses import JSONResponse\nfrom starlette.routing import Route\n\n\nasync def import_session(request):\n    payload = await request.body()\n    session = json.loads(payload)\n    return JSONResponse({\"user\": session.get(\"user\")})\n\n\napp = Starlette(routes=[Route(\"/session/import\", import_session, methods=[\"POST\"])])\n"
+    },
+    {
+      "id": "express_user_lookup-vuln",
+      "file": "js/express_user_lookup_vuln.js",
+      "expected_rule_id": "js/sql-injection",
+      "source": "const express = require(\"express\");\nconst { Pool } = require(\"pg\");\n\nconst pool = new Pool();\nconst app = express();\n\napp.get(\"/users\", async (req, res) => {\n  const result = await pool.query(\"SELECT id, email FROM users WHERE role = '\" + req.query.role + \"'\");\n  res.json(result.rows);\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_user_lookup-safe",
+      "file": "js/express_user_lookup_safe.js",
+      "expected_rule_id": null,
+      "source": "const express = require(\"express\");\nconst { Pool } = require(\"pg\");\n\nconst pool = new Pool();\nconst app = express();\n\napp.get(\"/users\", async (req, res) => {\n  const result = await pool.query(\"SELECT id, email FROM users WHERE role = $1\", [req.query.role]);\n  res.json(result.rows);\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_search_page-vuln",
+      "file": "js/express_search_page_vuln.js",
+      "expected_rule_id": "js/reflected-xss",
+      "source": "const express = require(\"express\");\nconst app = express();\n\napp.get(\"/search\", (req, res) => {\n  res.send(\"<h2>Results for \" + req.query.q + \"</h2><ul></ul>\");\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_search_page-safe",
+      "file": "js/express_search_page_safe.js",
+      "expected_rule_id": null,
+      "source": "const express = require(\"express\");\nconst escapeHtml = require(\"escape-html\");\nconst app = express();\n\napp.get(\"/search\", (req, res) => {\n  res.send(\"<h2>Results for \" + escapeHtml(String(req.query.q)) + \"</h2><ul></ul>\");\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_send_document-vuln",
+      "file": "js/express_send_document_vuln.js",
+      "expected_rule_id": "js/path-injection",
+      "source": "const express = require(\"express\");\nconst path = require(\"path\");\nconst app = express();\n\nconst DOCS = path.join(__dirname, \"documents\");\n\napp.get(\"/document\", (req, res) => {\n  res.sendFile(path.join(DOCS, req.query.file));\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_send_document-safe",
+      "file": "js/express_send_document_safe.js",
+      "expected_rule_id": null,
+      "source": "const express = require(\"express\");\nconst path = require(\"path\");\nconst app = express();\n\nconst DOCS = path.join(__dirname, \"documents\");\nconst FILES = { terms: \"terms.pdf\", privacy: \"privacy.pdf\" };\n\napp.get(\"/document\", (req, res) => {\n  const file = FILES[req.query.doc];\n  if (!file) {\n    return res.status(404).end();\n  }\n  res.sendFile(path.join(DOCS, file));\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_fetch_feed-vuln",
+      "file": "js/express_fetch_feed_vuln.js",
+      "expected_rule_id": "js/request-forgery",
+      "source": "const express = require(\"express\");\nconst axios = require(\"axios\");\nconst app = express();\n\napp.get(\"/feed\", async (req, res) => {\n  const upstream = await axios.get(req.query.url);\n  res.json(upstream.data);\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "express_fetch_feed-safe",
+      "file": "js/express_fetch_feed_safe.js",
+      "expected_rule_id": null,
+      "source": "const express = require(\"express\");\nconst axios = require(\"axios\");\nconst app = express();\n\nconst FEEDS = {\n  news: \"https://feeds.example.com/news.json\",\n  releases: \"https://feeds.example.com/releases.json\",\n};\n\napp.get(\"/feed\", async (req, res) => {\n  const feed = FEEDS[req.query.name];\n  if (!feed) {\n    return res.status(400).end();\n  }\n  const upstream = await axios.get(feed);\n  res.json(upstream.data);\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "koa_exit_redirect-vuln",
+      "file": "js/koa_exit_redirect_vuln.js",
+      "expected_rule_id": "js/server-side-unvalidated-url-redirection",
+      "source": "const Koa = require(\"koa\");\nconst app = new Koa();\n\napp.use(async (ctx) => {\n  if (ctx.path === \"/exit\") {\n    ctx.redirect(ctx.query.to);\n  }\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "koa_exit_redirect-safe",
+      "file": "js/koa_exit_redirect_safe.js",
+      "expected_rule_id": null,
+      "source": "const Koa = require(\"koa\");\nconst app = new Koa();\n\nconst EXITS = { docs: \"https://docs.example.com\", help: \"https://help.example.com\" };\n\napp.use(async (ctx) => {\n  if (ctx.path === \"/exit\") {\n    ctx.redirect(EXITS[ctx.query.to] || \"/\");\n  }\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "koa_traceroute-vuln",
+      "file": "js/koa_traceroute_vuln.js",
+      "expected_rule_id": "js/command-line-injection",
+      "source": "const Koa = require(\"koa\");\nconst { exec } = require(\"child_process\");\nconst app = new Koa();\n\napp.use(async (ctx) => {\n  if (ctx.path === \"/trace\") {\n    ctx.body = await new Promise((resolve, reject) => {\n      exec(\"traceroute -m 5 \" + ctx.query.host, (err, stdout) => (err ? reject(err) : resolve(stdout)));\n    });\n  }\n});\n\napp.listen(3000);\n"
+    },
+    {
+      "id": "koa_traceroute-safe",
+      "file": "js/koa_traceroute_safe.js",
+      "expected_rule_id": null,
+      "source": "const Koa = require(\"koa\");\nconst { execFile } = require(\"child_process\");\nconst app = new Koa();\n\napp.use(async (ctx) => {\n  if (ctx.path === \"/trace\") {\n    ctx.body = await new Promise((resolve, reject) => {\n      execFile(\"traceroute\", [\"-m\", \"5\", ctx.query.host], (err, stdout) => (err ? reject(err) : resolve(stdout)));\n    });\n  }\n});\n\napp.listen(3000);\n"
+    }
+  ]
+}
