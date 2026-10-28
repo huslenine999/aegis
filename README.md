@@ -509,29 +509,28 @@ python scripts/pilot_readiness.py \
   --output .aegis/pilot-readiness.json
 ```
 
-The last local validation on 2026-10-26 recorded 1,152 passing Python tests and
-8 skipped opt-in or root-only tests (Compose, Deep isolation, PostgreSQL unless
-`AEGIS_TEST_POSTGRES_URL` is set), passing Ruff and mypy checks, and 89.4%
-coverage over the configured modules (not whole-project coverage). The suite
-includes property-based fuzz tests of untrusted-input parsers, an API monkey
-test across every route and role, and an end-to-end scan of a repository that
-tries known scanner-evasion tricks. The PostgreSQL integration tests, including
-each service's least-privilege login, pass on PostgreSQL 16. All 33 browser
-tests pass. A live offline CodeQL scan found SQL injection
-in a controlled Python fixture.
+The test suite covers property-based fuzz tests of untrusted-input parsers, an
+API monkey test across every route and role, an end-to-end scan of a repository
+that tries known scanner-evasion tricks, and browser tests for setup, access
+control, the dashboard, accessibility, and output escaping. CI runs it, with
+Ruff, mypy, and a coverage gate, on every pull request and release. The
+PostgreSQL integration tests, including each service's least-privilege login,
+pass on PostgreSQL 16.
 
-The existing 30-case benchmark exercises the Quick Python scanner. Seven
-browser tests cover setup, access control, the dashboard, accessibility, and
-output escaping. Two held-out CodeQL corpora have been run. On the fresh
-28-case v2 corpus, CodeQL 2.27.0 found 14/14 vulnerable cases, and its only
-alerts on safe cases were two unrelated rate-limiting alerts. The Aegis Semgrep
-rules found 7/14 with 3 false alarms. A pinned seven-repository inventory and
-a first triage are also recorded
-([results](benchmarks/results/README.md)). Docker-level isolation probes of the
-CodeQL analysis container pass with the pinned image on the developer's Mac,
-and on 2026-10-26 the authenticated Deep browser flow and the Docker pilot
-rehearsal (backup, restore, restart) passed there too (Docker 29.9.2, image
-`aegis-codeql@sha256:cdb756b8…`). The Deep worker that starts the container is still privileged
+Benchmark results are in [`benchmarks/results/`](benchmarks/results/README.md):
+
+- The 30-case release corpus (`benchmarks/corpus-v1.json`) exercises the Quick
+  Python scanner, and every release build must pass it.
+- Held-out CodeQL corpus v2, 28 cases: CodeQL 2.27.0 found 14/14 vulnerable
+  cases, and its only alerts on safe cases were two unrelated rate-limiting
+  alerts. The Aegis Semgrep rules found 7/14 with 3 false alarms.
+- Held-out corpus v3, 28 cases: the Aegis Semgrep rules found 13/14 with 0
+  false alarms, and CodeQL found 9/14. The Koa rules changed after this run,
+  so v3 is now a regression set.
+- A pinned seven-repository inventory and a first triage.
+
+Docker-level isolation probes of the CodeQL analysis container pass with the
+pinned image (`aegis-codeql@sha256:cdb756b8…`). The Deep worker that starts the container is still privileged
 (F06). See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.
