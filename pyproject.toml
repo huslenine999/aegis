@@ -7,7 +7,7 @@ name = "aegis-security-console"
 version = "2.6.0"
 description = "Private, explainable release-security scanner and self-hosted workbench"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = "MIT"
 authors = [
   { name = "Khuslen Gan-Ochir" }
@@ -29,7 +29,7 @@ dependencies = [
   "MarkupSafe==2.1.5",
   "ruff==0.15.17",
   "detect-secrets==1.5.0",
-  "yara-python==4.5.0",
+  "yara-python==4.5.4",
   "pipdeptree==2.35.3",
   "fastapi==0.138.1",
   "uvicorn==0.49.0",
@@ -37,7 +37,7 @@ dependencies = [
   "rq==2.1.0",
   "python-multipart==0.0.31",
   "websockets==16.0",
-  "psycopg[binary,pool]==3.2.10",
+  "psycopg[binary,pool]==3.3.6",
   "cryptography==50.0.0",
   "boto3==1.43.52",
   "PyJWT[crypto]==2.15.0",
