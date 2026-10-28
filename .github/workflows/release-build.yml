@@ -118,8 +118,9 @@ jobs:
       - name: Smoke-test wheel entry point
         shell: bash
         run: |
-          python -m venv --system-site-packages /tmp/aegis-wheel-smoke
-          /tmp/aegis-wheel-smoke/bin/python -m pip install --no-deps --force-reinstall dist/*.whl
+          # Install with dependencies, as pipx does; uv sync put them in .venv, not system Python.
+          python -m venv /tmp/aegis-wheel-smoke
+          /tmp/aegis-wheel-smoke/bin/python -m pip install dist/*.whl
           /tmp/aegis-wheel-smoke/bin/aegis version
 
       - name: Generate release checksums
