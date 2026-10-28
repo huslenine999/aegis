@@ -4,6 +4,13 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pipx install` failed on Python 3.14 and later: `psycopg-binary` 3.2.10 and
+  `yara-python` 4.5.0 have no wheels there. psycopg is now 3.3.6, yara-python
+  4.5.4 (adds Python 3.13), and `requires-python` is `>=3.11,<3.14`, so newer
+  Pythons get a clear version error instead of a failed C build.
+
 ## [2.6.0] - 2026-10-28
 
 ### Added

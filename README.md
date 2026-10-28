@@ -35,7 +35,7 @@ Aegis provides one workflow:
 
 | Goal | Start here | Requirements |
 | --- | --- | --- |
-| Try the scanner | [CLI evaluation](#cli-evaluation) | Python 3.11+ |
+| Try the scanner | [CLI evaluation](#cli-evaluation) | Python 3.11–3.13 |
 | Run the complete workbench locally | [Local workbench](#local-workbench) | Source checkout, Docker, Compose v2 |
 | Gate a repository in CI | [GitHub Action](#github-action) | A GitHub workflow |
 | Operate an internal pilot | [Production pilot](#production-pilot) | DNS, TLS, PostgreSQL, Redis, workers, backups |
@@ -47,6 +47,9 @@ Install a published Aegis release in an isolated environment:
 ```bash
 pipx install aegis-security-console
 ```
+
+Aegis needs Python 3.11–3.13 (`yara-python` has no wheels for newer versions).
+If pipx defaults to a newer Python, add `--python python3.13`.
 
 For Standard scans with Semgrep included, install the scanner extra:
 
