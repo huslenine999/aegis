@@ -81,7 +81,7 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    planned, not implemented; the runner still accepts only its own loopback lab.
    Training runs and passing tests are not final results.
 2. **Drop the semgrep-bound dependency suppressions.** Both CI pins point at
-   reviewed commit `b96e341` (2026-10-27). `certifi` is upgraded. `mcp` 1.29.0
+   reviewed commit `bcca71d` (2026-10-28). `certifi` is upgraded. `mcp` 1.29.0
    (GHSA-84m7-p3x7-pcfv, GHSA-5h93-6whr-6q8j, GHSA-rwrf-2pqf-9j8j,
    GHSA-w4fh-qvv9-3v23) and `opentelemetry-api` 1.37.0 (GHSA-xcq7-p3pf-p88h)
    are suppressed in `aegis.yml` (`AEGIS-RISK-017` to `-021`, expiring
