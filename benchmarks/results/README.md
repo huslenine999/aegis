@@ -200,7 +200,7 @@ signing, and Docker-daemon access (F06).
 
 ## CodeQL held-out corpus v3 (`codeql-heldout-v3`), 2026-10-28
 
-Status: **v3 corpus frozen, not yet run.**
+Status: **run once on 2026-10-28; no rules changed afterwards.**
 
 `benchmarks/codeql-heldout-v3.json` has 28 cases: 14 vulnerable and 14 safe
 twins. Each twin keeps the framework and data source and removes the dangerous
@@ -219,7 +219,47 @@ prefix check, or an argument list instead of a shell string.
 
 SHA-256: `45eab3bc6103e2616fd4e511e38ddd5763cd1ca7351ca5582b2acfb878d34436`
 
-No scanner has been run on this corpus. The Semgrep rules for these classes
-are written in a separate session that does not read the corpus. The corpus
-was written without opening `rules/semgrep_rules.yaml`, the Semgrep fixtures,
-`tests/test_semgrep_rules.py` or any earlier corpus.
+The corpus was written without opening `rules/semgrep_rules.yaml`, the Semgrep
+fixtures, `tests/test_semgrep_rules.py` or any earlier corpus. The Semgrep rules
+for these classes were written in a separate session that did not read the
+corpus.
+
+How it was run:
+
+- CodeQL CLI 2.27.0 through the production isolated runner (offline container,
+  `aegis-codeql@sha256:cdb756b8…`, isolation verified), same suites as v1 and v2.
+- Semgrep 1.179.0 with `rules/semgrep_rules.yaml` (`cdde3e04…`).
+- The `corpus_sha256` in the output matches the SHA-256 above.
+- Command:
+  `python scripts/run_codeql_benchmark.py --corpus benchmarks/codeql-heldout-v3.json --with-semgrep --output benchmarks/results/codeql-heldout-v3.2026-10-28.held-out.json`
+
+| Detector | Caught (of 14) | False alarms (of 14 safe) |
+| --- | ---: | ---: |
+| CodeQL, any alert counts | 9 | 2 |
+| CodeQL, target classes only | 9 | 0 |
+| Aegis Semgrep rules | 13 | 0 |
+| CodeQL + Semgrep | 14 | 2 |
+
+CodeQL's two false alarms are `js/missing-rate-limiting` on the safe Express
+routes `express_user_lookup-safe` and `express_send_document-safe`, as in v1 and
+v2. Counting target classes only, CodeQL + Semgrep has no false alarms.
+
+Misses:
+
+- CodeQL missed five Python cases, all Starlette: SSRF
+  (`starlette_proxy-vuln`), reflected XSS (`starlette_greeting-vuln`), open
+  redirect (`starlette_login_redirect-vuln`), SQL injection through a `%` helper
+  (`starlette_sql_percent_helper-vuln`) and unsafe deserialization
+  (`starlette_import_session-vuln`). Semgrep caught all five. Every aiohttp and
+  Express/Koa case that CodeQL was expected to catch, it caught.
+- Semgrep missed one case: `koa_exit_redirect-vuln`
+  (`js/server-side-unvalidated-url-redirection`). CodeQL caught it.
+- Semgrep caught `starlette_proxy-vuln` and `starlette_login_redirect-vuln`
+  through the generic `python-tainted-request` rule, not a class-specific rule.
+
+This is a single run. No rules changed after it, and the corpus is now used up
+for tuning: measure further rule changes on a new corpus.
+
+Files:
+
+- `codeql-heldout-v3.2026-10-28.held-out.json`: isolated runner plus Semgrep.

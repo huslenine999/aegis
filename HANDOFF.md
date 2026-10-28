@@ -109,11 +109,10 @@ Run everything: `make verify` (adds e2e; needs `npm ci` + `npx playwright instal
    `docs/research/CAPSTONE_REVIEW.md`.
 6. **Large modules.** `app/database.py` and `app/worker.py` are the next split
    candidates if merge conflicts become a problem.
-7. **Run held-out v3 once.** Semgrep rules for Python path traversal, SSRF,
-   reflected XSS and open redirect, Express SQL injection and XSS, and
-   `.format()` SQL in helpers are in `rules/semgrep_rules.yaml`. Rules are
-   frozen; run `codeql-heldout-v3.json` in a fresh session (SONNET_PLAN 6c) and
-   record the result without changing rules.
+7. **Held-out v3 done (2026-10-28).** Semgrep caught 13/14 with 0 false alarms,
+   CodeQL 9/14 (misses all Starlette), combined 14/14. Semgrep miss: Koa open
+   redirect. v3 is now a regression set; measure further rule changes on a
+   new corpus. See `benchmarks/results/README.md`.
 
 ## Environment gotchas
 
