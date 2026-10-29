@@ -542,7 +542,6 @@ def _required_token_scope(request: Request) -> str:
         path.startswith("/api/admin")
         or path.startswith("/api/users")
         or path.startswith("/api/tokens")
-        or path in {"/toggle-waf", "/save-waf-rules"}
     ):
         return "admin"
     if request.method not in {"GET", "HEAD", "OPTIONS"}:

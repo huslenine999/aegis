@@ -52,14 +52,12 @@ from ..projects import (
 )
 from ..scan_engine import ScanJobPayload
 from ..web_common import (
-    DEMO_LAB_ENABLED,
     SCAN_JOB_TIMEOUT_SECONDS,
     json_object,
     require_access,
     require_recent_access,
     templates,
 )
-from .. import web_common
 
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
@@ -126,7 +124,6 @@ def _enqueue_project_scan(
     payload = ScanJobPayload(
         job_id=job_id,
         target="project",
-        waf_enabled=web_common.WAF_ENABLED,
         scan_run_id=run_id,
         project_id=project["id"],
         requested_by=principal.user_id,
@@ -179,11 +176,7 @@ def _enqueue_project_scan(
 def projects_page(request: Request):
     if AUTH_REQUIRED and not principal_from_request(request):
         return RedirectResponse("/login", status_code=303)
-    return templates.TemplateResponse(
-        request,
-        "projects.html",
-        {"demo_lab_enabled": DEMO_LAB_ENABLED},
-    )
+    return templates.TemplateResponse(request, "projects.html")
 
 
 @router.get("/api/projects")

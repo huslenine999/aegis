@@ -300,3 +300,39 @@ def test_public_parser_translates_file_errors_and_rejects_unsupported_languages(
         codeql_scanner.parse_codeql_sarif(
             report, tmp_path, language="java" if case == "unsupported" else "python"
         )
+
+
+def test_imported_sarif_must_cover_every_language_and_gates_like_deep(tmp_path: Path) -> None:
+    from policy_engine import analyze_codeql
+
+    source = tmp_path / "repo"
+    (source / "src").mkdir(parents=True)
+    (source / "src" / "app.py").write_text("print(1)\n")
+    (source / "web.js").write_text("console.log(1)\n")
+    python = tmp_path / "python.sarif"
+    javascript = tmp_path / "javascript.sarif"
+    # GitHub code scanning names runs "/language:<name>/" and calls JavaScript/TypeScript "javascript".
+    python.write_text(json.dumps({"version": "2.1.0", "runs": [sarif_run(language="/language:python/", results=[sarif_result()])]}))
+    javascript.write_text(json.dumps({"version": "2.1.0", "runs": [sarif_run(language="/language:javascript/")]}))
+
+    with pytest.raises(codeql_scanner.CodeQLScanError, match="does not cover: javascript-typescript"):
+        codeql_scanner.import_codeql_sarif([python], source, tmp_path / "partial")
+
+    report = codeql_scanner.import_codeql_sarif([python, javascript], source, tmp_path / "out")
+
+    assert report["coverage"]["isolation"] == "imported"
+    assert report["coverage"]["languages"] == ["javascript-typescript", "python"]
+    assert [item["filename"] for item in report["findings"]] == ["src/app.py"]
+    assert json.loads((tmp_path / "out" / "codeql-report.json").read_text()) == report
+    assert analyze_codeql(report)["status"] == "FAIL"
+
+
+def test_imported_sarif_rejects_unknown_category(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "app.py").write_text("print(1)\n")
+    sarif = tmp_path / "go.sarif"
+    sarif.write_text(json.dumps({"version": "2.1.0", "runs": [sarif_run(language="/language:go")]}))
+
+    with pytest.raises(codeql_scanner.CodeQLScanError, match="category '/language:go'"):
+        codeql_scanner.import_codeql_sarif([sarif], source, tmp_path / "out")

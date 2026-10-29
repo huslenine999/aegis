@@ -4,7 +4,31 @@ All notable changes to the Aegis project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Suppressions can name one finding with `fingerprint:` instead of a whole
+  file and rule. The fingerprint hashes the tool, rule, repository-relative
+  path and flagged line text, so it survives line moves but not edits or
+  copies of the line. Scanner reports carry it as `aegis_occurrence`; the
+  `report.md` suppression example and SARIF `partialFingerprints` show it.
+- `aegis scan --codeql-sarif FILE` and the Action's `codeql-sarif` input gate
+  on SARIF from a team's own CodeQL run (for example GitHub code scanning)
+  instead of running CodeQL. Every detected Python and JavaScript/TypeScript
+  language must be covered, or the scan is an operational error.
+
 ### Fixed
+
+- Deep scans failed on every TypeScript repository: the CodeQL image had no
+  Node.js, which CodeQL needs to extract TypeScript. `Dockerfile.codeql` now
+  includes Node.js 22.21.1. Re-run `make codeql-setup` to rebuild and re-pin
+  the image.
+- `python-tainted-request` no longer treats an ORM `session` as an HTTP client
+  (`session.delete(row)` in FastAPI/SQLModel apps), and `python-rce` no longer
+  flags constant command strings. Both raised blocking false alarms on the
+  pinned real-repository set.
+- The suppression example in `report.md` used analyzer names such as
+  `Ruff (SAST)` that never match a suppression, and lacked the required
+  approver, ticket and expiry fields.
 
 - JavaScript rules missed common Express/Koa code. Request input is now tracked
   in named handler functions and controller methods (class, static and object

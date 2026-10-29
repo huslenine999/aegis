@@ -34,6 +34,7 @@ from .cli_config import (
     get_config_section,
     is_excluded_path,
     normalize_suppressions,
+    occurrence_fingerprint,
     resolve_exclude_paths,
     should_skip_path,
     suppression_matches,
@@ -124,6 +125,7 @@ __all__ = [
     "log_scanner_event",
     "main",
     "normalize_suppressions",
+    "occurrence_fingerprint",
     "open_report_file",
     "print_ascii_report",
     "print_timing_summary",
@@ -278,6 +280,11 @@ def main():
     scan_parser.add_argument("--no-docker", action="store_true", help="Removed option; use --preset quick")
     scan_parser.add_argument("--preset", choices=("quick", "standard", "deep"), help="Scan profile (default: standard)")
     scan_parser.add_argument("--yara", action="store_true", help="Run optional YARA signature analysis")
+    scan_parser.add_argument(
+        "--codeql-sarif", action="append", metavar="FILE",
+        help="Gate on CodeQL SARIF from your own run (for example GitHub code scanning) instead of running CodeQL; "
+             "repeat once per language",
+    )
     scan_parser.add_argument("--timeout", type=int, default=None, help="Per-tool timeout in seconds")
     scan_parser.add_argument("--output", help="Directory for generated scan reports")
     scan_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON summary to stdout")
@@ -387,6 +394,7 @@ def main():
                             config_path=args.config,
                             sarif=args.sarif,
                             strict=args.strict,
+                            codeql_sarif=args.codeql_sarif,
                             return_summary=True,
                         )
                 finally:
@@ -407,6 +415,7 @@ def main():
                 config_path=args.config,
                 sarif=args.sarif,
                 strict=args.strict,
+                codeql_sarif=args.codeql_sarif,
             )
         except Exception as exc:
             error_summary = {

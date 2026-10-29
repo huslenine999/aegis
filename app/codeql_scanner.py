@@ -159,7 +159,7 @@ def _parse_document(document: object, source: Path, language: str) -> list[dict]
             or (invocations is not None and (not isinstance(invocations, list) or any(
                 not isinstance(item, dict) or item.get("executionSuccessful") is not True for item in invocations
             )))
-            or category_id not in {language, f"{language}/", f"/language:{language}"}
+            or category_id not in {language, f"{language}/", f"/language:{language}", f"/language:{language}/"}
         ):
             raise CodeQLScanError("CodeQL SARIF run is incomplete or for another language.")
         rules = driver.get("rules") or []
@@ -224,6 +224,72 @@ def parse_codeql_sarif(report: Path, source: Path, *, language: str) -> list[dic
         return _read_codeql_sarif(report, source, language=language)[1]
     except FileNotFoundError as exc:
         raise CodeQLScanError("CodeQL SARIF is missing, oversized, or malformed.") from exc
+
+
+def import_codeql_sarif(sarif_paths: list[Path], source: Path, output: Path) -> dict:
+    """Use SARIF a team's own CodeQL run produced (for example GitHub code scanning).
+
+    Every detected language must have a completed run, so a partial upload cannot pass the gate.
+    Aegis did not run these queries, so the report records "imported" instead of "verified" isolation.
+    """
+    source, output = Path(source).resolve(), Path(output).resolve()
+    languages = _detected_languages(source)
+    if not languages:
+        raise CodeQLScanError("Deep scan has no supported CodeQL language.")
+    output.mkdir(parents=True, exist_ok=True)
+    if any((output / name).exists() for name in ("codeql.sarif", "codeql-report.json")):
+        raise CodeQLScanError("CodeQL output artifacts already exist.")
+    started = time.monotonic()
+    all_runs, findings, covered, versions = [], [], set(), set()
+    for path in sarif_paths:
+        try:
+            document = load_bounded_json(Path(path))
+        except FileNotFoundError as exc:
+            raise CodeQLScanError(f"CodeQL SARIF {path} does not exist.") from exc
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError, ResourceLimitError) as exc:
+            raise CodeQLScanError(f"CodeQL SARIF {path} is oversized or malformed.") from exc
+        runs = document.get("runs") if isinstance(document, dict) else None
+        if not isinstance(runs, list) or not runs:
+            raise CodeQLScanError(f"CodeQL SARIF {path} has no completed runs.")
+        for run in runs:
+            details = run.get("automationDetails") if isinstance(run, dict) else None
+            category = str(details.get("id", "")) if isinstance(details, dict) else ""
+            language = category.removeprefix("/language:").rstrip("/")
+            # codeql-action names the JavaScript/TypeScript extractor "javascript".
+            language = {"javascript": "javascript-typescript", "typescript": "javascript-typescript"}.get(language, language)
+            if language not in SUPPORTED_LANGUAGES:
+                raise CodeQLScanError(
+                    f"CodeQL SARIF {path} has category {category!r}; expected one of "
+                    + ", ".join(f"/language:{name}" for name in sorted(SUPPORTED_LANGUAGES)) + "."
+                )
+            findings.extend(_parse_document(
+                {"version": document.get("version"), "runs": [{**run, "automationDetails": {"id": language}}]}, source, language,
+            ))
+            if len(findings) > resource_budgets().max_scanner_findings:
+                raise CodeQLScanError("CodeQL findings exceed the configured limit.")
+            covered.add(language)
+            driver = run["tool"]["driver"]
+            versions.add(str(driver.get("semanticVersion") or driver.get("version") or "unknown"))
+            all_runs.append(run)
+    missing = sorted(set(languages) - covered)
+    if missing:
+        raise CodeQLScanError(f"Imported CodeQL SARIF does not cover: {', '.join(missing)}.")
+    report = {
+        "status": "completed",
+        "coverage": {
+            "complete": True, "languages": languages,
+            "source_scope": "file" if source.is_file() else "repository", "isolation": "imported",
+        },
+        "tool": {"name": "CodeQL", "version": ", ".join(sorted(versions)), "source": "imported-sarif"},
+        "imported_sarif_sha256": sorted(hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in sarif_paths),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "findings": findings,
+    }
+    (output / "codeql.sarif").write_text(
+        json.dumps({"version": "2.1.0", "runs": all_runs}, separators=(",", ":"), ensure_ascii=False), encoding="utf-8",
+    )
+    (output / "codeql-report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    return report
 
 
 def _detected_languages(source: Path) -> list[str]:

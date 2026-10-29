@@ -1,0 +1,324 @@
+{
+  "codeql_target_class_metrics": {
+    "false_negatives": 0,
+    "false_positive_rate": 0.0,
+    "false_positives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "true_negatives": 14,
+    "true_positives": 14
+  },
+  "codeql_version": "2.27.0",
+  "corpus": "codeql-heldout-v2.json",
+  "corpus_sha256": "1881cd3c230b338c3c00d196d7bba509d4658f2f572925705e192382f30e268c",
+  "elapsed_seconds": 43.908,
+  "image": "aegis-codeql@sha256:74982310b2a8aa34395343e2d133aa5f75f4b117adea6fae1803c718d8c3a6ed",
+  "isolation": "verified",
+  "languages": [
+    "javascript-typescript",
+    "python"
+  ],
+  "metrics": {
+    "cases": 28,
+    "false_negatives": 0,
+    "false_positive_rate": 0.14285714285714285,
+    "false_positives": 2,
+    "precision": 0.875,
+    "recall": 1.0,
+    "true_negatives": 12,
+    "true_positives": 14
+  },
+  "passed": false,
+  "query_suites": {
+    "javascript-typescript": "a450b55888fb62b70de1b67da6c23a1f6c4a15904467e896b8be8b677150abff",
+    "python": "d0557fcd5fbfbed7f1eea6b44a93446100d669ec54f4f9c176af0b5bc2cdd49a"
+  },
+  "results": [
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "django-raw-sql-fstring",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-sqli"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "django-raw-sql-params",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/path-injection"
+      ],
+      "expected_rule_id": "py/path-injection",
+      "id": "fastapi-path-traversal",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "fastapi-path-prefix-check",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/full-ssrf"
+      ],
+      "expected_rule_id": "py/full-ssrf",
+      "id": "flask-ssrf",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-fetch-allowlist",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/unsafe-deserialization"
+      ],
+      "expected_rule_id": "py/unsafe-deserialization",
+      "id": "flask-pickle-body",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-pickle"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-json-body",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/code-injection"
+      ],
+      "expected_rule_id": "py/code-injection",
+      "id": "flask-eval-expression",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-eval"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-literal-eval",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "fastapi-helper-sql-format",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-sql-string-from-parameter"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "fastapi-helper-sql-params",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/reflective-xss"
+      ],
+      "expected_rule_id": "py/reflective-xss",
+      "id": "flask-reflected-html",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-reflected-xss"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-escaped-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/url-redirection"
+      ],
+      "expected_rule_id": "py/url-redirection",
+      "id": "flask-open-redirect",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "flask-mapped-redirect",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/sql-injection"
+      ],
+      "expected_rule_id": "js/sql-injection",
+      "id": "express-mysql-concat",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-sql-injection"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express-mysql-placeholder",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/path-injection"
+      ],
+      "expected_rule_id": "js/path-injection",
+      "id": "express-readfile-join",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express-readfile-mapped",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/reflected-xss"
+      ],
+      "expected_rule_id": "js/reflected-xss",
+      "id": "express-reflected-html",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-reflected-xss"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-escaped-html",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/request-forgery"
+      ],
+      "expected_rule_id": "js/request-forgery",
+      "id": "express-axios-ssrf",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-axios-mapped",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/server-side-unvalidated-url-redirection"
+      ],
+      "expected_rule_id": "js/server-side-unvalidated-url-redirection",
+      "id": "express-open-redirect",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-mapped-redirect",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/command-line-injection"
+      ],
+      "expected_rule_id": "js/command-line-injection",
+      "id": "express-helper-exec-sync",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-command-injection"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express-helper-exec-file-sync",
+      "passed": true,
+      "semgrep_rule_ids": []
+    }
+  ],
+  "runtime": "isolated-container",
+  "sarif_sha256": "c53dc70d8400b2df7844fdd4f9828cde0f32fc5374ef9f7f162ef8044dffb6ba",
+  "schema_version": 2,
+  "semgrep": {
+    "combined_with_codeql": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.14285714285714285,
+      "false_positives": 2,
+      "precision": 0.875,
+      "recall": 1.0,
+      "true_negatives": 12,
+      "true_positives": 14
+    },
+    "errors": 0,
+    "metrics": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.0,
+      "false_positives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "true_negatives": 14,
+      "true_positives": 14
+    },
+    "rules_sha256": "6fbfdd884b402b0b6a7e950266ae1c2acf51140f748622183ec3b808b2b52e92",
+    "version": "1.173.0"
+  },
+  "source_scope": "synthetic-held-out-fixtures",
+  "status": "completed"
+}

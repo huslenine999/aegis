@@ -30,7 +30,7 @@ const researchFinding = {
 // Mock every request: exercise the browser UI without signing keys, a lab, or live imports.
 async function openWorkbench(page, { role = "operator", getScans = () => [sourceScan], getLatestSourceScan, findings = [] } = {}) {
   const template = await fs.readFile(path.join(__dirname, "../../app/templates/projects.html"), "utf8");
-  const html = template.replace(/{% if demo_lab_enabled %}.*?{% endif %}/s, "")
+  const html = template
     .replaceAll("{{ request.state.csp_nonce }}", "browser-test");
   const css = await fs.readFile(path.join(__dirname, "../../app/static/aegis-app.css"), "utf8");
   let detailRequests = [];

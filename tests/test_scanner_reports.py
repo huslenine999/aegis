@@ -6,7 +6,6 @@ from policy_engine import (
     analyze_yara,
     generate_cyclonedx_sbom,
 )
-from app.main import app
 from app.worker import run_yara_scan
 from app.reporting import build_report_bundle
 
@@ -121,62 +120,6 @@ def test_run_yara_scan_reverse_shell(tmp_path):
     findings = run_yara_scan(str(test_file), job_id="test_job")
     assert len(findings) > 0
     assert any(f["rule"] == "Suspicious_Shell_Spawn" for f in findings)
-
-
-def test_download_sbom_route():
-    from fastapi.testclient import TestClient
-    client = TestClient(app)
-    response = client.get('/download-sbom')
-    assert response.status_code == 200
-    ct = response.headers.get('content-type', '') or response.headers.get('Content-Type', '')
-    assert ct.startswith('application/json')
-    cd = response.headers.get('content-disposition', '') or response.headers.get('Content-Disposition', '')
-    assert 'attachment' in cd
-    assert 'cyclonedx-sbom.json' in cd
-
-
-def test_download_report_bundle_route(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app.routes import artifact_routes
-
-    (tmp_path / "report.html").write_text("<html>Aegis</html>")
-    (tmp_path / "report.md").write_text("# Aegis\n")
-    (tmp_path / "sbom.json").write_text("{}")
-    (tmp_path / "scan-manifest.json").write_text("{}")
-    (tmp_path / "ruff-report.json").write_text("[]")
-    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
-
-    client = TestClient(app)
-    response = client.get("/download-report-bundle")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/zip")
-    bundle_path = tmp_path / "bundle.zip"
-    bundle_path.write_bytes(response.content)
-    with zipfile.ZipFile(bundle_path) as archive:
-        names = set(archive.namelist())
-    assert "report.html" in names
-    assert "report.md" in names
-    assert "sbom.json" in names
-    assert "scan-manifest.json" in names
-    assert "raw/ruff-report.json" in names
-    assert "bundle-manifest.json" in names
-
-
-def test_export_dossier_uses_completed_markdown_report(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app.routes import artifact_routes
-
-    monkeypatch.setattr(artifact_routes, "SCANS_DIR", tmp_path)
-    client = TestClient(app)
-    assert client.get("/export-dossier").status_code == 404
-
-    (tmp_path / "report.md").write_text("# CodeQL and OSV results\n")
-    response = client.get("/export-dossier")
-    assert response.status_code == 200
-    assert response.text == "# CodeQL and OSV results\n"
-    assert response.headers["content-type"].startswith("text/markdown")
-    assert "attachment" in response.headers["content-disposition"]
 
 
 def test_local_bundle_preserves_raw_and_normalized_codeql_evidence(tmp_path):

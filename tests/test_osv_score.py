@@ -7,7 +7,6 @@ import pytest
 import policy_engine
 from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import parse_cvss_vector, calculate_exploitability_score as calculate_policy_score
-from app.reporting import calculate_exploitability_score
 
 
 def test_parse_cvss_vector_critical():
@@ -48,38 +47,6 @@ def test_policy_exploitability_score_calculation():
     # WAF state does not discount unrelated static or dependency findings.
     score_waf_on = calculate_policy_score(results, True)
     assert score_waf_on == 89.0
-
-def test_app_exploitability_score_calculation(tmp_path):
-    # Setup mock scan reports in temp directory
-    scans_dir = tmp_path / "scans"
-    scans_dir.mkdir()
-    
-    # Write blank reports
-    (scans_dir / "ruff-report.json").write_text(json.dumps([]))
-    (scans_dir / "semgrep-report.json").write_text(json.dumps({"results": []}))
-    (scans_dir / "secrets-report.json").write_text(json.dumps({"results": {}}))
-    (scans_dir / "yara-report.json").write_text(json.dumps([]))
-    (scans_dir / "osv-report.json").write_text(json.dumps([]))
-
-    # Assert base score is 0.0 when no issues
-    assert calculate_exploitability_score(scans_dir, False) == 0.0
-
-    # A retired DAST artifact cannot affect a new score.
-    (scans_dir / "ruff-report.json").write_text(json.dumps([
-        {"code": "S608", "filename": "app.py", "location": {"row": 10}, "message": "SQL Injection"}
-    ]))
-    (scans_dir / "zap-report.json").write_text(json.dumps([
-        {"status": "EXPOSED", "vuln_type": "SQL Injection", "route": "/user", "payload": "' OR 1=1", "description": "SQL Injection"}
-    ]))
-
-    # Only the active Ruff finding contributes.
-    score_waf_off = calculate_exploitability_score(scans_dir, False)
-    assert score_waf_off == 87.5
-
-    # The WAF does not discount the independent static finding.
-    score_waf_on = calculate_exploitability_score(scans_dir, True)
-    assert score_waf_on == 87.5
-
 
 def npm_manifest(*names):
     packages = tuple(DependencyPackage(name, "1.0.0", "npm") for name in names)

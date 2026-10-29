@@ -21,8 +21,6 @@ def health():
     return {
         "status": "running",
         "service": "aegis-security-console",
-        "demo_lab_enabled": os.environ.get("AEGIS_ENABLE_DEMO_LAB", "false").lower()
-        in {"1", "true", "yes", "on"},
     }
 
 

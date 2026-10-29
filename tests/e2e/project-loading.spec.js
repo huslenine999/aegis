@@ -31,7 +31,7 @@ function findingsPage(findings, url) {
 
 async function openWorkbench(page, { findings = [finding(1)], getScan = () => sourceScan, repositoryUrl = "https://github.com/example/api.git" } = {}) {
   const template = await fs.readFile(path.join(__dirname, "../../app/templates/projects.html"), "utf8");
-  const html = template.replace(/{% if demo_lab_enabled %}.*?{% endif %}/s, "")
+  const html = template
     .replaceAll("{{ request.state.csp_nonce }}", "browser-test");
   const requests = [];
   const projectResponse = (projectId, endpoint, url) => {

@@ -82,7 +82,7 @@ def test_s3_download_without_local_run_streams_verified_bytes_and_cleans_up(remo
     expected = content[name]
     if name == "report.html":
         expected += artifact_routes.REPORT_VIEW_STYLE
-        assert "sandbox" in response.headers["content-security-policy"]
+        assert response.headers["content-security-policy"] == artifact_routes.REPORT_CSP
     assert asyncio.run(read_response(response)) == expected
     assert len(client.calls) == 1
     assert all(body.closed for body in client.bodies)

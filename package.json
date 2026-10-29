@@ -8,7 +8,6 @@
   },
   "files": [
     "app/*.py",
-    "app/downloads/",
     "app/static/",
     "app/templates/",
     "rules/",

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -18,6 +20,7 @@ EXIT_ALLOWED = 0
 EXIT_BLOCKED = 1
 EXIT_OPERATIONAL_ERROR = 2
 VALID_SEVERITIES = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+OCCURRENCE_KEY = "aegis_occurrence"
 LOCAL_ENV_FILE = PROJECT_ROOT / ".env.aegis"
 
 
@@ -92,7 +95,10 @@ def normalize_suppressions(config: dict, target_path: Path) -> list[dict]:
         approved_by = str(item.get("approved_by", "")).strip()
         ticket = str(item.get("ticket", "")).strip()
         expires_at = str(item.get("expires_at", "")).strip()
+        fingerprint = str(item.get("fingerprint", "")).strip().lower()
         validation_errors = []
+        if fingerprint and not re.fullmatch(r"[0-9a-f]{16}", fingerprint):
+            validation_errors.append("fingerprint must be the 16-character value from the scan report")
         expires_at_utc = None
         if len(reason) < 12:
             validation_errors.append("reason must contain at least 12 characters")
@@ -130,6 +136,7 @@ def normalize_suppressions(config: dict, target_path: Path) -> list[dict]:
             "rule": str(item.get("rule", "")).lower(),
             "path": str(path_value) if path_value else "",
             "resolved_path": resolved_path,
+            "fingerprint": fingerprint,
             "reason": reason,
             "approved_by": approved_by,
             "ticket": ticket,
@@ -140,8 +147,21 @@ def normalize_suppressions(config: dict, target_path: Path) -> list[dict]:
     return normalized
 
 
-def suppression_matches(suppression: dict, *, tool: str, rule: str = "", path: str = "") -> bool:
+def occurrence_fingerprint(tool: str, rule: str, path: str, text: str, index: int) -> str:
+    """Identify one finding by its rule, file and flagged line text, not its line number.
+
+    index counts identical (rule, path, text) occurrences, so a copied line gets a new fingerprint.
+    """
+    canonical = json.dumps([tool.lower(), rule.lower(), path, text.strip(), index], separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+def suppression_matches(
+    suppression: dict, *, tool: str, rule: str = "", path: str = "", fingerprint: str = "",
+) -> bool:
     if suppression.get("status") != "active":
+        return False
+    if suppression.get("fingerprint") and suppression["fingerprint"] != fingerprint:
         return False
     tool_value = tool.lower()
     rule_value = str(rule or "").lower()
@@ -170,14 +190,45 @@ def apply_suppressions(
     safe_output: SafeOutputRoot | None = None,
     read_json_fn=None,
     write_json_fn=None,
+    source_root: Path | None = None,
+    content_root: Path | None = None,
 ):
+    """Drop suppressed findings and tag every remaining one with its occurrence fingerprint.
+
+    source_root is the scanned target; content_root is the snapshot its files are read from.
+    """
     if read_json_fn is None or write_json_fn is None:
         from .cli_reports import read_json as default_read_json, write_json as default_write_json
         read_json_fn = read_json_fn or default_read_json
         write_json_fn = write_json_fn or default_write_json
 
-    if not suppressions:
-        return
+    def directory(root: Path | None) -> Path | None:
+        return root if root is None or root.is_dir() else root.parent
+
+    source_base = directory(source_root)
+    content_base = directory(content_root) or source_base
+    seen: dict[tuple, int] = {}
+    file_lines: dict[str, list[str]] = {}
+
+    def fingerprint_for(tool: str, rule: str, path: str, line, text: str | None) -> str:
+        relative = Path(path).as_posix() if path else ""
+        if path and source_base:
+            try:
+                relative = Path(path).resolve().relative_to(source_base.resolve()).as_posix()
+            except (OSError, ValueError):
+                pass
+        if text is None:
+            if relative not in file_lines:
+                try:
+                    file_lines[relative] = (content_base / relative).read_text(errors="replace").splitlines() if content_base and relative else []
+                except OSError:
+                    file_lines[relative] = []
+            lines = file_lines[relative]
+            number = int(line) if str(line).isdigit() else 0
+            text = lines[number - 1] if 0 < number <= len(lines) else ""
+        key = (tool, rule.lower(), relative, text.strip())
+        seen[key] = seen.get(key, 0) + 1
+        return occurrence_fingerprint(*key, seen[key])
 
     applied = []
     expired = []
@@ -187,6 +238,7 @@ def apply_suppressions(
             "tool": suppression["tool"],
             "rule": suppression["rule"],
             "path": suppression["path"],
+            "fingerprint": suppression["fingerprint"],
             "reason": suppression["reason"],
             "approved_by": suppression["approved_by"],
             "ticket": suppression["ticket"],
@@ -197,7 +249,16 @@ def apply_suppressions(
         elif suppression["status"] == "invalid":
             invalid.append({**evidence, "validation_errors": suppression["validation_errors"]})
 
-    def suppress_item(tool: str, item: dict, *, rule_keys: tuple[str, ...], path_keys: tuple[str, ...]) -> bool:
+    def suppress_item(
+        tool: str,
+        item: dict,
+        *,
+        rule_keys: tuple[str, ...],
+        path_keys: tuple[str, ...],
+        line=None,
+        text: str | None = None,
+        raw: dict | None = None,
+    ) -> bool:
         rules: list[str] = []
         for key in rule_keys:
             value = item.get(key)
@@ -208,6 +269,8 @@ def apply_suppressions(
         if not rules:
             rules.append("")
         path = next((item.get(key) for key in path_keys if item.get(key)), "")
+        fingerprint = fingerprint_for(tool, rules[0], str(path), line, text)
+        (raw if raw is not None else item)[OCCURRENCE_KEY] = fingerprint
         for suppression in suppressions:
             matched_rule = next(
                 (
@@ -218,6 +281,7 @@ def apply_suppressions(
                         tool=tool,
                         rule=rule,
                         path=str(path),
+                        fingerprint=fingerprint,
                     )
                 ),
                 None,
@@ -227,6 +291,7 @@ def apply_suppressions(
                     "tool": tool,
                     "rule": matched_rule,
                     "path": path,
+                    "fingerprint": fingerprint,
                     "reason": suppression["reason"],
                     "approved_by": suppression["approved_by"],
                     "ticket": suppression["ticket"],
@@ -241,7 +306,10 @@ def apply_suppressions(
         if isinstance(ruff, list):
             ruff = [
                 item for item in ruff
-                if not suppress_item("Ruff", item, rule_keys=("code",), path_keys=("filename",))
+                if not suppress_item(
+                    "Ruff", item, rule_keys=("code",), path_keys=("filename",),
+                    line=(item.get("location") or {}).get("row"),
+                )
             ]
             write_json_fn(ruff_path, ruff, safe_output=safe_output)
 
@@ -256,8 +324,10 @@ def apply_suppressions(
                     "Semgrep",
                     # Match the bare rule ID too; check_id carries a machine-specific path prefix.
                     {**item, "rule_id": str(item.get("check_id") or "").rsplit(".", 1)[-1]},
-                    rule_keys=("check_id", "rule_id"),
+                    rule_keys=("rule_id", "check_id"),
                     path_keys=("path",),
+                    line=(item.get("start") or {}).get("line"),
+                    raw=item,
                 )
             ]
             write_json_fn(semgrep_path, semgrep, safe_output=safe_output)
@@ -280,7 +350,10 @@ def apply_suppressions(
             for filename, items in list(results.items()):
                 results[filename] = [
                     item for item in items
-                    if not suppress_item("Secrets", {**item, "filename": filename}, rule_keys=("type",), path_keys=("filename",))
+                    if not suppress_item(
+                        "Secrets", {**item, "filename": filename}, rule_keys=("type",), path_keys=("filename",),
+                        line=item.get("line_number"), raw=item,
+                    )
                 ]
                 if not results[filename]:
                     del results[filename]
@@ -292,7 +365,9 @@ def apply_suppressions(
         if isinstance(codeql, dict) and isinstance(codeql.get("findings"), list):
             codeql["findings"] = [
                 item for item in codeql["findings"]
-                if not (isinstance(item, dict) and suppress_item("CodeQL", item, rule_keys=("rule_id",), path_keys=("filename",)))
+                if not (isinstance(item, dict) and suppress_item(
+                    "CodeQL", item, rule_keys=("rule_id",), path_keys=("filename",), line=item.get("line_number"),
+                ))
             ]
             write_json_fn(codeql_path, codeql, safe_output=safe_output)
 
@@ -307,11 +382,12 @@ def apply_suppressions(
                     item,
                     rule_keys=("id", "aliases"),
                     path_keys=(),
+                    text=f"{item.get('package')}@{item.get('version')}",
                 )
             ]
             write_json_fn(osv_path, osv, safe_output=safe_output)
 
-    if write_json_fn:
+    if suppressions and write_json_fn:
         write_json_fn(
             scan_dir / "suppressions-report.json",
             {

@@ -119,6 +119,23 @@ rules:
           - metavariable-regex:
               metavariable: $M
               regex: ^(get|post|put|patch|delete|head|options|stream)$
+          # A bare session or client is an HTTP client only where the module uses
+          # requests or httpx; elsewhere it is usually an ORM session (session.delete(row)).
+          - pattern-either:
+              - pattern-inside: requests.$CALL(...)
+              - pattern-inside: httpx.$CALL(...)
+              - pattern-inside: |
+                  import requests
+                  ...
+              - pattern-inside: |
+                  import httpx
+                  ...
+              - pattern-inside: |
+                  from requests import $NAME
+                  ...
+              - pattern-inside: |
+                  from httpx import $NAME
+                  ...
           - focus-metavariable: $ARG
     pattern-sanitizers:
       - pattern: os.path.basename(...)
@@ -221,6 +238,10 @@ rules:
                   regex: ^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$
           - pattern: os.system(...)
           - pattern: os.popen(...)
+      # A constant command string cannot carry injected input.
+      - pattern-not: subprocess.$FN("...", ...)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
     message: "Detected command injection risk via subprocess/os.system with shell=True."
     languages: [python]
     severity: ERROR

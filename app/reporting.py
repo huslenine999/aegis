@@ -1,12 +1,8 @@
 import json
 import logging
 import os
-import re
-import subprocess
-import sys
 import tempfile
 import zipfile
-from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 
@@ -16,19 +12,12 @@ from .artifact_storage import (
     artifact_limits,
     validate_artifact_sizes,
 )
-from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from .resource_budgets import (
     ResourceLimitError,
     iter_file_bytes,
     load_bounded_json,
-    read_bounded_text,
     read_bounded,
     resource_budgets,
-    run_bounded_subprocess,
-)
-from policy_engine import (
-    analyze_report_set,
-    calculate_exploitability_score as calculate_policy_exploitability_score,
 )
 
 
@@ -55,68 +44,6 @@ def load_json_report(path: Path):
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning("Unable to read scanner report %s: %s", path, exc)
         return None
-
-
-def calculate_exploitability_score(scans_dir: Path, waf_enabled: bool) -> float:
-
-    reports = {
-        name: load_json_report(scans_dir / f"{name}-report.json")
-        for name in ("ruff", "semgrep", "codeql", "secrets", "yara", "osv")
-    }
-    results = analyze_report_set(reports)
-    return calculate_policy_exploitability_score(results, waf_enabled)
-
-
-def generate_fallback_tree(project_root: Path) -> list[dict]:
-    requirements_manifest = first_requirements_manifest(discover_dependency_manifests(project_root))
-    tree: list[dict] = []
-    if requirements_manifest:
-        try:
-            content = read_bounded_text(requirements_manifest.path)
-            for line in content.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                match = re.match(r"^([a-zA-Z0-9_\-]+)\s*(==|>=)\s*([a-zA-Z0-9_\-\.]+)", line)
-                if match:
-                    package_name = match.group(1)
-                    package_version = match.group(3)
-                    tree.append({
-                        "key": package_name.lower(),
-                        "package_name": package_name,
-                        "installed_version": package_version,
-                        "required_version": f"=={package_version}",
-                        "dependencies": [],
-                    })
-        except OSError as exc:
-            logger.warning(
-                "Unable to build dependency fallback from %s: %s",
-                requirements_manifest.path,
-                exc,
-            )
-    return tree
-
-
-def load_dependency_tree(project_root: Path) -> list[dict]:
-    try:
-        python_bin = sys.executable
-        pipdeptree_bin = Path(python_bin).parent / "pipdeptree"
-        if not pipdeptree_bin.exists():
-            pipdeptree_cmd = [python_bin, "-m", "pipdeptree", "--json-tree"]
-        else:
-            pipdeptree_cmd = [str(pipdeptree_bin), "--json-tree"]
-
-        output = BytesIO()
-        result = run_bounded_subprocess(
-            pipdeptree_cmd,
-            stdout_sink=output,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            return json.loads(output.getvalue().decode("utf-8"))
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ResourceLimitError) as exc:
-        logger.warning("Unable to load dependency tree with pipdeptree: %s", exc)
-    return generate_fallback_tree(project_root)
 
 
 ReportSource = bytes | Path | Callable[[], Iterable[bytes]]

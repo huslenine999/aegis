@@ -355,6 +355,8 @@ def test_execute_scan_applies_config_suppressions(tmp_path, monkeypatch):
             "tool": "Ruff",
             "rule": "S307",
             "path": str(target_file),
+            # Read from the scan snapshot and keyed on the target-relative path.
+            "fingerprint": cli.occurrence_fingerprint("Ruff", "S307", "unsafe.py", "eval(input())", 1),
             "reason": "Regression fixture for suppression behavior.",
             "approved_by": "security-reviewer",
             "ticket": "SEC-123",
@@ -389,6 +391,56 @@ def test_folder_suppression_covers_only_files_under_that_folder(tmp_path):
     assert [item["filename"] for item in kept] == ["app/tests_helper.py"]
     applied = json.loads((scan_dir / "suppressions-report.json").read_text())["applied"]
     assert {item["approved_by"] for item in applied} == {"security-reviewer"}
+
+
+def test_fingerprint_suppression_hides_only_that_occurrence(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "jobs.py").write_text("import os\nos.system(cmd)\nos.system(other)\nos.system(cmd)\n")
+    scan_dir = tmp_path / "reports"
+    scan_dir.mkdir()
+
+    def write_report():
+        (scan_dir / "semgrep-report.json").write_text(json.dumps({"results": [
+            {"check_id": "rules.python-rce", "path": str(source / "jobs.py"), "start": {"line": line}}
+            for line in (2, 3, 4)
+        ]}))
+
+    write_report()
+    cli.apply_suppressions(scan_dir, [], source_root=source)
+    tagged = [item["aegis_occurrence"] for item in json.loads((scan_dir / "semgrep-report.json").read_text())["results"]]
+    # The repeated line gets its own fingerprint, so a copy of reviewed code is not covered.
+    assert len(set(tagged)) == 3
+
+    suppressions = cli.normalize_suppressions({"scan": {"suppressions": [{
+        "tool": "Semgrep",
+        "rule": "python-rce",
+        "fingerprint": tagged[0],
+        "reason": "cmd is a fixed maintenance command chosen at deploy time.",
+        "approved_by": "security-reviewer",
+        "ticket": "SEC-102",
+        "expires_at": "2099-01-01",
+    }]}}, source)
+    write_report()
+    cli.apply_suppressions(scan_dir, suppressions, source_root=source)
+
+    kept = json.loads((scan_dir / "semgrep-report.json").read_text())["results"]
+    assert [item["start"]["line"] for item in kept] == [3, 4]
+    applied = json.loads((scan_dir / "suppressions-report.json").read_text())["applied"]
+    assert [item["fingerprint"] for item in applied] == [tagged[0]]
+
+
+def test_malformed_fingerprint_suppression_is_invalid(tmp_path):
+    suppressions = cli.normalize_suppressions({"scan": {"suppressions": [{
+        "tool": "Semgrep",
+        "fingerprint": "jobs.py:2",
+        "reason": "Reviewed maintenance command.",
+        "approved_by": "security-reviewer",
+        "ticket": "SEC-103",
+        "expires_at": "2099-01-01",
+    }]}}, tmp_path)
+
+    assert suppressions[0]["status"] == "invalid"
 
 
 def test_expired_suppression_is_reported_and_does_not_hide_finding(tmp_path):
@@ -856,3 +908,17 @@ def test_cli_secrets_scan_finds_keys_in_a_target_outside_the_working_directory(t
     assert main() == 1
     secrets = json.loads((output / "secrets-report.json").read_text())
     assert [item["type"] for item in secrets["results"]["settings.py"]] == ["AWS Access Key"]
+
+
+def test_cli_secrets_scan_ignores_commit_sha_pins_but_not_tokens(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    (target / "ci.yml").write_text(
+        f"steps:\n  - uses: actions/checkout@{sha} # v4\n    with:\n      ref: {sha}\n      token: {sha}\n"
+    )
+    output = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", ["aegis", "scan", str(target), "--preset", "quick", "--output", str(output), "--json"])
+    main()
+    secrets = json.loads((output / "secrets-report.json").read_text())
+    assert [item["line_number"] for item in secrets["results"]["ci.yml"]] == [5]

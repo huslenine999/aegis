@@ -1,13 +1,14 @@
+import base64
 import hashlib
 import logging
 import os
+import re
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 
@@ -21,17 +22,36 @@ from ..artifact_storage import (
 )
 from ..auth import require_role
 from ..bac_imports import BAC_ARTIFACTS
-from ..database import PROJECT_ROOT, SCANS_DIR
+from ..database import BASE_DIR, SCANS_DIR
 from ..observability import record_artifact_integrity_failure
 from ..projects import get_scan_artifact, list_scan_artifacts
 from ..reporting import ReportSource
 from ..resource_budgets import ResourceLimitError, iter_file_bytes, resource_budgets
-from ..web_common import RUN_ARTIFACTS, require_access, require_demo_boundary
+from ..web_common import RUN_ARTIFACTS
 from .project_routes import _authorized_scan
 
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
 REPORT_VIEW_STYLE = b"<style>.reveal{opacity:1!important;transform:none!important}</style>"
+# Reports embed scanner output, so only the template's own scripts may run and nothing
+# in the page can fetch, post forms, or be framed.
+REPORT_SCRIPT_HASHES = " ".join(
+    f"'sha256-{base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()}'"
+    for script in re.findall(
+        r"<script>(.*?)</script>",
+        (BASE_DIR / "templates" / "report_template.html").read_text(),
+        re.S,
+    )
+)
+REPORT_BASE_POLICY = (
+    "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
+# No sandbox: the report's artifact links need the session cookie, and the policy
+# above already blocks every script except the template's own.
+REPORT_CSP = f"script-src {REPORT_SCRIPT_HASHES}; {REPORT_BASE_POLICY}"
+# Imported research HTML was not rendered by Aegis, so none of its scripts may run.
+UNTRUSTED_HTML_CSP = f"sandbox; {REPORT_BASE_POLICY}"
 
 
 def _file_sha256(path: Path, *, max_bytes: int) -> str:
@@ -134,6 +154,7 @@ def _stream_file_response(
     filename: str,
     cleanup: Callable[[], None] | None = None,
     inline: bool = False,
+    aegis_report: bool = False,
 ):
     response_limit = resource_budgets().max_response_bytes
     try:
@@ -154,7 +175,7 @@ def _stream_file_response(
         media_type=media_type,
         headers={
             "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{filename}"',
-            **({"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:"} if inline else {}),
+            **({"Content-Security-Policy": REPORT_CSP if aegis_report else UNTRUSTED_HTML_CSP} if inline else {}),
         },
         cleanup=cleanup,
     )
@@ -371,6 +392,7 @@ def project_scan_artifact(
                 filename=artifact_name,
                 cleanup=staging_directory.cleanup,
                 inline=artifact_name == "report.html",
+                aegis_report=run.get("target") != "bac-research",
             )
         except BaseException:
             staging_directory.cleanup()
@@ -385,78 +407,5 @@ def project_scan_artifact(
         media_type=media_type,
         filename=artifact_name,
         inline=artifact_name == "report.html",
-    )
-
-
-@router.get(
-    "/report",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
-)
-def get_report():
-    report_path = SCANS_DIR / "report.html"
-    if not report_path.exists():
-        return HTMLResponse("<h1>Report not found</h1><p>Please run the security scans first.</p>", status_code=404)
-    return _stream_file_response(
-        report_path,
-        media_type="text/html; charset=utf-8",
-        filename="report.html",
-    )
-
-@router.get(
-    "/download-sbom",
-    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
-)
-def download_sbom():
-    sbom_path = SCANS_DIR / "sbom.json"
-    if not sbom_path.exists():
-        from policy_engine import generate_cyclonedx_sbom
-        from ..dependencies import discover_dependency_manifests
-        try:
-            generate_cyclonedx_sbom(discover_dependency_manifests(PROJECT_ROOT), sbom_path)
-        except Exception:
-            logger.exception("SBOM generation failed")
-            raise HTTPException(
-                status_code=500, detail="SBOM generation failed. Check server logs."
-            )
-            
-    return _stream_file_response(
-        sbom_path,
-        media_type="application/json",
-        filename="cyclonedx-sbom.json",
-    )
-
-
-@router.get(
-    "/download-report-bundle",
-    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
-)
-def download_report_bundle():
-    report_path = SCANS_DIR / "report.html"
-    if not report_path.exists():
-        raise HTTPException(status_code=404, detail="Report bundle is not available until a scan has completed.")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    artifacts = {
-        path.name: path
-        for path in SCANS_DIR.iterdir()
-        if path.is_file()
-    }
-    return _stream_bundle_response(
-        artifacts,
-        filename=f"aegis-report-bundle-{timestamp}.zip",
-    )
-
-
-@router.get(
-    "/export-dossier",
-    dependencies=[Depends(require_demo_boundary), Depends(require_access("admin"))],
-)
-def export_dossier():
-    report_path = SCANS_DIR / "report.md"
-    if not report_path.is_file():
-        raise HTTPException(status_code=404, detail="Dossier is not available until a scan has completed.")
-    return _stream_file_response(
-        report_path,
-        media_type="text/markdown; charset=utf-8",
-        filename="aegis-compliance-dossier.md",
+        aegis_report=run.get("target") != "bac-research",
     )

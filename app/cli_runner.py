@@ -27,7 +27,7 @@ from .cli_config import (
 )
 from .cli_output import print_ascii_report, print_timing_summary
 from .cli_reports import read_json, utc_timestamp, write_json, write_sarif_report
-from .codeql_scanner import CodeQLScanError, operator_runtime_configuration, run_codeql_scan_isolated
+from .codeql_scanner import CodeQLScanError, import_codeql_sarif, operator_runtime_configuration, run_codeql_scan_isolated
 from .config import config_bool, load_advisory_config, load_config
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from .evidence import canonical_json, sign_manifest
@@ -252,6 +252,7 @@ def execute_scan(
     sarif: str | bool | None = None,
     strict: bool | None = None,
     return_summary: bool = False,
+    codeql_sarif: list[str] | None = None,
 ):
     """Admit the source once, then run every scanner against its stable copy."""
     submitted_target = Path(target_path_str).expanduser().absolute()
@@ -271,6 +272,7 @@ def execute_scan(
             sarif=sarif,
             strict=strict,
             return_summary=return_summary,
+            codeql_sarif=codeql_sarif,
         )
     if config_path and not Path(config_path).expanduser().is_file():
         return _execute_scan(
@@ -288,6 +290,7 @@ def execute_scan(
             sarif=sarif,
             strict=strict,
             return_summary=return_summary,
+            codeql_sarif=codeql_sarif,
         )
 
     source_path = submitted_target.resolve()
@@ -314,6 +317,7 @@ def execute_scan(
             sarif=sarif,
             strict=strict,
             return_summary=return_summary,
+            codeql_sarif=codeql_sarif,
             _source_snapshot=snapshot,
         )
     finally:
@@ -343,6 +347,7 @@ def _execute_scan(
     sarif: str | bool | None = None,
     strict: bool | None = None,
     return_summary: bool = False,
+    codeql_sarif: list[str] | None = None,
     _source_snapshot: SourceSnapshot | None = None,
 ):
     timings: list[dict] = []
@@ -647,7 +652,15 @@ def _execute_scan(
     else:
         mark_tool("YARA", "skipped", detail="optional signature analysis disabled")
 
-    if preset == "deep":
+    if codeql_sarif:
+        with timed_step(timings, "CodeQL"):
+            try:
+                import_codeql_sarif([Path(path) for path in codeql_sarif], Path(target_path), scan_dir)
+                mark_tool("CodeQL", "completed", detail="imported SARIF")
+            except (CodeQLScanError, OSError) as exc:
+                print(f"  [CodeQL Error] {exc}")
+                mark_tool("CodeQL", "failed", detail=str(exc))
+    elif preset == "deep":
         with timed_step(timings, "CodeQL"):
             try:
                 image, suites = operator_runtime_configuration()
@@ -667,7 +680,10 @@ def _execute_scan(
     if _source_snapshot:
         safe_output.write_json("source-descriptor.json", _source_snapshot.descriptor)
         normalize_scan_report_paths(scan_dir, _source_snapshot, safe_output)
-    apply_suppressions(scan_dir, suppressions, safe_output=safe_output, read_json_fn=read_json, write_json_fn=write_json)
+    apply_suppressions(
+        scan_dir, suppressions, safe_output=safe_output, read_json_fn=read_json, write_json_fn=write_json,
+        source_root=source_path, content_root=_source_snapshot.scan_path if _source_snapshot else None,
+    )
 
     def capture_policy_summary(results, final_status, reason, exploitability_score):
         policy_summary.update({

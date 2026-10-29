@@ -124,7 +124,6 @@ services:
       AEGIS_DB_SIGNER_PASSWORD: ${AEGIS_DB_SIGNER_PASSWORD:?Set the aegis_signer database password}
       AEGIS_DB_BROKER_PASSWORD: ${AEGIS_DB_BROKER_PASSWORD:?Set the aegis_github_broker database password}
       AEGIS_DB_NOTIFIER_PASSWORD: ${AEGIS_DB_NOTIFIER_PASSWORD:?Set the aegis_notifier database password}
-      AEGIS_ENABLE_DEMO_LAB: "false"
       FORWARDED_ALLOW_IPS: 172.31.0.10
     expose:
       - "5001"
@@ -185,7 +184,6 @@ services:
       REDIS_HOST: redis
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://aegis_worker:${AEGIS_DB_WORKER_PASSWORD}@postgres:5432/aegis
-      AEGIS_ENABLE_DEMO_LAB: "false"
     volumes:
       - aegis-data:/data
     tmpfs:

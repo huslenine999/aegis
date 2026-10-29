@@ -65,7 +65,6 @@ def test_python_package_metadata_uses_current_license_and_explicit_data_packages
 
     assert config["project"]["license"] == "MIT"
     assert set(config["tool"]["setuptools"]["packages"]) >= {
-        "app.downloads",
         "app.static",
         "app.templates",
     }
@@ -77,7 +76,6 @@ def test_npm_manifest_excludes_runtime_state():
     assert "app/" not in package["files"]
     assert set(package["files"]) >= {
         "app/*.py",
-        "app/downloads/",
         "app/static/",
         "app/templates/",
     }
@@ -472,3 +470,35 @@ def test_action_upload_sarif_requests_sarif_and_exposes_path(tmp_path):
     outputs = output_path.read_text().splitlines()
     assert "decision=declined" in outputs
     assert f"sarif-file={tmp_path.resolve() / 'reports' / 'aegis.sarif'}" in outputs
+
+
+def test_action_rejects_codeql_sarif_directory_without_reports(tmp_path):
+    action = load_action()
+    scan_step = next(step for step in action["runs"]["steps"] if step.get("id") == "aegis")
+    script_path = tmp_path / "action-step.sh"
+    output_path = tmp_path / "github-output"
+    script_path.write_text(scan_step["run"])
+    (tmp_path / "results").mkdir()
+    environment = {
+        **os.environ,
+        "INPUT_TARGET": ".",
+        "INPUT_OUTPUT_DIR": "reports",
+        "INPUT_NO_DOCKER": "true",
+        "INPUT_TIMEOUT": "120",
+        "INPUT_FAIL_ON": "high,critical",
+        "INPUT_CONFIG": "",
+        "INPUT_SARIF": "false",
+        "INPUT_STRICT": "true",
+        "INPUT_CODEQL_SARIF": str(tmp_path / "results"),
+        "AEGIS_ACTION_PATH": str(PROJECT_ROOT),
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(output_path),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "github-summary"),
+    }
+
+    result = subprocess.run(["bash", str(script_path)], cwd=tmp_path, env=environment, capture_output=True, text=True, check=False)
+
+    # An empty directory must not silently drop CodeQL from the gate.
+    assert result.returncode == 2
+    assert "codeql-sarif must be a SARIF file" in result.stderr + result.stdout

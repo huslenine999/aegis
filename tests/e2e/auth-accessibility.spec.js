@@ -57,7 +57,7 @@ test("first-run wizard claims the administrator and configures the workspace", a
 test("unauthenticated users sign in before accessing reports", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);
-  expect((await page.request.get("/get-scan-results")).status()).toBe(401);
+  expect((await page.request.get("/api/projects")).status()).toBe(401);
   const closeCode = await page.evaluate(() => new Promise((resolve) => {
     const socket = new WebSocket("ws://127.0.0.1:5011/ws/scan/unknown-job");
     socket.addEventListener("close", (event) => resolve(event.code));
@@ -74,8 +74,7 @@ test("unauthenticated users sign in before accessing reports", async ({ page }) 
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
 
-  const reportResponse = await page.request.get("/get-scan-results");
-  expect(reportResponse.ok()).toBeTruthy();
+  expect((await page.request.get("/api/projects")).ok()).toBeTruthy();
 });
 
 test("login and workbench have no serious accessibility violations", async ({ page }) => {
@@ -114,23 +113,13 @@ test("viewer, operator, and admin permissions are enforced by the API", async ({
   await viewerContext.request.post("/api/auth/login", {
     data: { username: viewer, password: "role-test-password" }
   });
-  const viewerMe = await (await viewerContext.request.get("/api/auth/me")).json();
-  expect((await viewerContext.request.get("/get-scan-results")).status()).toBe(403);
-  expect((await viewerContext.request.post("/run-scan", {
-    headers: { "X-CSRF-Token": viewerMe.csrf_token },
-    data: { target: "invalid" }
-  })).status()).toBe(403);
+  expect((await viewerContext.request.get("/api/users")).status()).toBe(403);
   await viewerContext.close();
 
   const operatorContext = await browser.newContext({ baseURL: "http://127.0.0.1:5011" });
   await operatorContext.request.post("/api/auth/login", {
     data: { username: operator, password: "role-test-password" }
   });
-  const operatorMe = await (await operatorContext.request.get("/api/auth/me")).json();
-  expect((await operatorContext.request.post("/run-scan", {
-    headers: { "X-CSRF-Token": operatorMe.csrf_token },
-    data: { target: "invalid" }
-  })).status()).toBe(400);
   expect((await operatorContext.request.get("/api/users")).status()).toBe(403);
   await operatorContext.close();
 });
@@ -233,7 +222,9 @@ test("project scan opens its report and downloads verified evidence", async ({ p
     reportLink.click()
   ]);
   await expect(reportPage).toHaveTitle("Aegis | Security Assessment");
-  await expect(reportPage.locator(".decision-banner")).toContainText(/Deployment (passed|blocked)|Scan incomplete/);
+  await expect(reportPage.locator("#decisionTitle")).toHaveText(/Passed|Blocked|Incomplete/);
+  await reportPage.getByRole("button", { name: "한국어로 보기" }).click();
+  await expect(reportPage.locator("h1")).toHaveText("보안 평가");
   await reportPage.close();
 
   const evidenceLink = page.getByRole("link", { name: "Download evidence" });
@@ -290,41 +281,4 @@ test("operations console issues and revokes API tokens accessibly", async ({ pag
   await expect(page.getByRole("heading", { name: "Administration and audit." })).toBeVisible();
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
-});
-
-test("scanner-controlled filenames remain inert text", async ({ page }) => {
-  await page.goto("/login");
-  if (page.url().includes("/setup")) {
-    const setup = await page.request.post("/api/setup", {
-      headers: { "X-Aegis-Setup-Token": "e2e-first-run-setup-token" },
-      data: {
-        workspace_name: "E2E Engineering",
-        repository: "",
-        scan_preset: "standard",
-        username: "e2e-owner",
-        password: "e2e-owner-password"
-      }
-    });
-    expect(setup.status(), await setup.text()).toBe(200);
-    await page.goto("/");
-  } else {
-    await page.getByLabel("Username").fill("e2e-owner");
-    await page.getByLabel("Password").fill("e2e-owner-password");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/projects(?:\?.*)?$/);
-  }
-  await page.goto("/lab");
-  await expect(page.locator("#uploadFile")).toBeAttached();
-  await page.waitForFunction(() => typeof window.addSyslogEntry === "function");
-  await page.evaluate(() => { window.AEGIS_XSS_PROBE = 0; });
-
-  const filename = "<img src=x onerror=window.AEGIS_XSS_PROBE=1>.py";
-  await page.locator("#uploadFile").setInputFiles({
-    name: filename,
-    mimeType: "text/x-python",
-    buffer: Buffer.from("print('safe')\n")
-  });
-
-  await expect(page.locator("#syslog-stream")).toContainText(filename, { timeout: 1000 });
-  expect(await page.evaluate(() => window.AEGIS_XSS_PROBE)).toBe(0);
 });

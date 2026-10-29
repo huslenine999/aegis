@@ -10,7 +10,7 @@ import ipaddress
 import os
 from typing import Any
 
-from fastapi import Depends, HTTPException, Request, WebSocket
+from fastapi import HTTPException, Request
 from fastapi.templating import Jinja2Templates
 
 from .auth import (
@@ -20,11 +20,7 @@ from .auth import (
     session_authentication_is_recent,
 )
 from .config import environment_positive_int
-from .database import BASE_DIR, PROJECT_ROOT, get_application_state
-from .reporting import (
-    generate_fallback_tree as generate_project_fallback_tree,
-)
-from .waf_rules import load_waf_rules_with_defaults
+from .database import BASE_DIR, get_application_state
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -39,9 +35,6 @@ async def json_object(request: Request) -> Any:
         raise HTTPException(status_code=400, detail="JSON object body required.")
     return body
 
-DEMO_LAB_ENABLED = os.environ.get(
-    "AEGIS_ENABLE_DEMO_LAB", "false"
-).lower() in {"1", "true", "yes", "on"}
 DEV_ADMIN_TOKEN = os.environ.get("AEGIS_DEV_ADMIN_TOKEN")
 MAX_UPLOAD_BYTES = environment_positive_int("AEGIS_MAX_UPLOAD_BYTES", 1024 * 1024)
 MAX_REQUEST_BYTES = environment_positive_int(
@@ -50,7 +43,6 @@ MAX_REQUEST_BYTES = environment_positive_int(
 SCAN_JOB_TIMEOUT_SECONDS = environment_positive_int(
     "AEGIS_SCAN_JOB_TIMEOUT_SECONDS", 3600
 )
-ALLOWED_SCAN_TARGETS = {"project", "secure", "vulnerable"}
 RUN_ARTIFACTS = {
     "report.html": "text/html; charset=utf-8",
     "report.md": "text/markdown; charset=utf-8",
@@ -72,10 +64,6 @@ RUN_ARTIFACTS = {
     "scan-manifest.json": "application/json",
 }
 
-# Global state for the WAF toggle (demo only).
-WAF_ENABLED = os.environ.get("WAF_ENABLED", "false").lower() == "true"
-
-
 def parse_cors_origins() -> list[str]:
     raw_origins = os.environ.get(
         "AEGIS_CORS_ORIGINS", "http://127.0.0.1:5001,http://localhost:5001"
@@ -89,23 +77,7 @@ def setup_is_available() -> bool:
     )
 
 
-def generate_fallback_tree():
-    return generate_project_fallback_tree(PROJECT_ROOT)
-
-
-def load_waf_rules_from_db():
-    return load_waf_rules_with_defaults()
-
-
-def require_demo_lab_enabled():
-    if not DEMO_LAB_ENABLED:
-        raise HTTPException(
-            status_code=404,
-            detail="Aegis demo lab is disabled. Set AEGIS_ENABLE_DEMO_LAB=true to enable vulnerable training routes.",
-        )
-
-
-def _connection_is_loopback(connection: Request | WebSocket) -> bool:
+def _connection_is_loopback(connection: Request) -> bool:
     """Return whether the direct client for a local-only surface is loopback."""
     client = connection.client
     host = client.host.strip().lower() if client and client.host else ""
@@ -139,25 +111,6 @@ def require_access(minimum_role: str):
         return role_dependency(request)
 
     return dependency
-
-
-def require_demo_boundary(request: Request) -> None:
-    """Keep every legacy threat-lab surface local and explicitly enabled."""
-
-    require_demo_lab_enabled()
-    if not _connection_is_loopback(request):
-        raise HTTPException(
-            status_code=403,
-            detail="The Aegis demo lab is available only from a loopback client.",
-        )
-
-
-def require_demo_lab_access(
-    request: Request,
-    principal=Depends(require_access("admin")),
-):
-    require_demo_boundary(request)
-    return principal
 
 
 def require_recent_access(minimum_role: str):

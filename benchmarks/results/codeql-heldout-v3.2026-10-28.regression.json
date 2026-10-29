@@ -1,0 +1,314 @@
+{
+  "codeql_target_class_metrics": {
+    "false_negatives": 5,
+    "false_positive_rate": 0.0,
+    "false_positives": 0,
+    "precision": 1.0,
+    "recall": 0.6428571428571429,
+    "true_negatives": 14,
+    "true_positives": 9
+  },
+  "codeql_version": "2.27.0",
+  "corpus": "codeql-heldout-v3.json",
+  "corpus_sha256": "45eab3bc6103e2616fd4e511e38ddd5763cd1ca7351ca5582b2acfb878d34436",
+  "elapsed_seconds": 46.096,
+  "image": "aegis-codeql@sha256:74982310b2a8aa34395343e2d133aa5f75f4b117adea6fae1803c718d8c3a6ed",
+  "isolation": "verified",
+  "languages": [
+    "javascript-typescript",
+    "python"
+  ],
+  "metrics": {
+    "cases": 28,
+    "false_negatives": 5,
+    "false_positive_rate": 0.14285714285714285,
+    "false_positives": 2,
+    "precision": 0.8181818181818182,
+    "recall": 0.6428571428571429,
+    "true_negatives": 12,
+    "true_positives": 9
+  },
+  "passed": false,
+  "query_suites": {
+    "javascript-typescript": "a450b55888fb62b70de1b67da6c23a1f6c4a15904467e896b8be8b677150abff",
+    "python": "d0557fcd5fbfbed7f1eea6b44a93446100d669ec54f4f9c176af0b5bc2cdd49a"
+  },
+  "results": [
+    {
+      "actual_rule_ids": [
+        "py/path-injection"
+      ],
+      "expected_rule_id": "py/path-injection",
+      "id": "aiohttp_download-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "aiohttp_download-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": "py/full-ssrf",
+      "id": "starlette_proxy-vuln",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "starlette_proxy-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": "py/reflective-xss",
+      "id": "starlette_greeting-vuln",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "python-reflected-xss"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "starlette_greeting-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": "py/url-redirection",
+      "id": "starlette_login_redirect-vuln",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "python-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "starlette_login_redirect-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/sql-injection"
+      ],
+      "expected_rule_id": "py/sql-injection",
+      "id": "aiohttp_sql_format_helper-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-sql-string-from-parameter"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "aiohttp_sql_format_helper-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": "py/sql-injection",
+      "id": "starlette_sql_percent_helper-vuln",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "python-sql-string-from-parameter"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "starlette_sql_percent_helper-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "py/command-line-injection"
+      ],
+      "expected_rule_id": "py/command-line-injection",
+      "id": "aiohttp_ping-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "python-rce"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "aiohttp_ping-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": "py/unsafe-deserialization",
+      "id": "starlette_import_session-vuln",
+      "passed": false,
+      "semgrep_rule_ids": [
+        "python-pickle"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "starlette_import_session-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/sql-injection"
+      ],
+      "expected_rule_id": "js/sql-injection",
+      "id": "express_user_lookup-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-sql-injection"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express_user_lookup-safe",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/reflected-xss"
+      ],
+      "expected_rule_id": "js/reflected-xss",
+      "id": "express_search_page-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-reflected-xss"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express_search_page-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting",
+        "js/path-injection"
+      ],
+      "expected_rule_id": "js/path-injection",
+      "id": "express_send_document-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [
+        "js/missing-rate-limiting"
+      ],
+      "expected_rule_id": null,
+      "id": "express_send_document-safe",
+      "passed": false,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/request-forgery"
+      ],
+      "expected_rule_id": "js/request-forgery",
+      "id": "express_fetch_feed-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "express_fetch_feed-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/server-side-unvalidated-url-redirection"
+      ],
+      "expected_rule_id": "js/server-side-unvalidated-url-redirection",
+      "id": "koa_exit_redirect-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-express-tainted-request"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "koa_exit_redirect-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    },
+    {
+      "actual_rule_ids": [
+        "js/command-line-injection"
+      ],
+      "expected_rule_id": "js/command-line-injection",
+      "id": "koa_traceroute-vuln",
+      "passed": true,
+      "semgrep_rule_ids": [
+        "javascript-command-injection"
+      ]
+    },
+    {
+      "actual_rule_ids": [],
+      "expected_rule_id": null,
+      "id": "koa_traceroute-safe",
+      "passed": true,
+      "semgrep_rule_ids": []
+    }
+  ],
+  "runtime": "isolated-container",
+  "sarif_sha256": "8316501dafa9a74b873e4228f8b95029c17e03c7e0c3db937b160aece93a776d",
+  "schema_version": 2,
+  "semgrep": {
+    "combined_with_codeql": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.14285714285714285,
+      "false_positives": 2,
+      "precision": 0.875,
+      "recall": 1.0,
+      "true_negatives": 12,
+      "true_positives": 14
+    },
+    "errors": 0,
+    "metrics": {
+      "false_negatives": 0,
+      "false_positive_rate": 0.0,
+      "false_positives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "true_negatives": 14,
+      "true_positives": 14
+    },
+    "rules_sha256": "6fbfdd884b402b0b6a7e950266ae1c2acf51140f748622183ec3b808b2b52e92",
+    "version": "1.173.0"
+  },
+  "source_scope": "synthetic-held-out-fixtures",
+  "status": "completed"
+}

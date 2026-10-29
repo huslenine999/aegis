@@ -7,8 +7,11 @@ import policy_engine
 from app.dependencies import DependencyManifest, DependencyPackage
 from policy_engine import (
     analyze_codeql,
+    analyze_osv,
     analyze_report_set,
     analyze_ruff,
+    analyze_secrets,
+    enrich_finding,
     evaluate_policy_results,
     generate_reports,
     run_policy_engine,
@@ -350,5 +353,40 @@ def test_reports_include_remediation_and_copyable_fix(tmp_path):
     assert "Why it matters" in html
     assert "Copy fix" in html
     assert "ast.literal_eval" in html
-    assert "## Finding Guidance" in markdown
-    assert "Safe to suppress" in markdown
+    assert "## Findings" in markdown
+    assert "**Location:** `app.py:7`" in markdown
+    assert "Suppression example" in markdown
+    assert "```bash" not in markdown
+
+
+def test_report_scripts_match_served_csp_hashes(tmp_path):
+    import base64
+    import hashlib
+    import re
+
+    from app.routes.artifact_routes import REPORT_CSP, REPORT_SCRIPT_HASHES
+
+    html_report = tmp_path / "report.html"
+    generate_reports([], "ALLOWED", "ok", html_path=html_report, md_path=tmp_path / "report.md")
+    scripts = re.findall(r"<script>(.*?)</script>", html_report.read_text(), re.S)
+    assert scripts
+    for script in scripts:
+        digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+        assert f"'sha256-{digest}'" in REPORT_SCRIPT_HASHES
+    assert "nonce" not in REPORT_CSP and "sandbox" not in REPORT_CSP
+
+
+def test_finding_display_fields_are_clean():
+    osv = analyze_osv([{"id": "GHSA-x", "package": "mcp", "version": "1.29.0", "cvss": 7.5}])["examples"][0]
+    assert osv["fix_suggestion"] == "python -m pip install --upgrade mcp"
+    assert osv["display_location"] == "mcp 1.29.0"
+
+    codeql = enrich_finding("CodeQL", {
+        "rule_id": "py/xss", "issue_text": "XSS due to [user value](1).",
+        "filename": "/data/scans/workspaces/abc/app/x.py", "line_number": 3,
+    })
+    assert codeql["display_title"] == "XSS due to user value."
+    assert codeql["display_location"] == "app/x.py:3"
+
+    secret = analyze_secrets({"results": {"cfg.py": [{"type": "Secret Keyword", "line_number": 2}]}})["examples"][0]
+    assert secret["display_title"] == "Possible secret: Secret Keyword"

@@ -5,7 +5,6 @@ FROM python:3.11.15-slim-bookworm@sha256:721dc13fd1be0a771e54b72097634291d628d00
 WORKDIR /app
 ENV AEGIS_DATA_DIR=/data \
     AEGIS_ENV=production \
-    AEGIS_ENABLE_DEMO_LAB=false \
     AEGIS_HOST=0.0.0.0 \
     AEGIS_REQUIRE_AUTH=true \
     AEGIS_REQUIRE_REDIS=true \

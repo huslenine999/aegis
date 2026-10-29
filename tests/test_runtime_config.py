@@ -143,11 +143,10 @@ def test_security_txt_exposes_disclosure_policy_without_authentication(monkeypat
 def test_data_directory_does_not_replace_source_root(tmp_path):
     code = """
 import json
-from app.database import DB_PATH, DOWNLOAD_DIR, PROJECT_ROOT, SCANS_DIR
+from app.database import DB_PATH, PROJECT_ROOT, SCANS_DIR
 print(json.dumps({
     "project_root": str(PROJECT_ROOT),
     "db_path": str(DB_PATH),
-    "download_dir": str(DOWNLOAD_DIR),
     "scans_dir": str(SCANS_DIR),
 }))
 """
@@ -164,7 +163,6 @@ print(json.dumps({
 
     assert paths["project_root"] == str(PROJECT_ROOT)
     assert paths["db_path"] == str(tmp_path / "aegis.db")
-    assert paths["download_dir"] == str(tmp_path / "downloads")
     assert paths["scans_dir"] == str(tmp_path / "scans")
 
 
@@ -213,7 +211,6 @@ print(DB_PATH.exists())
         **os.environ,
         "AEGIS_DATA_DIR": str(tmp_path),
         "AEGIS_ENV": "test",
-        "AEGIS_ENABLE_DEMO_LAB": "false",
         "REDIS_URL": "redis://127.0.0.1:6399/0",
     }
     result = subprocess.run(
@@ -440,7 +437,6 @@ def test_container_preflight_rejects_missing_production_configuration(monkeypatc
         "AEGIS_TOKEN_PEPPER",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AEGIS_ENABLE_DEMO_LAB", "false")
 
     with pytest.raises(RuntimeError, match="Invalid production configuration"):
         validate_startup_configuration()
@@ -529,7 +525,6 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "test-password-long")
     monkeypatch.setenv("AEGIS_METRICS_TOKEN", "m" * 32)
     monkeypatch.setenv("DATABASE_URL", "postgresql://aegis:test@db/aegis")
-    monkeypatch.setenv("AEGIS_ENABLE_DEMO_LAB", "false")
 
     validate_runtime_configuration()
 

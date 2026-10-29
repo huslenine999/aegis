@@ -46,6 +46,10 @@ inputs:
     description: 'Code scanning category for the uploaded SARIF; change it when one repository runs several Aegis jobs'
     required: false
     default: 'aegis'
+  codeql-sarif:
+    description: 'CodeQL SARIF from an earlier step (a file, or a directory such as the codeql-action analyze output) to gate on instead of running CodeQL; it must cover every Python and JavaScript/TypeScript language in the target'
+    required: false
+    default: ''
 outputs:
   decision:
     description: 'Aegis decision: approved, declined, or error'
@@ -91,6 +95,7 @@ runs:
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_STRICT: ${{ inputs.strict }}
         INPUT_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        INPUT_CODEQL_SARIF: ${{ inputs.codeql-sarif }}
         AEGIS_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -uo pipefail
@@ -181,6 +186,19 @@ runs:
         fi
         if [ "$INPUT_STRICT" = "true" ]; then
           ARGS+=(--strict)
+        fi
+        if [ -n "${INPUT_CODEQL_SARIF:-}" ]; then
+          if [ -d "$INPUT_CODEQL_SARIF" ]; then
+            CODEQL_FILES=("$INPUT_CODEQL_SARIF"/*.sarif)
+          else
+            CODEQL_FILES=("$INPUT_CODEQL_SARIF")
+          fi
+          for file in "${CODEQL_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              fail_input "codeql-sarif must be a SARIF file or a directory containing .sarif files"
+            fi
+            ARGS+=(--codeql-sarif "$file")
+          done
         fi
 
         echo "[Aegis] Scanning pushed project: $INPUT_TARGET"

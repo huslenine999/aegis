@@ -1,11 +1,8 @@
 import pytest
-import os
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from fastapi.testclient import TestClient
 
-
-os.environ.setdefault("AEGIS_ENABLE_DEMO_LAB", "true")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -89,8 +86,8 @@ def mock_rq_and_redis(monkeypatch):
     # Direct override to prevent real redis socket connections
     import app.main
     import app.worker
-    from app.routes import project_routes, demo_scan_routes
-    for module in (app.main, app.worker, project_routes, demo_scan_routes):
+    from app.routes import project_routes, scan_routes
+    for module in (app.main, app.worker, project_routes, scan_routes):
         module.redis_client = mock_redis
         module.REDIS_AVAILABLE = True
     app.worker.redis_client = mock_redis

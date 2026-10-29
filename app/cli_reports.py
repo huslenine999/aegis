@@ -120,6 +120,7 @@ def write_sarif_report(
                         },
                     }
                 }],
+                **({"partialFingerprints": {"aegisOccurrence/v1": issue["occurrence"]}} if issue.get("occurrence") else {}),
                 "properties": {
                     "tool": tool_name,
                     "severity": severity,

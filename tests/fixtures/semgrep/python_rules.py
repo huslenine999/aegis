@@ -19,6 +19,10 @@ def run(host, blob, data):
     subprocess.run(["ping", "-c", "1", host])
     # ruleid: python-rce
     os.system("ls " + host)
+    # ok: python-rce
+    os.system("pybabel compile -d app/translations")
+    # ok: python-rce
+    subprocess.run("git rev-parse HEAD", shell=True, check=True)
     # ruleid: python-eval
     eval(host)
     # ruleid: python-pickle

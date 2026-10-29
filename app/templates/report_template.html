@@ -36,65 +36,6 @@
             --scanline-opacity: 0.3;
         }
 
-        /* Customizable CRT UI Themes */
-        body.theme-amber {
-            --bg-base: #0a0805;
-            --bg-surface: rgba(15, 12, 6, 0.6);
-            --bg-console: #070503;
-            --primary: #ffb000;
-            --primary-glow: rgba(255, 176, 0, 0.4);
-            --secondary: #4afc62;    /* Slightly brighter secondary green */
-            --secondary-glow: rgba(74, 252, 98, 0.4);
-            --danger: #ff3333;
-            --danger-glow: rgba(255, 51, 51, 0.4);
-            --text-main: #ffd27f;
-            --text-muted: #cca37a;    /* Brighter amber slate for legibility */
-        }
-
-        body.theme-grey {
-            --bg-base: #0f1011;
-            --bg-surface: rgba(20, 22, 24, 0.6);
-            --bg-console: #0a0b0c;
-            --primary: #d1d5db;
-            --primary-glow: rgba(209, 213, 219, 0.3);
-            --secondary: #ffb81a;
-            --secondary-glow: rgba(255, 184, 26, 0.4);
-            --danger: #ef4444;
-            --danger-glow: rgba(239, 68, 68, 0.4);
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;    /* Brighter grey for legibility */
-        }
-
-        body.theme-matrix {
-            --bg-base: #000000;
-            --bg-surface: rgba(0, 10, 2, 0.75);
-            --bg-console: #000300;
-            --primary: #00ff41;
-            --primary-glow: rgba(0, 255, 65, 0.45);
-            --secondary: #00cc33;    /* Brighter secondary green for legibility */
-            --secondary-glow: rgba(0, 204, 51, 0.4);
-            --danger: #ff3333;
-            --danger-glow: rgba(255, 51, 51, 0.4);
-            --text-main: #80ff80;
-            --text-muted: #3cd058;    /* Brighter green for legibility (previously unreadable #005f00) */
-        }
-
-        .cyber-input {
-            background: var(--bg-console);
-            color: var(--primary);
-            border: 1px solid var(--primary);
-            padding: 0.35rem 0.5rem;
-            border-radius: 2px;
-            font-family: 'Share Tech Mono', monospace;
-            box-sizing: border-box;
-            box-shadow: inset 0 0 5px rgba(61, 251, 87, 0.2);
-        }
-
-        .cyber-input:focus {
-            outline: none;
-            box-shadow: 0 0 10px var(--primary-glow), inset 0 0 5px rgba(61, 251, 87, 0.4);
-        }
-
         body {
             font-family: 'Share Tech Mono', monospace;
             background-color: var(--bg-base);
@@ -108,7 +49,7 @@
         }
 
         /* Fira Code selection for telemetry readouts, inputs, tables, and terminal widgets */
-        .finding-item, .cyber-input, .mono, .explainer-box, #dep-tooltip {
+        .finding-item, .mono, .explainer-box {
             font-family: 'Fira Code', 'Share Tech Mono', monospace !important;
         }
 
@@ -138,10 +79,6 @@
             0% { opacity: 0.992; }
             50% { opacity: 1; }
             100% { opacity: 0.992; }
-        }
-
-        .crt-glow {
-            animation: crt-flicker 0.15s infinite;
         }
 
         /* Animated Vector Canvas */
@@ -202,24 +139,7 @@
             z-index: 1;
         }
 
-        /* Retro Terminal Panels */
-        .terminal-panel {
-            background: var(--bg-surface);
-            border: 1px solid rgba(61, 251, 87, 0.3);
-            border-radius: 2px;
-            box-shadow: 0 0 15px rgba(61, 251, 87, 0.03), inset 0 0 10px rgba(61, 251, 87, 0.02);
-            position: relative;
-            margin-bottom: 3rem;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        /* Cyberpunk Corner Accent Lines */
-        .terminal-panel::before, .terminal-panel::after,
-        .tool-panel::before, .tool-panel::after,
-        .metric-card::before, .metric-card::after,
-        .decision-banner::before, .decision-banner::after {
+        .tool-panel::before, .tool-panel::after {
             content: "";
             position: absolute;
             width: 12px;
@@ -230,62 +150,18 @@
             z-index: 5;
         }
 
-        /* Top-left corners */
-        .terminal-panel::before, .tool-panel::before, .metric-card::before, .decision-banner::before {
+        .tool-panel::before {
             top: -1px;
             left: -1px;
             border-right: none;
             border-bottom: none;
         }
 
-        /* Bottom-right corners */
-        .terminal-panel::after, .tool-panel::after, .metric-card::after, .decision-banner::after {
+        .tool-panel::after {
             bottom: -1px;
             right: -1px;
             border-left: none;
             border-top: none;
-        }
-
-        .terminal-panel:hover {
-            border-color: var(--primary);
-            box-shadow: 0 0 20px rgba(61, 251, 87, 0.15), inset 0 0 10px rgba(61, 251, 87, 0.05);
-        }
-
-        /* Diagnostic Decision Banner */
-        .decision-banner {
-            padding: 2rem;
-            border-radius: 2px;
-            margin-bottom: 3rem;
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            position: relative;
-            border: 1px solid rgba(61, 251, 87, 0.3);
-            background: rgba(6, 25, 10, 0.45);
-            box-shadow: 0 0 20px rgba(61, 251, 87, 0.05);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            transition: border-color 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        .decision-banner.status-blocked {
-            border-color: rgba(255, 51, 51, 0.5);
-            background: rgba(255, 51, 51, 0.08);
-            box-shadow: 0 0 20px rgba(255, 51, 51, 0.1);
-            animation: pulse-red-border 2.5s infinite;
-        }
-
-        .decision-banner.status-passed {
-            border-color: rgba(61, 251, 87, 0.5);
-            background: rgba(6, 25, 10, 0.45);
-            box-shadow: 0 0 20px rgba(61, 251, 87, 0.1);
-            animation: pulse-green-border 2.5s infinite;
-        }
-
-        .decision-banner.status-error {
-            border-color: rgba(255, 176, 0, 0.6);
-            background: rgba(255, 176, 0, 0.08);
-            box-shadow: 0 0 20px rgba(255, 176, 0, 0.12);
         }
 
         @keyframes pulse-red-border {
@@ -296,72 +172,6 @@
         @keyframes pulse-green-border {
             0%, 100% { border-color: var(--primary); box-shadow: 0 0 10px var(--primary-glow); }
             50% { border-color: #55ff77; box-shadow: 0 0 25px rgba(61, 251, 87, 0.35); }
-        }
-
-        .decision-title {
-            font-family: 'VT323', monospace;
-            font-size: 2.5rem;
-            margin: 0;
-            color: var(--primary);
-            text-shadow: 0 0 10px var(--primary-glow);
-        }
-
-        .decision-banner.status-blocked .decision-title {
-            color: var(--danger);
-            text-shadow: 0 0 10px var(--danger-glow);
-        }
-
-        .decision-banner.status-error .decision-title {
-            color: var(--secondary);
-            text-shadow: 0 0 10px var(--secondary-glow);
-        }
-
-        .decision-reason {
-            font-size: 1rem;
-            margin: 0.5rem 0 0 0;
-            color: var(--text-main);
-            text-transform: uppercase;
-        }
-
-        /* Metrics Row */
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 3rem;
-        }
-
-        .metric-card {
-            padding: 1.5rem;
-            background: var(--bg-surface);
-            border: 1px solid rgba(61, 251, 87, 0.3);
-            text-align: center;
-            border-radius: 2px;
-            position: relative;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            transition: border-color 0.25s ease, box-shadow 0.25s ease, background-color 0.25s ease;
-        }
-        .metric-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 0 15px rgba(61, 251, 87, 0.15);
-            background: rgba(6, 25, 10, 0.75);
-        }
-
-        .metric-value {
-            font-family: 'VT323', monospace;
-            font-size: 3.5rem;
-            color: var(--primary);
-            text-shadow: 0 0 10px var(--primary-glow);
-            line-height: 1;
-            margin-bottom: 0.5rem;
-        }
-
-        .metric-label {
-            font-size: 0.95rem;
-            color: var(--text-main);
-            text-transform: uppercase;
-            letter-spacing: 1px;
         }
 
         /* Logs & Findings Section */
@@ -496,7 +306,6 @@
             font-weight: 700;
             color: #fff;
         }
-        
 
         .finding-location {
             font-family: 'Share Tech Mono', monospace;
@@ -549,30 +358,6 @@
         .btn:focus-visible {
             outline: 2px solid var(--secondary);
             outline-offset: 2px;
-        }
-
-        .btn-secondary {
-            border-color: var(--secondary);
-            color: var(--secondary);
-            box-shadow: 0 0 8px rgba(255, 176, 0, 0.15);
-        }
-
-        .btn-secondary:hover {
-            background: var(--secondary);
-            color: var(--bg-base);
-            box-shadow: 0 0 20px var(--secondary-glow);
-        }
-
-        .btn-danger {
-            border-color: var(--danger);
-            color: var(--danger);
-            box-shadow: 0 0 8px rgba(255, 51, 51, 0.15);
-        }
-
-        .btn-danger:hover {
-            background: var(--danger);
-            color: #fff;
-            box-shadow: 0 0 20px var(--danger-glow);
         }
 
         .btn-back {
@@ -658,18 +443,6 @@
             background: rgba(4, 8, 5, 0.95);
         }
 
-        /* Reveal Animation */
-        .reveal {
-            opacity: 0;
-            transform: translateY(15px);
-            transition: all 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-        }
-
-        .reveal.active {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
         /* Mobile and Tablet Responsiveness Updates */
         @media (max-width: 768px) {
             .navbar {
@@ -708,21 +481,6 @@
         @media (max-width: 480px) {
             .container {
                 padding: 1rem 0.75rem;
-            }
-            .decision-banner {
-                padding: 1.25rem;
-                margin-bottom: 2rem;
-            }
-            .metrics-grid {
-                grid-template-columns: 1fr;
-                gap: 1rem;
-                margin-bottom: 2rem;
-            }
-            .metric-card {
-                padding: 1rem;
-            }
-            .metric-value {
-                font-size: 2.4rem;
             }
             .tool-header {
                 flex-direction: column;
@@ -775,6 +533,7 @@
         }
 
         .explainer-subtext {
+            display: none;
             font-size: 1.05rem !important;
             line-height: 1.6 !important;
             color: var(--secondary) !important;
@@ -956,15 +715,11 @@
             gap: 10px;
         }
 
-        .report-theme-control {
-            display: none;
-        }
-
         body.report-page .timestamp {
             padding-right: 12px;
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 9px;
+            font-size: 11px;
             text-transform: uppercase;
         }
 
@@ -980,7 +735,7 @@
             box-shadow: none;
             color: var(--text-main);
             font-family: var(--report-mono);
-            font-size: 9px;
+            font-size: 12px;
             font-weight: 500;
             letter-spacing: 0;
             text-shadow: none;
@@ -1019,8 +774,8 @@
             grid-template-columns: minmax(0, 1fr) auto;
             gap: 40px;
             align-items: end;
-            min-height: 250px;
-            padding: 46px 0 36px;
+            min-height: 0;
+            padding: 40px 0 32px;
             border-bottom: 1px solid var(--report-line);
         }
 
@@ -1030,12 +785,12 @@
             gap: 9px;
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 9px;
+            font-size: 11px;
             letter-spacing: 0.12em;
             text-transform: uppercase;
         }
 
-        .report-kicker span {
+        .report-kicker > span:first-child {
             width: 7px;
             height: 7px;
             background: var(--primary);
@@ -1089,10 +844,10 @@
             border-right: 0;
         }
 
-        .report-review-card span {
+        .report-review-card > span {
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 8px;
+            font-size: 10px;
             letter-spacing: 0.1em;
             text-transform: uppercase;
         }
@@ -1123,138 +878,6 @@
             line-height: 1.45;
         }
 
-        body.report-page .decision-banner {
-            min-height: 220px;
-            box-sizing: border-box;
-            margin: 24px 0 12px;
-            padding: 30px;
-            overflow: hidden;
-            border: 1px solid var(--report-line);
-            border-radius: 12px;
-            background: linear-gradient(145deg, #171a17, var(--bg-surface));
-            box-shadow: none;
-            animation: none;
-        }
-
-        body.report-page .decision-banner::before {
-            width: 140px;
-            height: 140px;
-            top: auto;
-            right: -70px;
-            bottom: -70px;
-            left: auto;
-            border: 1px solid var(--report-line-strong);
-            transform: rotate(45deg);
-        }
-
-        body.report-page .decision-banner::after {
-            display: none;
-        }
-
-        body.report-page .decision-banner.status-passed {
-            border-color: rgba(199, 255, 61, 0.3);
-            background: linear-gradient(145deg, rgba(199, 255, 61, 0.07), var(--bg-surface));
-        }
-
-        body.report-page .decision-banner.status-blocked {
-            border-color: rgba(255, 102, 94, 0.35);
-            background: linear-gradient(145deg, rgba(255, 102, 94, 0.08), var(--bg-surface));
-        }
-
-        body.report-page .decision-banner.status-error {
-            border-color: rgba(255, 176, 0, 0.45);
-            background: linear-gradient(145deg, rgba(255, 176, 0, 0.08), var(--bg-surface));
-        }
-
-        body.report-page .decision-title {
-            margin: 0;
-            color: var(--primary);
-            font-family: var(--report-display);
-            font-size: clamp(42px, 6vw, 72px);
-            font-weight: 500;
-            letter-spacing: -0.05em;
-            line-height: 0.95;
-            text-shadow: none;
-            text-transform: none;
-        }
-
-        body.report-page .decision-banner.status-blocked .decision-title {
-            color: var(--danger);
-            text-shadow: none;
-        }
-
-        body.report-page .decision-banner.status-error .decision-title {
-            color: var(--secondary);
-            text-shadow: none;
-        }
-
-        body.report-page .decision-reason {
-            max-width: 800px;
-            margin-top: 18px;
-            color: var(--text-muted);
-            font-family: var(--report-mono);
-            font-size: 10px;
-            line-height: 1.7;
-            text-transform: none;
-        }
-
-        body.report-page .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-            gap: 0;
-            margin: 12px 0 24px;
-            overflow: hidden;
-            border: 1px solid var(--report-line);
-            border-radius: 12px;
-            background: var(--bg-surface);
-        }
-
-        body.report-page .metric-card {
-            min-height: 124px;
-            box-sizing: border-box;
-            padding: 18px;
-            border: 0 !important;
-            border-right: 1px solid var(--report-line) !important;
-            border-radius: 0;
-            background: transparent;
-            box-shadow: none !important;
-            text-align: left;
-        }
-
-        body.report-page .metric-card:last-child {
-            border-right: 0 !important;
-        }
-
-        body.report-page .metric-card::before,
-        body.report-page .metric-card::after {
-            display: none;
-        }
-
-        body.report-page .metric-card:hover {
-            background: rgba(255, 255, 255, 0.015);
-            box-shadow: none;
-        }
-
-        body.report-page .metric-value {
-            margin: 12px 0 0;
-            color: var(--text-main);
-            font-family: var(--report-display);
-            font-size: 36px;
-            font-weight: 500;
-            letter-spacing: -0.05em;
-            line-height: 1;
-            text-shadow: none;
-        }
-
-        body.report-page .metric-label {
-            color: var(--text-muted);
-            font-family: var(--report-mono);
-            font-size: 8px;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-        }
-
-        body.report-page .terminal-panel,
         body.report-page .tool-panel {
             margin-bottom: 12px;
             overflow: hidden;
@@ -1265,14 +888,11 @@
             backdrop-filter: none;
         }
 
-        body.report-page .terminal-panel::before,
-        body.report-page .terminal-panel::after,
         body.report-page .tool-panel::before,
         body.report-page .tool-panel::after {
             display: none;
         }
 
-        body.report-page .terminal-panel:hover,
         body.report-page .tool-panel:hover {
             border-color: var(--report-line-strong);
             box-shadow: none;
@@ -1303,7 +923,7 @@
             background: rgba(199, 255, 61, 0.08);
             color: var(--primary);
             font-family: var(--report-mono);
-            font-size: 8px;
+            font-size: 10px;
         }
 
         body.report-page .tool-status.status-fail {
@@ -1358,7 +978,7 @@
             background: rgba(199, 255, 61, 0.1);
             color: var(--primary);
             font-family: var(--report-mono);
-            font-size: 8px;
+            font-size: 10px;
         }
 
         body.report-page .severity-badge.badge-high {
@@ -1386,79 +1006,162 @@
         }
 
         body.report-page .finding-location {
+            margin: 6px 0 0;
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 9px;
+            font-size: 11px;
+            overflow-wrap: anywhere;
         }
 
-        .finding-guidance-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-            margin-top: 14px;
-            padding-top: 14px;
-            border-top: 1px solid var(--report-line);
+        body.report-page .tool-name,
+        body.report-page .finding-title {
+            margin: 0;
         }
 
-        .finding-guidance-card {
-            min-width: 0;
-            padding: 12px;
+        .table-scroll {
+            overflow-x: auto;
             border: 1px solid var(--report-line);
             border-radius: 7px;
-            background: rgba(9, 11, 9, 0.58);
+            background: var(--bg-surface);
         }
 
-        .finding-guidance-card.wide {
-            grid-column: 1 / -1;
+        .scanner-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
         }
 
-        .finding-guidance-card span {
-            display: block;
-            margin-bottom: 6px;
+        .scanner-table th,
+        .scanner-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--report-line);
+            color: var(--text-main);
+            font-weight: 400;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .scanner-table thead th {
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 8px;
-            letter-spacing: 0.1em;
+            font-size: 10px;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
         }
 
-        .finding-guidance-card p {
-            margin: 0;
+        .scanner-table tbody tr:last-child > * {
+            border-bottom: 0;
+        }
+
+        .scanner-table td.mono {
             color: var(--text-muted);
-            font-size: 12px;
+            font-family: var(--report-mono);
+            font-size: 11px;
+        }
+
+        .findings-note {
+            max-width: 760px;
+            margin: 0 0 16px;
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
+        .finding-guidance {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px 24px;
+            margin: 12px 0 0;
+        }
+
+        .finding-guidance dt {
+            margin-bottom: 4px;
+            color: var(--text-muted);
+            font-family: var(--report-mono);
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .finding-guidance dd {
+            margin: 0;
+            color: var(--text-main);
+            font-family: var(--report-display);
+            font-size: 13px;
             line-height: 1.5;
         }
 
-        .fix-suggestion-card {
-            display: grid;
-            gap: 10px;
-            margin-top: 10px;
+        .fix-block {
+            position: relative;
+            margin-top: 12px;
         }
 
-        .fix-suggestion-card pre,
-        .suppression-example pre {
-            white-space: pre-wrap;
+        .fix-block pre,
+        .finding-details pre {
             margin: 0;
-            padding: 12px;
+            padding: 12px 72px 12px 12px;
             overflow-x: auto;
+            white-space: pre-wrap;
             border: 1px solid var(--report-line);
             border-radius: 7px;
             background: rgba(0, 0, 0, 0.25);
             color: var(--text-main);
             font-family: var(--report-mono);
-            font-size: 11px;
+            font-size: 12px;
             line-height: 1.45;
         }
 
-        .suppression-example {
+        .copy-fix-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            min-height: 28px;
+            padding: 0 10px;
+            border: 1px solid var(--report-line-strong);
+            border-radius: 5px;
+            background: var(--bg-surface);
+            color: var(--text-main);
+            cursor: pointer;
+            font-family: var(--report-mono);
+            font-size: 11px;
+        }
+
+        .copy-fix-btn:hover {
+            border-color: var(--primary);
+        }
+
+        .finding-details {
             margin-top: 10px;
         }
 
-        .suppression-example summary {
+        .finding-details summary {
             color: var(--primary);
             cursor: pointer;
             font-family: var(--report-mono);
-            font-size: 10px;
+            font-size: 11px;
+        }
+
+        .finding-details pre,
+        .finding-details ol {
+            margin-top: 8px;
+        }
+
+        .finding-details ol {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        body.report-page .explainer-box h2 {
+            margin: 0 0 8px;
+            color: var(--secondary);
+            font-family: var(--report-display);
+            font-size: 18px;
+        }
+
+        body.report-page .explainer-box p {
+            margin: 0 0 6px;
+            font-family: var(--report-display);
+            font-size: 14px;
         }
 
         body.report-page .explainer-box {
@@ -1477,7 +1180,7 @@
             background: var(--bg-base);
             color: var(--text-muted);
             font-family: var(--report-mono);
-            font-size: 9px;
+            font-size: 11px;
         }
 
         @media (max-width: 900px) {
@@ -1494,9 +1197,7 @@
                 justify-content: flex-end;
             }
 
-            body.report-page .timestamp,
-            body.report-page #explainToggleBtn,
-            body.report-page #langToggleBtn {
+            body.report-page .timestamp {
                 display: none;
             }
 
@@ -1520,18 +1221,6 @@
 
             .report-review-card:nth-child(-n+2) {
                 border-bottom: 1px solid var(--report-line);
-            }
-
-            body.report-page .metrics-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            }
-
-            body.report-page .metric-card:nth-child(2) {
-                border-right: 0 !important;
-            }
-
-            body.report-page .metric-card:nth-child(-n+2) {
-                border-bottom: 1px solid var(--report-line) !important;
             }
         }
 
@@ -1559,26 +1248,13 @@
                 font-size: 46px;
             }
 
-            .report-heading-actions,
-            .report-heading-actions .btn {
-                width: 100%;
-            }
-
             body.report-page .report-heading-actions .btn {
-                min-height: 44px;
+                flex: 1 1 auto;
+                min-height: 40px;
             }
 
-            body.report-page .decision-banner {
-                min-height: 250px;
-                padding: 22px;
-            }
-
-            body.report-page .decision-title {
-                font-size: 44px;
-            }
-
-            body.report-page .metrics-grid {
-                grid-template-columns: 1fr !important;
+            .finding-guidance {
+                grid-template-columns: 1fr;
             }
 
             .report-review-strip {
@@ -1593,19 +1269,6 @@
 
             .report-review-card:last-child {
                 border-bottom: 0;
-            }
-
-            .finding-guidance-grid {
-                grid-template-columns: 1fr;
-            }
-
-            body.report-page .metric-card {
-                border-right: 0 !important;
-                border-bottom: 1px solid var(--report-line) !important;
-            }
-
-            body.report-page .metric-card:last-child {
-                border-bottom: 0 !important;
             }
 
             body.report-page .tool-header {
@@ -1628,7 +1291,6 @@
 
             body.report-page .navbar,
             .report-heading-actions,
-            #uploadPanel,
             body.report-page footer,
             .report-skip-link {
                 display: none !important;
@@ -1646,29 +1308,21 @@
             }
 
             .report-heading h1,
-            body.report-page .decision-title,
             body.report-page .section-title,
             body.report-page .tool-name,
-            body.report-page .finding-title,
-            body.report-page .metric-value {
+            body.report-page .finding-title {
                 color: #111 !important;
             }
 
             .report-heading p,
-            body.report-page .decision-reason,
             body.report-page .finding-desc,
-            body.report-page .finding-location,
-            body.report-page .metric-label {
+            body.report-page .finding-location {
                 color: #444 !important;
             }
 
-            body.report-page .decision-banner,
             .report-review-strip,
-            body.report-page .metrics-grid,
-            body.report-page .terminal-panel,
             body.report-page .tool-panel,
-            body.report-page .finding-item,
-            .finding-guidance-card {
+            body.report-page .finding-item {
                 break-inside: avoid;
                 border-color: #bbb !important;
                 background: #fff !important;
@@ -1684,364 +1338,188 @@
     <nav class="navbar" aria-label="Report navigation">
         <a class="navbar-brand" href="/projects" aria-label="Aegis workbench">
             <span class="report-brand-mark" aria-hidden="true"><span></span></span>
-            <span class="report-brand-copy"><strong>Aegis</strong><small>Security evidence</small></span>
+            <span class="report-brand-copy"><strong>Aegis</strong><small data-i18n="brand_note">Security evidence</small></span>
         </a>
         <div class="navbar-controls">
-            <button id="explainToggleBtn" class="btn-toggle">[ EXPLAIN: OFF ]</button>
-            <button id="langToggleBtn" class="btn-toggle">[ LANG: EN ]</button>
-            <select id="themeSelect" class="cyber-input mono report-theme-control" aria-label="Report theme">
-                <option value="green">THEME: PHOSPHOR GREEN</option>
-                <option value="amber">THEME: AMBER MONO</option>
-                <option value="grey">THEME: CLASSIC GREY</option>
-                <option value="matrix">THEME: MATRIX DIGITAL RAIN</option>
-            </select>
-            <div class="timestamp">
-                <span data-i18n="compiled_on">> COMPILED_ON:</span> {{ timestamp }}
-            </div>
-            <a href="/projects" class="btn-back">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <span class="timestamp"><span data-i18n="generated">Generated</span> {{ timestamp }}</span>
+            <button id="explainToggleBtn" class="btn-toggle" type="button" aria-pressed="false">Explain: off</button>
+            <button id="langToggleBtn" class="btn-toggle" type="button" lang="ko" aria-label="한국어로 보기">한국어</button>
+            <a href="/projects" class="btn-back" data-app-only>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M19 12H5M12 19l-7-7 7-7"/>
                 </svg>
-                Back to workbench
+                <span data-i18n="back">Back to workbench</span>
             </a>
         </div>
     </nav>
 
     <main id="report-content" class="container" tabindex="-1">
-        {% set report_total_issues = namespace(val=0) %}
-        {% set report_total_blocking = namespace(val=0) %}
+        {% set totals = namespace(issues=0, blocking=0) %}
         {% for r in results %}
-            {% set report_total_issues.val = report_total_issues.val + r.total_issues %}
-            {% set report_total_blocking.val = report_total_blocking.val + r.blocking_issues %}
+            {% set totals.issues = totals.issues + r.total_issues %}
+            {% set totals.blocking = totals.blocking + r.blocking_issues %}
         {% endfor %}
         <header class="report-heading">
             <div>
-                <div class="report-kicker"><span></span> Evidence package / Local workspace</div>
-                <h1>Security assessment</h1>
-                <p>Release decision, scanner evidence, and remediation guidance packaged for review and sharing.</p>
+                <div class="report-kicker"><span></span> <span data-i18n="kicker">Evidence package</span></div>
+                <h1 data-i18n="title">Security assessment</h1>
+                <p data-i18n="subtitle">Release decision, scanner evidence, and remediation guidance.</p>
             </div>
             <div class="report-heading-actions">
-                <button id="printReportBtn" class="btn report-print-btn" type="button">Print / Save PDF</button>
-                <a href="/export-dossier" class="btn">Download dossier</a>
-                <a href="/download-report-bundle" class="btn">Download share bundle</a>
+                <button id="printReportBtn" class="btn" type="button" data-i18n="print">Print / PDF</button>
+                <a href="report.md" class="btn" download data-i18n="download_md">Markdown</a>
+                <a href="sbom.json" class="btn" download data-i18n="download_sbom">SBOM</a>
+                <a href="report-bundle.zip" class="btn" download data-app-only data-i18n="download_bundle">Evidence bundle</a>
             </div>
         </header>
 
-        <section class="report-review-strip reveal" aria-label="Report review summary">
+        <section class="report-review-strip" aria-label="Release decision">
             <article class="report-review-card {% if final_status == 'BLOCKED' %}status-blocked{% elif final_status == 'ALLOWED' %}status-passed{% else %}status-error{% endif %}">
-                <span>Release gate</span>
-                <strong>{% if final_status == 'BLOCKED' %}Blocked{% elif final_status == 'ALLOWED' %}Passed{% else %}Incomplete{% endif %}</strong>
-                <p>{{ reason }}</p>
+                <span data-i18n="gate">Release gate</span>
+                <strong id="decisionTitle" data-status="{{ final_status }}">{% if final_status == 'BLOCKED' %}Blocked{% elif final_status == 'ALLOWED' %}Passed{% else %}Incomplete{% endif %}</strong>
+                <p id="reasonText" data-raw-reason="{{ reason }}">{{ reason }}</p>
             </article>
             <article class="report-review-card">
-                <span>Blocking issues</span>
-                <strong>{{ report_total_blocking.val }}</strong>
-                <p>Must be resolved or accepted before release.</p>
+                <span data-i18n="blocking">Blocking issues</span>
+                <strong>{{ totals.blocking }}</strong>
+                <p data-i18n="blocking_note">Resolve or accept before release.</p>
             </article>
             <article class="report-review-card">
-                <span>Total findings</span>
-                <strong>{{ report_total_issues.val }}</strong>
-                <p>Across {{ results | length }} scanner modules.</p>
+                <span data-i18n="total">Total findings</span>
+                <strong>{{ totals.issues }}</strong>
+                <p><span data-i18n="total_note">Scanners run:</span> {{ results | length }}</p>
             </article>
             <article class="report-review-card">
-                <span>Heuristic risk index</span>
+                <span data-i18n="risk">Heuristic risk index</span>
                 <strong>{{ exploitability_score }}/100</strong>
-                <p>Relative severity signal; not a probability.</p>
+                <p data-i18n="risk_note">Relative severity signal, not a probability.</p>
             </article>
         </section>
 
-        <!-- Decision Banner -->
-        <div class="decision-banner {% if final_status == 'BLOCKED' %}status-blocked{% elif final_status == 'ALLOWED' %}status-passed{% else %}status-error{% endif %} reveal">
-            <div class="decision-content">
-                <h1 class="decision-title" id="decisionTitle" data-status="{{ final_status }}">
-                    {% if final_status == 'BLOCKED' %}Deployment blocked{% elif final_status == 'ALLOWED' %}Deployment passed{% else %}Scan incomplete{% endif %}
-                </h1>
-                <p class="decision-reason">
-                    <span data-i18n="gate_status">> CRITICAL_GATE_STATUS:</span> 
-                    <span id="reasonText" data-raw-reason="{{ reason }}">{{ reason }}</span>
-                </p>
-            </div>
-        </div>
-        <!-- Explainer Executive Scorecard & Glossary -->
-        <div class="explainer-box mono reveal" id="reportExplainerHeader" style="margin-bottom: 2rem; border-color: var(--secondary); background: rgba(255,176,0,0.03); padding: 1.25rem 1.5rem;">
-            <h3 style="margin-top: 0; color: var(--secondary); font-size: 1.4rem;" data-i18n="exp_report_title">🎓 EXECUTIVE SECURITY GLOSSARY</h3>
-            <p style="margin-bottom: 1rem; font-size: 1.05rem; line-height: 1.55;" data-i18n="exp_report_summary">This report is compiled from automated security scanning tools checking the target codebase. If any severe vulnerabilities are found, the deployment gate blocks the release to ensure the live environment is not compromised.</p>
-            <p style="margin-bottom: 0; font-size: 0.95rem; line-height: 1.45; color: var(--text-muted);">The heuristic risk index is a relative severity signal derived from findings. It is not a calibrated probability of exploitation and does not override the release decision.</p>
-            
-            <p style="margin-bottom: 0; font-size: 0.95rem; line-height: 1.45; color: var(--text-muted);">The scanner rows below show the tools and coverage available for this run. CodeQL paths and signature matches are leads for review, not proof of an exploit or malware.</p>
+        <div class="explainer-box" id="reportExplainerHeader">
+            <h2 data-i18n="exp_report_title">How to read this report</h2>
+            <p data-i18n="exp_report_summary">Automated scanners checked the source code and its dependencies. If a scanner finds a blocking issue, the release gate stops the deployment until the issue is fixed or formally accepted.</p>
+            <p data-i18n="exp_report_risk">The risk index is a relative severity signal derived from the findings. It is not a probability of exploitation and does not override the release decision.</p>
+            <p data-i18n="exp_report_leads">CodeQL paths and signature matches are leads for review, not proof of an exploit or malware.</p>
         </div>
 
-        <!-- Metrics Row -->
-        <div class="metrics-grid reveal" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-            <div class="metric-card">
-                <div class="metric-value">{{ results | length }}</div>
-                <div class="metric-label">Scanner results</div>
+        <section aria-labelledby="scanners-title">
+            <h2 class="section-title" id="scanners-title" data-i18n="scanners">Scanners</h2>
+            <div class="table-scroll">
+                <table class="scanner-table">
+                    <thead>
+                        <tr>
+                            <th scope="col" data-i18n="col_scanner">Scanner</th>
+                            <th scope="col" data-i18n="col_status">Status</th>
+                            <th scope="col" data-i18n="col_blocking">Blocking</th>
+                            <th scope="col" data-i18n="col_total">Total</th>
+                            <th scope="col" data-i18n="col_severity">By severity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in results %}
+                        <tr>
+                            <th scope="row">{{ r.tool }}</th>
+                            <td><span class="tool-status {% if r.status in ('FAIL', 'ERROR') %}status-fail{% endif %}" data-tool-status="{{ r.status }}">{{ r.status }}</span></td>
+                            <td>{{ r.blocking_issues }}</td>
+                            <td>{{ r.total_issues }}</td>
+                            <td class="mono">{% for name, count in (r.severity_counts or {}).items() %}{{ name }} {{ count }}{% if not loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-            <div class="metric-card">
-                <div class="metric-value">
-                    {% set total_issues = namespace(val=0) %}
-                    {% for r in results %}
-                        {% set total_issues.val = total_issues.val + r.total_issues %}
-                    {% endfor %}
-                    {{ total_issues.val }}
-                </div>
-                <div class="metric-label">Reported findings</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-value">
-                    {% set total_blocking = namespace(val=0) %}
-                    {% for r in results %}
-                        {% set total_blocking.val = total_blocking.val + r.blocking_issues %}
-                    {% endfor %}
-                    {{ total_blocking.val }}
-                </div>
-                <div class="metric-label" data-i18n="metrics_blocking">Blocking Issues</div>
-            </div>
-            <div class="metric-card" style="border-color: {% if exploitability_score > 75 %}var(--danger){% elif exploitability_score > 40 %}var(--secondary){% else %}var(--primary){% endif %}; box-shadow: 0 0 10px {% if exploitability_score > 75 %}var(--danger-glow){% elif exploitability_score > 40 %}var(--secondary-glow){% else %}var(--primary-glow){% endif %};">
-                <div class="metric-value" style="color: {% if exploitability_score > 75 %}var(--danger){% elif exploitability_score > 40 %}var(--secondary){% else %}var(--primary){% endif %};">
-                    {{ exploitability_score }}/100
-                </div>
-                <div class="metric-label" data-i18n="metrics_exploitability">Heuristic risk index</div>
-            </div>
-        </div>
+        </section>
 
-        <!-- Upload Python Script Card -->
-        <div class="terminal-panel reveal" id="uploadPanel" style="display: flex; flex-direction: column; margin-bottom: 3rem;">
-            <div class="tool-header">
-                <div class="tool-name" data-i18n="upload_panel_title">Upload Python script for audit</div>
-                <div class="tool-status" data-i18n="upload_panel_status">READY</div>
-            </div>
-            <div style="padding: 1.5rem; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; background: var(--bg-surface);">
-                <p style="margin: 0; text-align: center; font-size: 0.95rem; color: var(--text-main);" data-i18n="upload_panel_desc">
-                    Select a local Python (.py) script file to run a security audit scan on it.
-                </p>
-                <input type="file" id="uploadFileReport" accept=".py" style="display: none;">
-                <button id="uploadBtnReport" class="btn-back" style="display: inline-flex; align-items: center; gap: 0.5rem;">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
-                    <span id="uploadBtnTextReport" data-i18n="upload_btn_report">UPLOAD AND RUN AUDIT</span>
-                </button>
-                <div id="uploadStatusTextReport" style="font-size: 0.98rem; color: var(--secondary); display: none; margin-top: 0.5rem;"></div>
-            </div>
-        </div>
-
-        <!-- SBOM Compliance Card -->
-        <div class="terminal-panel reveal" id="sbomPanel" style="display: flex; flex-direction: column; margin-bottom: 3rem;">
-            <div class="tool-header" style="border-bottom-color: var(--secondary);">
-                <div class="tool-name" style="color: var(--secondary);" data-i18n="sbom_panel_title">Software bill of materials (SBOM)</div>
-                <div class="tool-status" style="border-color: var(--secondary); color: var(--secondary);" data-i18n="sbom_panel_status">CYCLONEDX_1.5</div>
-            </div>
-            <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; background: var(--bg-surface);">
-                <p style="margin: 0; font-size: 0.95rem; color: var(--text-main);" data-i18n="sbom_panel_desc">
-                    A Software Bill of Materials (SBOM) has been generated in CycloneDX v1.5 JSON format, mapping the full dependency inventory of third-party libraries used by this application.
-                </p>
-                <div style="display: flex; justify-content: center; margin-top: 0.5rem;">
-                    <a href="/download-sbom" class="btn btn-secondary mono" style="display: inline-flex; align-items: center; gap: 0.5rem;">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        DOWNLOAD_CYCLONEDX_SBOM
-                    </a>
+        <section aria-labelledby="findings-title">
+            <h2 class="section-title" id="findings-title" data-i18n="findings">Findings</h2>
+            <p class="findings-note" data-i18n="findings_note">Up to five findings per scanner are listed, blocking ones first. This standalone report cannot tell new findings from existing ones. Suppress a finding only after a named owner accepts the risk, confirms it is not exploitable, or names a compensating control.</p>
+            {% for result in results if result.examples %}
+            <section class="tool-panel" aria-label="{{ result.tool }}">
+                <div class="tool-header">
+                    <h3 class="tool-name">{{ result.tool }}</h3>
+                    <span class="tool-status {% if result.status in ('FAIL', 'ERROR') %}status-fail{% endif %}" data-tool-status="{{ result.status }}">{{ result.status }}</span>
                 </div>
-            </div>
-        </div>
-
-        <h2 class="section-title reveal mono" data-i18n="detailed_logs">Scanner evidence</h2>
-
-        <!-- Loop through tool results -->
-        {% for result in results %}
-        <div class="tool-panel reveal">
-            <div class="tool-header">
-                <div class="tool-name">{{ result.tool }}</div>
-                <div class="tool-status {% if result.status == 'FAIL' %}status-fail{% endif %}" data-tool-status="{{ result.status }}">
-                    {{ result.status }}
-                </div>
-            </div>
-            <div class="findings-list">
-                {% if result.examples %}
+                <div class="findings-list">
                     {% for example in result.examples %}
-                        <div class="finding-item {% if example.severity == 'HIGH' or example.severity == 'CRITICAL' %}severity-high{% elif example.severity == 'MEDIUM' %}severity-medium{% endif %}">
-                            <div class="finding-meta">
-                                {% if example.severity %}
-                                <span class="severity-badge {% if example.severity == 'HIGH' or example.severity == 'CRITICAL' %}badge-high{% elif example.severity == 'MEDIUM' %}badge-medium{% endif %}" data-severity="{{ example.severity }}">
-                                    {{ example.severity }}
-                                </span>
-                                <span class="finding-title">
-                                    {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
-                                        {{ example.issue_text }}
-                                    {% elif result.tool == 'Semgrep' %}
-                                        {{ example.issue_text }}
-                                    {% elif result.tool == 'CodeQL' %}
-                                        {{ example.issue_text }}
-                                    {% elif result.tool == 'Safety' %}
-                                        Insecure Package: {{ example.package_name }}
-                                    {% elif result.tool == 'OSV Dependency Audit' %}
-                                        OSV Vulnerability: {{ example.id }} ({{ example.package_name }})
-                                    {% elif result.tool == 'Trivy' %}
-                                        Vulnerability: {{ example.vulnerability_id }} ({{ example.package_name }})
-                                    {% elif result.tool == 'Secrets Scanner' %}
-                                        Hardcoded Secret: {{ example.type }}
-                                    {% elif result.tool == 'YARA Scanner' %}
-                                        Malicious Pattern Matched: {{ example.rule }}
-                                    {% elif result.tool == 'ClamAV' %}
-                                        Malware Signature Matched: {{ example.virus }}
-                                    {% elif result.tool == 'Aegis DAST Probe' %}
-                                        Active DAST Alert: {{ example.vuln_type }} ({{ example.status }})
-                                    {% endif %}
-                                </span>
-                                {% endif %}
-                            </div>
-                            <div class="finding-desc" data-tool="{{ result.tool }}">
-                                {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
-                                    <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Source Code Violation detected.</span>
-                                {% elif result.tool == 'Semgrep' %}
-                                    <span data-i18n="defect_prefix">Defect ID:</span> {{ example.test_id }} &bull; <span data-i18n="violation_text">Semgrep Pattern Match.</span>
-                                {% elif result.tool == 'CodeQL' %}
-                                    <span>Rule:</span> {{ example.test_id or example.rule_id }} &bull; <span>Static analysis finding; validate reachability and impact.</span>
-                                {% elif result.tool == 'Safety' %}
-                                    <span data-i18n="affected_versions">Affected Versions:</span> {{ example.affected_versions }} &bull; <span data-i18n="fixed_versions">Fixed Versions:</span> {{ example.fixed_versions }}<br>
-                                    <span data-i18n="description_label">Description:</span> {{ example.description }}
-                                {% elif result.tool == 'OSV Dependency Audit' %}
-                                    <span data-i18n="cvss_score">CVSS Score:</span> <strong>{{ example.cvss or 'N/A' }}</strong> &bull; <span data-i18n="summary_label">Summary:</span> {{ example.summary }}<br>
-                                    <span data-i18n="details_label">Details:</span> {{ example.details[:300] }}{% if example.details|length > 300 %}...{% endif %}
-                                {% elif result.tool == 'Trivy' %}
-                                    <span data-i18n="severity_label">Severity:</span> <span data-severity="{{ example.severity }}">{{ example.severity }}</span> &bull; <span data-i18n="title_label">Title:</span> {{ example.title or 'N/A' }}<br>
-                                    <span data-i18n="target_pkg_label">Target Package:</span> {{ example.package_name }} (<span data-i18n="installed_label">Installed:</span> {{ example.installed_version }}, <span data-i18n="fixed_in_label">Fixed in:</span> {{ example.fixed_version }})
-                                {% elif result.tool == 'Secrets Scanner' %}
-                                    <span data-i18n="secret_type_label">Secret Type:</span> {{ example.type }} &bull; <span data-i18n="secret_risk_text">Exposed plaintext credential detected.</span>
-                                {% elif result.tool == 'YARA Scanner' %}
-                                    <span data-i18n="yara_rule_label">Rule Name:</span> {{ example.rule }} &bull; <span data-i18n="yara_desc_label">Threat Profile:</span> {{ example.description }}
-                                {% elif result.tool == 'ClamAV' %}
-                                    <span data-i18n="clamav_virus_label">Virus Name:</span> {{ example.virus }} &bull; <span data-i18n="clamav_desc_label">Threat Profile:</span> {{ example.description }}
-                                {% elif result.tool == 'Aegis DAST Probe' %}
-                                    <span data-i18n="zap_vuln_label">Vulnerability Type:</span> {{ example.vuln_type }} &bull; <span data-i18n="zap_status_label">Status:</span> <span class="badge {% if example.status == 'EXPOSED' %}badge-danger{% else %}badge-success{% endif %}">{{ example.status }}</span><br>
-                                    <span data-i18n="zap_payload_label">Attack Payload:</span> <code>{{ example.payload }}</code>
-                                {% endif %}
-                            </div>
-                            <div class="finding-location">
-                                {% if result.tool == 'Bandit' or result.tool == 'Ruff (SAST)' %}
-                                    <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
-                                {% elif result.tool == 'Semgrep' %}
-                                    <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
-                                {% elif result.tool == 'CodeQL' %}
-                                    <span>Source:</span> {{ example.filename }}:{{ example.line_number }}
-                                {% elif result.tool == 'OSV Dependency Audit' %}
-                                    <span data-i18n="dependency_pkg_label">> DEPENDENCY:</span> {{ example.package_name }} (Version: {{ example.version }})
-                                {% elif result.tool == 'Trivy' %}
-                                    <span data-i18n="target_label">> TARGET:</span> {{ example.target }}
-                                {% elif result.tool == 'Secrets Scanner' %}
-                                    <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }} &bull; <span data-i18n="line_ref_label">LINE_REF:</span> {{ example.line_number }}
-                                {% elif result.tool == 'YARA Scanner' %}
-                                    <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }}
-                                {% elif result.tool == 'ClamAV' %}
-                                    <span data-i18n="target_file_label">> TARGET_FILE:</span> {{ example.filename }}
-                                {% elif result.tool == 'Aegis DAST Probe' %}
-                                    <span data-i18n="target_route_label">> TARGET_ROUTE:</span> <code>{{ example.route }}</code>
-                                {% endif %}
-                            </div>
-                            <div class="finding-guidance-grid" aria-label="Finding guidance">
-                                <div class="finding-guidance-card">
-                                    <span>What failed</span>
-                                    <p>{{ example.test_id or example.id or example.vulnerability_id or example.rule or example.type or result.tool }}</p>
-                                </div>
-                                <div class="finding-guidance-card">
-                                    <span>Why it matters</span>
-                                    <p>{{ example.why_it_matters }}</p>
-                                </div>
-                                <div class="finding-guidance-card wide">
-                                    <span>How to fix</span>
-                                    <p>{{ example.remediation }}</p>
-                                </div>
-                                <div class="finding-guidance-card">
-                                    <span>New or pre-existing</span>
-                                    <p>{{ example.finding_status }}</p>
-                                </div>
-                                <div class="finding-guidance-card">
-                                    <span>Safe to suppress</span>
-                                    <p>{{ example.suppression_guidance }}</p>
-                                </div>
-                                {% if example.fix_suggestion %}
-                                <div class="finding-guidance-card wide fix-suggestion-card">
-                                    <span>Copyable fix</span>
-                                    <button class="btn btn-secondary copy-fix-btn" type="button" data-copy="{{ example.fix_suggestion }}">Copy fix</button>
-                                    <pre><code>{{ example.fix_suggestion }}</code></pre>
-                                </div>
-                                {% endif %}
-                                {% if example.suppression_example %}
-                                <details class="finding-guidance-card wide suppression-example">
-                                    <summary>Suppression example</summary>
-                                    <pre><code>{{ example.suppression_example }}</code></pre>
-                                </details>
-                                {% endif %}
-                                {% if result.tool == 'CodeQL' and example.code_flows %}
-                                <div class="finding-guidance-card wide">
-                                    <span>Source-to-sink path</span>
-                                    {% for flow in example.code_flows %}
-                                    <ol>
-                                        {% for step in flow %}
-                                        <li><code>{{ step.filename }}:{{ step.line_number }}</code> — {{ step.message }}</li>
-                                        {% endfor %}
-                                    </ol>
-                                    {% endfor %}
-                                </div>
-                                {% endif %}
-                            </div>
-                            <!-- Explainer subtext for dynamic scan findings -->
-                            <div class="explainer-subtext mono" style="display: none;">
-                                {% if result.tool == 'OSV Dependency Audit' %}
-                                    <span data-i18n="exp_report_osv">⚠️ Open Source Vulnerability (OSV): This dependency version contains known security bugs cataloged in public vulnerability databases. Update to a patched version immediately.</span>
-                                {% elif result.tool == 'Bandit' or result.tool == 'Semgrep' %}
-                                    {% if 'subprocess' in example.issue_text.lower() or 'shell' in example.issue_text.lower() or 'rce' in example.test_id.lower() %}
-                                        <span data-i18n="exp_report_bandit_rce">⚠️ Command execution flaw: The code runs shell scripts using variables. A hacker can insert command punctuation (like ;) to run unauthorized server commands.</span>
-                                    {% elif 'sql' in example.issue_text.lower() or 'sqli' in example.test_id.lower() %}
-                                        <span data-i18n="exp_report_bandit_sqli">⚠️ SQL Database Injection: Direct string formatting is used to build query structures. A hacker can submit trick keywords to bypass permissions and leak all data.</span>
-                                    {% elif 'eval' in example.issue_text.lower() or 'eval' in example.test_id.lower() %}
-                                        <span data-i18n="exp_report_bandit_eval">⚠️ Arbitrary execution: The system executes raw input as Python scripts (eval). A hacker can use this to execute files, delete folders, or read private environmental secrets.</span>
-                                    {% elif 'pickle' in example.issue_text.lower() or 'pickle' in example.test_id.lower() %}
-                                        <span data-i18n="exp_report_bandit_pickle">⚠️ Deserialization risk: Pickle deserializes unsanitized streams. Hackers can bundle hidden programming payloads inside save streams that execute automatically when loaded.</span>
-                                    {% elif 'md5' in example.issue_text.lower() or 'hash' in example.issue_text.lower() or 'weak-hash' in example.test_id.lower() %}
-                                        <span data-i18n="exp_report_bandit_md5">⚠️ Weak encryption: Password files or sensitive states are hashed with MD5. MD5 is broken and easily reversed by modern graphic cards. Use SHA-256 or bcrypt instead.</span>
-                                    {% else %}
-                                        <span data-i18n="exp_report_bandit_other">⚠️ Security weakness: Code contains insecure defaults or dangerous functions that make exploits easier. Fix by upgrading validation logic.</span>
-                                    {% endif %}
-                                {% elif result.tool == 'Safety' %}
-                                    <span data-i18n="exp_report_safety_desc">⚠️ Outdated package dependency: This imported library contains known, public vulnerabilities listed in CVE catalogs. Fix by updating requirements.txt to the specified fixed version.</span>
-                                {% elif result.tool == 'Trivy' %}
-                                    <span data-i18n="exp_report_trivy_desc">⚠️ Server Wrapper vulnerability: The target environment wrapper or docker base image contains open CVE patches. Hackers exploit these to escape server containers.</span>
-                                {% elif result.tool == 'Secrets Scanner' %}
-                                    <span data-i18n="exp_report_secrets_desc">⚠️ Hardcoded plaintext secret: Plaintext credentials or api tokens detected. Exposed keys will be leaked if code is pushed to public repositories. Fix by loading credentials from secure env parameters.</span>
-                                {% elif result.tool == 'YARA Scanner' %}
-                                    <span data-i18n="exp_report_yara_desc">⚠️ Malicious code pattern: Match against custom signature definition rules (backdoors, shells, obfuscated executions). Ensure code origin is verified and remove suspicious components.</span>
-                                {% elif result.tool == 'ClamAV' %}
-                                    <span data-i18n="exp_report_clamav_desc">⚠️ Active virus or malware signature detected in codebase. Remove the infected code or test file before staging.</span>
-                                {% elif result.tool == 'Aegis DAST Probe' %}
-                                    <span data-i18n="exp_report_zap_desc">⚠️ Active endpoint vulnerability: Aegis DAST probe successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.</span>
-                                {% endif %}
-                            </div>
+                    {% set rule = example.test_id or example.id or example.vulnerability_id or example.rule or example.type or result.tool %}
+                    {% set text = ((example.issue_text or '') ~ ' ' ~ (rule or '')) | lower %}
+                    <article class="finding-item {% if example.severity in ('HIGH', 'CRITICAL') %}severity-high{% elif example.severity == 'MEDIUM' %}severity-medium{% endif %}">
+                        <div class="finding-meta">
+                            {% if example.severity %}
+                            <span class="severity-badge {% if example.severity in ('HIGH', 'CRITICAL') %}badge-high{% elif example.severity == 'MEDIUM' %}badge-medium{% endif %}" data-severity="{{ example.severity }}">{{ example.severity }}</span>
+                            {% endif %}
+                            <h4 class="finding-title">{{ example.display_title or rule }}</h4>
                         </div>
+                        <p class="finding-location"><code>{{ rule }}</code>{% if example.display_location %} · <code>{{ example.display_location }}</code>{% endif %}</p>
+                        {% if result.tool == 'OSV Dependency Audit' %}
+                        <p class="finding-desc">CVSS {{ example.cvss or 'N/A' }}{% if example.severity_reason %} · {{ example.severity_reason }}{% endif %}{% if example.details %}<br>{{ example.details[:300] }}{% if example.details | length > 300 %}…{% endif %}{% endif %}</p>
+                        {% endif %}
+                        <dl class="finding-guidance">
+                            <div><dt data-i18n="why">Why it matters</dt><dd>{{ example.why_it_matters }}</dd></div>
+                            <div><dt data-i18n="fix">How to fix</dt><dd>{{ example.remediation }}</dd></div>
+                        </dl>
+                        {% if example.fix_suggestion %}
+                        <div class="fix-block">
+                            <pre><code>{{ example.fix_suggestion }}</code></pre>
+                            <button class="copy-fix-btn" type="button" data-copy="{{ example.fix_suggestion }}" aria-label="Copy fix"><span data-i18n="copy">Copy</span></button>
+                        </div>
+                        {% endif %}
+                        {% if result.tool == 'CodeQL' and example.code_flows %}
+                        <details class="finding-details">
+                            <summary data-i18n="flow">Source-to-sink path</summary>
+                            {% for flow in example.code_flows %}
+                            <ol>
+                                {% for step in flow %}
+                                <li><code>{{ step.filename }}:{{ step.line_number }}</code> — {{ step.message }}</li>
+                                {% endfor %}
+                            </ol>
+                            {% endfor %}
+                        </details>
+                        {% endif %}
+                        {% if example.suppression_example %}
+                        <details class="finding-details">
+                            <summary data-i18n="suppression">Suppression example</summary>
+                            <pre><code>{{ example.suppression_example }}</code></pre>
+                        </details>
+                        {% endif %}
+                        <div class="explainer-subtext">
+                            {% if result.tool == 'OSV Dependency Audit' %}
+                                <span data-i18n="exp_report_osv">This dependency version has known security bugs listed in public vulnerability databases. Update to a patched version.</span>
+                            {% elif result.tool in ('Ruff (SAST)', 'Semgrep', 'CodeQL') %}
+                                {% if 'subprocess' in text or 'shell' in text or 'rce' in text or 'command' in text %}
+                                    <span data-i18n="exp_report_rce">Command execution: the code builds shell commands from variables. An attacker could add shell punctuation (such as ;) to run their own commands.</span>
+                                {% elif 'sql' in text %}
+                                    <span data-i18n="exp_report_sqli">SQL injection: the query is built with string formatting. An attacker could change the query to bypass permissions or read data.</span>
+                                {% elif 'eval' in text %}
+                                    <span data-i18n="exp_report_eval">Code execution: input is run as code (eval). An attacker could run their own Python code.</span>
+                                {% elif 'pickle' in text or 'deserializ' in text %}
+                                    <span data-i18n="exp_report_pickle">Unsafe deserialization: loading untrusted pickle data can run code hidden inside it.</span>
+                                {% elif 'md5' in text or 'hash' in text %}
+                                    <span data-i18n="exp_report_md5">Weak hashing: MD5 and SHA-1 are broken for security use. Use SHA-256, or bcrypt/argon2 for passwords.</span>
+                                {% elif 'xss' in text or 'html' in text %}
+                                    <span data-i18n="exp_report_xss">Cross-site scripting: untrusted text may be rendered as HTML, letting an attacker run script in a user's browser.</span>
+                                {% else %}
+                                    <span data-i18n="exp_report_other">Security weakness: the code uses an unsafe default or a dangerous function. Validate input and use the safe API.</span>
+                                {% endif %}
+                            {% elif result.tool == 'Secrets Scanner' %}
+                                <span data-i18n="exp_report_secrets">Possible hardcoded secret: anyone with access to the code or its history can copy a real key. Load secrets from the environment or a secret manager.</span>
+                            {% elif result.tool == 'YARA Scanner' %}
+                                <span data-i18n="exp_report_yara">Suspicious code pattern: a signature for backdoors, shells, or obfuscated code matched. Confirm where the file came from.</span>
+                            {% endif %}
+                        </div>
+                    </article>
                     {% endfor %}
-                {% elif result.status == 'PASS' %}
-                    <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;" data-i18n="no_issues">
-                        No findings reported in this scan.
-                    </div>
-                {% elif result.status == 'SKIPPED' or result.status == 'MISSING' %}
-                    <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">Not assessed by this scanner.</div>
-                {% else %}
-                    <div style="color: var(--text-muted); font-size: 0.9rem; font-style: italic;">Scanner failed or report incomplete; coverage unavailable.</div>
-                {% endif %}
-            </div>
-        </div>
-        {% endfor %}
+                </div>
+            </section>
+            {% else %}
+            <p class="findings-note" data-i18n="no_findings">No findings were reported.</p>
+            {% endfor %}
+        </section>
     </main>
 
     <footer>
-        <div class="mono" style="margin-bottom: 0.5rem; color: var(--primary);" data-i18n="footer_brand">AEGIS DIAGNOSTICS CONTROL PLANE</div>
-        <div data-i18n="footer_text">v2.2.0-tactical &bull; 2026 &bull; AUTOMATED SECDEVOPS COMPLIANCE REPORT</div>
+        <span data-i18n="footer">Generated by Aegis</span> · {{ timestamp }}
     </footer>
 
     <!-- Animated Retro Scanning Grid Canvas -->
@@ -2171,438 +1649,237 @@
         animate();
     </script>
 
-    <!-- Scroll Reveal Animation -->
-    <script>
-        function reveal() {
-            var reveals = document.querySelectorAll(".reveal");
-            for (var i = 0; i < reveals.length; i++) {
-                var windowHeight = window.innerHeight;
-                var elementTop = reveals[i].getBoundingClientRect().top;
-                var elementVisible = 80;
-                if (elementTop < windowHeight - elementVisible) {
-                    reveals[i].classList.add("active");
-                }
-            }
-        }
-        window.addEventListener("scroll", reveal);
-        setTimeout(reveal, 100);
-    </script>
-
-    <!-- i18n Translation & Theme Script -->
+    <!-- Language, explain mode, print, and copy -->
     <script>
         const i18n = {
             en: {
-                brand: "[ AEGIS_DIAGNOSTICS_REPORT ]",
-                compiled_on: "Compiled:",
-                return_btn: "RETURN_TO_BASE",
-                gate_status: "Decision rationale:",
-                metrics_modules: "Security Modules Run",
-                metrics_vulns: "Total Vulnerabilities",
-                metrics_blocking: "Blocking Issues",
-                metrics_exploitability: "Heuristic risk index",
-                detailed_logs: "Scanner evidence",
-                no_issues: "No issues detected by this scanner.",
-                footer_brand: "AEGIS SECURITY EVIDENCE",
-                footer_text: "v2.2.0 • 2026 • AUTOMATED DEVSECOPS ASSESSMENT",
-                
-                // Severity levels
-                high: "HIGH",
-                critical: "CRITICAL",
-                medium: "MEDIUM",
-                low: "LOW",
-                
-                // Status mapping
-                blocked: "Deployment blocked",
-                passed: "Deployment passed",
-                error: "Scan incomplete",
-                
-                // Reasons mapping
-                reason_blocked: "Blocking security issues found by: Bandit",
-                reason_passed: "All scans passed. System safe for production.",
-
-                // Finding labels
-                defect_prefix: "Defect ID:",
-                violation_text: "Source Code Violation detected.",
-                affected_versions: "Affected Versions:",
-                fixed_versions: "Fixed Versions:",
-                description_label: "Description:",
-                severity_label: "Severity:",
-                title_label: "Title:",
-                target_pkg_label: "Target Package:",
-                installed_label: "Installed:",
-                fixed_in_label: "Fixed in:",
-                target_file_label: "> TARGET_FILE:",
-                line_ref_label: "LINE_REF:",
-                target_label: "> TARGET:",
-                cvss_score: "CVSS Score:",
-                summary_label: "Summary:",
-                details_label: "Details:",
-                dependency_pkg_label: "> DEPENDENCY:",
-                exp_report_osv: "⚠️ Open Source Vulnerability (OSV): This dependency version contains known security bugs cataloged in public vulnerability databases. Update to a patched version immediately.",
-
-                // Explainer Mode properties
-                explain_toggle_on: "[ EXPLAIN: ON ]",
-                explain_toggle_off: "[ EXPLAIN: OFF ]",
-                exp_report_title: "🎓 EXECUTIVE SECURITY GLOSSARY",
-                exp_report_summary: "This report is compiled from automated security scanning tools checking the target codebase. If any severe vulnerabilities are found, the deployment gate blocks the release to ensure the live environment is not compromised.",
-                exp_desc_bandit: "Scans Python files line-by-line looking for programmatic security errors (e.g. executing user inputs directly or using weak hashing).",
-                exp_desc_safety: "Checks the requirements dependency tree against a global database of known library vulnerabilities (CVEs) and warns if packages are outdated or recalled.",
-                exp_desc_trivy: "Scans server setups, operating system packages, and docker files for security gaps that would let hackers gain host machine access.",
-                exp_report_bandit_rce: "⚠️ Command execution flaw: The code runs shell scripts using variables. A hacker can insert command punctuation (like ;) to run unauthorized server commands.",
-                exp_report_bandit_sqli: "⚠️ SQL Database Injection: Direct string formatting is used to build query structures. A hacker can submit trick keywords to bypass permissions and leak all data.",
-                exp_report_bandit_eval: "⚠️ Arbitrary execution: The system executes raw input as Python scripts (eval). A hacker can use this to execute files, delete folders, or read private environmental secrets.",
-                exp_report_bandit_pickle: "⚠️ Deserialization risk: Pickle deserializes unsanitized streams. Hackers can bundle hidden programming payloads inside save streams that execute automatically when loaded.",
-                exp_report_bandit_md5: "⚠️ Weak encryption: Password files or sensitive states are hashed with MD5. MD5 is broken and easily reversed by modern graphic cards. Use SHA-256 or bcrypt instead.",
-                exp_report_bandit_other: "⚠️ Security weakness: Code contains insecure defaults or dangerous functions that make exploits easier. Fix by upgrading validation logic.",
-                exp_report_safety_desc: "⚠️ Outdated package dependency: This imported library contains known, public vulnerabilities listed in CVE catalogs. Fix by updating requirements.txt to the specified fixed version.",
-                exp_report_trivy_desc: "⚠️ Server Wrapper vulnerability: The target environment wrapper or docker base image contains open CVE patches. Hackers exploit these to escape server containers.",
-                secret_type_label: "Secret Type:",
-                secret_risk_text: "Exposed plaintext credential detected.",
-                yara_rule_label: "Rule Name:",
-                yara_desc_label: "Threat Profile:",
-                exp_report_secrets_desc: "⚠️ Hardcoded plaintext secret: Plaintext credentials or api tokens detected. Exposed keys will be leaked if code is pushed to public repositories. Fix by loading credentials from secure env parameters.",
-                exp_report_yara_desc: "⚠️ Malicious code pattern: Match against custom signature definition rules (backdoors, shells, obfuscated executions). Ensure code origin is verified and remove suspicious components.",
-                clamav_virus_label: "Virus Name:",
-                clamav_desc_label: "Threat Profile:",
-                zap_vuln_label: "Vulnerability Type:",
-                zap_status_label: "Status:",
-                zap_payload_label: "Attack Payload:",
-                target_route_label: "> TARGET_ROUTE:",
-                exp_report_clamav_desc: "⚠️ Active virus or malware signature detected in codebase. Remove the infected code or test file before staging.",
-                exp_report_zap_desc: "⚠️ Active endpoint vulnerability: Aegis DAST probe successfully bypassed defenses and executed payload reflections. Enable Web Application Firewall (WAF) to block the attack vector.",
-                sbom_panel_title: "Software bill of materials (SBOM)",
-                sbom_panel_status: "CYCLONEDX_1.5",
-                sbom_panel_desc: "A Software Bill of Materials (SBOM) has been generated in CycloneDX v1.5 JSON format, mapping the full dependency inventory of third-party libraries used by this application.",
-
-                // Report upload titles
-                upload_panel_title: "Upload Python script for audit",
-                upload_panel_status: "READY",
-                upload_panel_desc: "Select a local Python (.py) script file to run a security audit scan on it.",
-                upload_btn_report: "UPLOAD AND RUN AUDIT",
-                upload_btn_scanning: "AUDITING CODE...",
-                upload_btn_scanned: "✅ AUDIT COMPLETED!",
+                brand_note: "Security evidence",
+                generated: "Generated",
+                back: "Back to workbench",
+                kicker: "Evidence package",
+                title: "Security assessment",
+                subtitle: "Release decision, scanner evidence, and remediation guidance.",
+                print: "Print / PDF",
+                download_md: "Markdown",
+                download_sbom: "SBOM",
+                download_bundle: "Evidence bundle",
+                gate: "Release gate",
+                blocked: "Blocked",
+                passed: "Passed",
+                error: "Incomplete",
+                blocking: "Blocking issues",
+                blocking_note: "Resolve or accept before release.",
+                total: "Total findings",
+                total_note: "Scanners run:",
+                risk: "Heuristic risk index",
+                risk_note: "Relative severity signal, not a probability.",
+                scanners: "Scanners",
+                col_scanner: "Scanner",
+                col_status: "Status",
+                col_blocking: "Blocking",
+                col_total: "Total",
+                col_severity: "By severity",
+                findings: "Findings",
+                findings_note: "Up to five findings per scanner are listed, blocking ones first. This standalone report cannot tell new findings from existing ones. Suppress a finding only after a named owner accepts the risk, confirms it is not exploitable, or names a compensating control.",
+                no_findings: "No findings were reported.",
+                why: "Why it matters",
+                fix: "How to fix",
+                copy: "Copy",
+                copied: "Copied",
+                copy_failed: "Copy failed",
+                flow: "Source-to-sink path",
+                suppression: "Suppression example",
+                footer: "Generated by Aegis",
+                explain_on: "Explain: on",
+                explain_off: "Explain: off",
+                reason_passed: "No blocking issues found.",
+                reason_blocked: "Blocking security issues found by:",
+                exp_report_title: "How to read this report",
+                exp_report_summary: "Automated scanners checked the source code and its dependencies. If a scanner finds a blocking issue, the release gate stops the deployment until the issue is fixed or formally accepted.",
+                exp_report_risk: "The risk index is a relative severity signal derived from the findings. It is not a probability of exploitation and does not override the release decision.",
+                exp_report_leads: "CodeQL paths and signature matches are leads for review, not proof of an exploit or malware.",
+                exp_report_osv: "This dependency version has known security bugs listed in public vulnerability databases. Update to a patched version.",
+                exp_report_rce: "Command execution: the code builds shell commands from variables. An attacker could add shell punctuation (such as ;) to run their own commands.",
+                exp_report_sqli: "SQL injection: the query is built with string formatting. An attacker could change the query to bypass permissions or read data.",
+                exp_report_eval: "Code execution: input is run as code (eval). An attacker could run their own Python code.",
+                exp_report_pickle: "Unsafe deserialization: loading untrusted pickle data can run code hidden inside it.",
+                exp_report_md5: "Weak hashing: MD5 and SHA-1 are broken for security use. Use SHA-256, or bcrypt/argon2 for passwords.",
+                exp_report_xss: "Cross-site scripting: untrusted text may be rendered as HTML, letting an attacker run script in a user's browser.",
+                exp_report_other: "Security weakness: the code uses an unsafe default or a dangerous function. Validate input and use the safe API.",
+                exp_report_secrets: "Possible hardcoded secret: anyone with access to the code or its history can copy a real key. Load secrets from the environment or a secret manager.",
+                exp_report_yara: "Suspicious code pattern: a signature for backdoors, shells, or obfuscated code matched. Confirm where the file came from.",
+                status: { FAIL: "Fail", ERROR: "Error", SKIPPED: "Skipped", MISSING: "Missing", PASS: "Pass" },
+                severity: { CRITICAL: "CRITICAL", HIGH: "HIGH", MEDIUM: "MEDIUM", LOW: "LOW" },
             },
             ko: {
-                brand: "[ 이지스_보안_진단_보고서 ]",
-                compiled_on: "> 보고서_작성일:",
-                return_btn: "대시보드로_복귀",
-                gate_status: "> 심각한_게이트_상태:",
-                metrics_modules: "실행된 보안 모듈 수",
-                metrics_vulns: "총 발견된 취약점 수",
-                metrics_blocking: "차단 취약점 수",
-                metrics_exploitability: "휴리스틱 위험 지수",
-                detailed_logs: "> 상세_분석_로그",
-                no_issues: "탐지된 보안 취약점이 없습니다.",
-                footer_brand: "이지스 보안 진단 제어 평면",
-                footer_text: "v2.2.0-tactical • 2026 • 자동화된 SECDEVOPS 컴플라이언스 보고서",
-                
-                // Severity levels
-                high: "높음(HIGH)",
-                critical: "치명적(CRITICAL)",
-                medium: "중간(MEDIUM)",
-                low: "낮음(LOW)",
-                
-                // Status mapping
-                blocked: "배포 차단됨",
-                passed: "배포 승인됨",
-                error: "검사 미완료",
-                
-                // Reasons mapping
-                reason_blocked: "차단 보안 결함 발견됨: Bandit",
-                reason_passed: "모든 보안 검사 통과. 안전하게 배포 가능합니다.",
-
-                // Finding labels
-                defect_prefix: "결함 ID:",
-                violation_text: "소스 코드 규칙 위반 감지됨.",
-                affected_versions: "영향을 받는 버전:",
-                fixed_versions: "패치된 버전:",
-                description_label: "상세 설명:",
-                severity_label: "심각도:",
-                title_label: "제목:",
-                target_pkg_label: "대상 패키지:",
-                installed_label: "설치된 버전:",
-                fixed_in_label: "패치 버전:",
-                target_file_label: "> 대상_파일:",
-                line_ref_label: "라인_참조:",
-                target_label: "> 대상:",
-                cvss_score: "CVSS 점수:",
-                summary_label: "요약:",
-                details_label: "상세 설명:",
-                dependency_pkg_label: "> 라이브러리 종속성:",
-                exp_report_osv: "⚠️ 오픈 소스 취약성 (OSV): 이 패키지 버전은 공개 취약점 데이터베이스에 등록된 알려진 보안 버그를 포함하고 있습니다. 즉시 패치 버전으로 업데이트해야 합니다.",
-
-                // Explainer Mode properties
-                explain_toggle_on: "[ 설명 모드: 켬 ]",
-                explain_toggle_off: "[ 설명 모드: 끔 ]",
-                exp_report_title: "🎓 경영진을 위한 보안 용어집",
-                exp_report_summary: "이 보고서는 대상 소스 코드 및 종속성을 검사하는 자동화 보안 도구에 의해 작성되었습니다. 심각한 결함이 발견될 경우 배포 게이트가 최종 서비스 릴리즈를 차단하여 실제 서비스 환경의 보안 위험을 미연에 방지합니다.",
-                exp_desc_bandit: "파이썬 소스코드를 라인별로 분석하여 유해한 함수 호출, 입력값 미검증, 약한 암호화 알고리즘 사용 등 프로그래밍적 논리 허점을 찾아냅니다.",
-                exp_desc_safety: "설치된 외부 소프트웨어 패키지 리스트를 전 세계 공통 취약점 데이터베이스(CVE)와 비교하여 만료되거나 위험한 버전이 있는지 진단합니다.",
-                exp_desc_trivy: "도커(Docker) 빌드 설정이나 가상 운영체제 패키지의 보안 결함을 점검하여, 해커가 격리된 서버 환경을 탈출해 본체를 장악하는 구멍을 막아줍니다.",
-                exp_report_bandit_rce: "⚠️ 원격 명령어 실행 위험: 입력값을 검증 없이 시스템 셸에서 즉시 실행합니다. 해커가 악성 기호(;)를 넣어 서버 전체를 장악할 수 있습니다.",
-                exp_report_bandit_sqli: "⚠️ SQL 데이터베이스 인젝션: 쿼리 구문을 조합할 때 입력값을 문자열로만 처리하지 않아, 해커의 임의 쿼리 주입을 통한 데이터 유출 우려가 있습니다.",
-                exp_report_bandit_eval: "⚠️ 동적 스크립트 실행 위험: 입력한 텍스트를 검증 없이 실행(eval)합니다. 해커가 이를 악용해 파일 삭제나 비밀 정보를 탈취하는 파이썬 코드를 강제 실행할 수 있습니다.",
-                exp_report_bandit_pickle: "⚠️ 위험한 데이터 객체 복원: 신뢰할 수 없는 데이터 스트림을 그대로 복원(Pickle)합니다. 복원 시점에 해커의 조작된 코드가 자동 동작할 수 있어 위험합니다.",
-                exp_report_bandit_md5: "⚠️ 오래된 암호화 방식 사용: 비밀번호 등 주요 데이터를 MD5 방식으로 보관합니다. MD5는 이미 연산 수식이 깨져 그래픽 카드로 빠르게 원래 비밀번호를 유추할 수 있습니다. SHA-256 또는 bcrypt 사용이 필수적입니다.",
-                exp_report_bandit_other: "⚠️ 코드 보안 약점: 위험한 기본값이나 취약한 함수가 검출되었습니다. 예외 처리 로직을 수정하여 안전을 확보해야 합니다.",
-                exp_report_safety_desc: "⚠️ 외부 라이브러리 취약성: 설치된 외부 패키지가 취약한 버전입니다. requirements.txt에서 해당 패키지를 수정된 최신 버전으로 업그레이드해야 합니다.",
-                exp_report_trivy_desc: "⚠️ 가상 컨테이너 보안 패치 누락: 도커 환경의 기본 운영체제에 보안 취약점이 발견되었습니다. 최신 패치가 포함된 베이스 이미지로 빌드해야 합니다.",
-                secret_type_label: "비밀정보 유형:",
-                secret_risk_text: "노출된 평문 자격 증명이 발견되었습니다.",
-                yara_rule_label: "규칙 이름:",
-                yara_desc_label: "위협 프로필:",
-                exp_report_secrets_desc: "⚠️ 평문 비밀정보 노출: 코드 내에 평문 자격 증명이나 API 토큰이 감지되었습니다. 코드 저장소에 푸시되면 키가 유출될 위험이 있으므로 보안 환경 변수로 관리해야 합니다.",
-                exp_report_yara_desc: "⚠️ 악성 코드 탐지: 백도어, 역방향 셸, 난독화 실행 등 사용자 정의 서명 정의 규칙에 매칭되었습니다. 의심스러운 라이브러리나 파일을 제거해야 합니다.",
-                clamav_virus_label: "바이러스명:",
-                clamav_desc_label: "위협 프로필:",
-                zap_vuln_label: "취약점 유형:",
-                zap_status_label: "상태:",
-                zap_payload_label: "공격 페이로드:",
-                target_route_label: "> 대상_경로:",
-                exp_report_clamav_desc: "⚠️ 코드베이스에서 활성 바이러스 또는 악성코드 서명이 발견되었습니다. 배포하기 전에 감염된 코드나 테스트 파일을 제거해야 합니다.",
-                exp_report_zap_desc: "⚠️ 활성 엔드포인트 취약점: ZAP 크롤러가 성공적으로 방어를 우회하고 페이로드 실행 결과를 반사시켰습니다. 공격 벡터를 차단하려면 웹 애플리케이션 방화벽(WAF)을 활성화하십시오.",
-                sbom_panel_title: "소프트웨어 구성품 명세서 (SBOM)",
-                sbom_panel_status: "CYCLONEDX_1.5 규격",
-                sbom_panel_desc: "이 애플리케이션에서 사용하는 모든 외부 라이브러리 종속성 정보를 CycloneDX v1.5 JSON 형식의 SBOM으로 생성했습니다.",
-
-                // Report upload titles
-                upload_panel_title: "보안 감사를 위한 파이썬 스크립트 업로드",
-                upload_panel_status: "준비 완료",
-                upload_panel_desc: "보안 감사 검사를 실행할 로컬 파이썬 (.py) 스크립트 파일을 선택해 주세요.",
-                upload_btn_report: "업로드 및 감사 실행",
-                upload_btn_scanning: "코드 검사 중...",
-                upload_btn_scanned: "✅ 검사 완료!",
+                brand_note: "보안 증거",
+                generated: "생성 시각",
+                back: "워크벤치로 돌아가기",
+                kicker: "증거 패키지",
+                title: "보안 평가",
+                subtitle: "릴리스 결정, 스캐너 증거, 해결 방법을 담은 보고서입니다.",
+                print: "인쇄 / PDF",
+                download_md: "마크다운",
+                download_sbom: "SBOM",
+                download_bundle: "증거 번들",
+                gate: "릴리스 게이트",
+                blocked: "차단됨",
+                passed: "통과",
+                error: "미완료",
+                blocking: "차단 이슈",
+                blocking_note: "릴리스 전에 해결하거나 위험을 승인해야 합니다.",
+                total: "전체 발견 사항",
+                total_note: "실행된 스캐너:",
+                risk: "휴리스틱 위험 지수",
+                risk_note: "상대적인 심각도 지표이며 확률이 아닙니다.",
+                scanners: "스캐너",
+                col_scanner: "스캐너",
+                col_status: "상태",
+                col_blocking: "차단",
+                col_total: "전체",
+                col_severity: "심각도별",
+                findings: "발견 사항",
+                findings_note: "스캐너마다 최대 5건을 차단 이슈부터 표시합니다. 이 단독 보고서는 새 발견 사항과 기존 발견 사항을 구분하지 못합니다. 담당자가 위험을 승인하거나, 악용할 수 없음을 확인하거나, 보완 통제를 명시한 경우에만 예외 처리하세요.",
+                no_findings: "보고된 발견 사항이 없습니다.",
+                why: "중요한 이유",
+                fix: "해결 방법",
+                copy: "복사",
+                copied: "복사됨",
+                copy_failed: "복사 실패",
+                flow: "소스에서 싱크까지의 경로",
+                suppression: "예외 처리 예시",
+                footer: "Aegis가 생성함",
+                explain_on: "설명: 켬",
+                explain_off: "설명: 끔",
+                reason_passed: "차단 이슈가 없습니다.",
+                reason_blocked: "차단 보안 이슈를 발견한 스캐너:",
+                exp_report_title: "이 보고서를 읽는 방법",
+                exp_report_summary: "자동화된 스캐너가 소스 코드와 의존성을 검사했습니다. 차단 이슈가 발견되면 해결되거나 공식적으로 승인될 때까지 릴리스 게이트가 배포를 막습니다.",
+                exp_report_risk: "위험 지수는 발견 사항에서 계산한 상대적인 심각도 지표입니다. 악용 확률이 아니며 릴리스 결정을 바꾸지 않습니다.",
+                exp_report_leads: "CodeQL 경로와 시그니처 일치는 검토할 단서이며, 공격이나 악성코드의 증거는 아닙니다.",
+                exp_report_osv: "이 의존성 버전에는 공개 취약점 데이터베이스에 등록된 보안 버그가 있습니다. 패치된 버전으로 업데이트하세요.",
+                exp_report_rce: "명령 실행 위험: 변수로 셸 명령을 만듭니다. 공격자가 셸 기호(예: ;)를 넣어 임의 명령을 실행할 수 있습니다.",
+                exp_report_sqli: "SQL 인젝션: 문자열 포매팅으로 쿼리를 만듭니다. 공격자가 쿼리를 바꿔 권한을 우회하거나 데이터를 읽을 수 있습니다.",
+                exp_report_eval: "코드 실행 위험: 입력을 코드로 실행(eval)합니다. 공격자가 임의의 파이썬 코드를 실행할 수 있습니다.",
+                exp_report_pickle: "안전하지 않은 역직렬화: 신뢰할 수 없는 pickle 데이터를 불러오면 숨겨진 코드가 실행될 수 있습니다.",
+                exp_report_md5: "약한 해시: MD5와 SHA-1은 보안 용도로 안전하지 않습니다. SHA-256을, 비밀번호에는 bcrypt나 argon2를 사용하세요.",
+                exp_report_xss: "크로스 사이트 스크립팅: 신뢰할 수 없는 텍스트가 HTML로 렌더링되어 사용자 브라우저에서 스크립트가 실행될 수 있습니다.",
+                exp_report_other: "보안 약점: 안전하지 않은 기본값이나 위험한 함수를 사용합니다. 입력을 검증하고 안전한 API를 사용하세요.",
+                exp_report_secrets: "하드코딩된 비밀정보 가능성: 코드나 이력에 접근할 수 있는 누구나 실제 키를 복사할 수 있습니다. 환경 변수나 시크릿 매니저에서 불러오세요.",
+                exp_report_yara: "의심스러운 코드 패턴: 백도어, 셸, 난독화 코드 시그니처가 일치했습니다. 파일의 출처를 확인하세요.",
+                status: { FAIL: "실패", ERROR: "오류", SKIPPED: "건너뜀", MISSING: "누락", PASS: "통과" },
+                severity: { CRITICAL: "치명적", HIGH: "높음", MEDIUM: "중간", LOW: "낮음" },
             }
         };
 
-        let currentLang = localStorage.getItem('lang') || 'en';
-        let explainEnabled = localStorage.getItem('explainMode') === 'true';
-        let currentTheme = localStorage.getItem('theme') || 'green';
-
-        function setTheme(theme) {
-            currentTheme = theme;
-            localStorage.setItem('theme', theme);
-            
-            document.body.classList.remove('theme-green', 'theme-amber', 'theme-grey', 'theme-matrix');
-            if (theme !== 'green') {
-                document.body.classList.add('theme-' + theme);
-            }
-            
-            const themeSelect = document.getElementById('themeSelect');
-            if (themeSelect) {
-                themeSelect.value = theme;
-                const primaryColor = getComputedStyle(document.body).getPropertyValue('--primary').trim();
-                themeSelect.style.borderColor = primaryColor;
-                themeSelect.style.color = primaryColor;
-            }
-        }
+        // Served reports run in an opaque-origin sandbox where storage access throws.
+        const store = {
+            get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+            set(key, value) { try { localStorage.setItem(key, value); } catch { /* not persisted */ } },
+        };
+        let currentLang = store.get('lang') === 'ko' ? 'ko' : 'en';
+        let explainEnabled = store.get('explainMode') === 'true';
 
         function setLanguage(lang) {
             currentLang = lang;
-            localStorage.setItem('lang', lang);
-
-            // Update standard data-i18n items
-            document.querySelectorAll('[data-i18n]').forEach(el => {
-                const key = el.getAttribute('data-i18n');
-                if (i18n[lang][key]) {
-                    const svg = el.querySelector('svg');
-                    if (svg) {
-                        el.innerHTML = '';
-                        el.appendChild(svg);
-                        el.appendChild(document.createTextNode(' ' + i18n[lang][key]));
-                    } else {
-                        el.innerText = i18n[lang][key];
-                    }
-                }
+            store.set('lang', lang);
+            const text = i18n[lang];
+            document.documentElement.lang = lang;
+            document.querySelectorAll('[data-i18n]').forEach((el) => {
+                const value = text[el.getAttribute('data-i18n')];
+                if (value) el.textContent = value;
             });
-
-            // Update Toggles
-            document.getElementById('langToggleBtn').innerText = `[ LANG: ${lang.toUpperCase()} ]`;
-
-            // Translate Decision Banner Status
-            const titleEl = document.getElementById('decisionTitle');
-            if (titleEl) {
-                const status = titleEl.getAttribute('data-status');
-                if (status === 'BLOCKED') {
-                    titleEl.innerText = i18n[lang]['blocked'];
-                } else if (status === 'ERROR' || status !== 'ALLOWED') {
-                    titleEl.innerText = i18n[lang]['error'];
-                } else {
-                    titleEl.innerText = i18n[lang]['passed'];
-                }
+            const title = document.getElementById('decisionTitle');
+            if (title) {
+                const status = title.getAttribute('data-status');
+                title.textContent = text[status === 'BLOCKED' ? 'blocked' : status === 'ALLOWED' ? 'passed' : 'error'];
             }
-
-            // Translate Reason text
-            const reasonEl = document.getElementById('reasonText');
-            if (reasonEl) {
-                const rawReason = reasonEl.getAttribute('data-raw-reason');
-                if (rawReason.toLowerCase().includes('safe') || rawReason.toLowerCase().includes('pass') || rawReason.includes('No blocking')) {
-                    reasonEl.innerText = i18n[lang]['reason_passed'];
-                } else if (rawReason.includes('Blocking security issues found by:')) {
-                    const toolsStr = rawReason.replace('Blocking security issues found by:', '').trim();
-                    const tools = toolsStr.split(',').map(t => t.trim());
-                    if (lang === 'ko') {
-                        reasonEl.innerText = `차단 보안 결함 발견됨: ${tools.join(', ')}`;
-                    } else {
-                        reasonEl.innerText = `Blocking security issues found by: ${tools.join(', ')}`;
-                    }
-                } else {
-                    reasonEl.innerText = rawReason;
-                }
+            const reason = document.getElementById('reasonText');
+            if (reason) {
+                const raw = reason.getAttribute('data-raw-reason') || '';
+                const prefix = i18n.en.reason_blocked;
+                reason.textContent = raw.startsWith(prefix)
+                    ? `${text.reason_blocked} ${raw.slice(prefix.length).trim()}`
+                    : (lang === 'ko' && raw.startsWith('No blocking') ? text.reason_passed : raw);
             }
-
-            // Translate Status tags
-            document.querySelectorAll('[data-tool-status]').forEach(el => {
+            document.querySelectorAll('[data-tool-status]').forEach((el) => {
                 const status = el.getAttribute('data-tool-status');
-                const labels = {
-                    FAIL: lang === 'ko' ? '실패' : 'Fail',
-                    ERROR: lang === 'ko' ? '오류' : 'Error',
-                    SKIPPED: lang === 'ko' ? '건너뜀' : 'Skipped',
-                    MISSING: lang === 'ko' ? '누락' : 'Missing',
-                    PASS: lang === 'ko' ? '통과' : 'Pass'
-                };
-                el.innerText = labels[status] || status;
+                el.textContent = text.status[status] || status;
             });
-
-            // Translate Severity Badges
-            document.querySelectorAll('[data-severity]').forEach(el => {
-                const sev = el.getAttribute('data-severity');
-                if (sev === 'HIGH') {
-                    el.innerText = lang === 'ko' ? '높음(HIGH)' : 'HIGH';
-                } else if (sev === 'CRITICAL') {
-                    el.innerText = lang === 'ko' ? '치명적(CRITICAL)' : 'CRITICAL';
-                } else if (sev === 'MEDIUM') {
-                    el.innerText = lang === 'ko' ? '중간(MEDIUM)' : 'MEDIUM';
-                } else if (sev === 'LOW') {
-                    el.innerText = lang === 'ko' ? '낮음(LOW)' : 'LOW';
-                }
+            document.querySelectorAll('[data-severity]').forEach((el) => {
+                const severity = el.getAttribute('data-severity');
+                el.textContent = text.severity[severity] || severity;
             });
-
-            updateExplainBtnText();
+            const langButton = document.getElementById('langToggleBtn');
+            const other = lang === 'en' ? 'ko' : 'en';
+            langButton.textContent = other === 'ko' ? '한국어' : 'English';
+            langButton.lang = other;
+            langButton.setAttribute('aria-label', other === 'ko' ? '한국어로 보기' : 'View in English');
+            updateExplainButton();
         }
 
-
-        function updateExplainBtnText() {
-            const btn = document.getElementById('explainToggleBtn');
-            if (!btn) return;
-            const key = explainEnabled ? 'explain_toggle_on' : 'explain_toggle_off';
-            btn.innerText = i18n[currentLang][key] || (explainEnabled ? '[ EXPLAIN: ON ]' : '[ EXPLAIN: OFF ]');
+        function updateExplainButton() {
+            const button = document.getElementById('explainToggleBtn');
+            button.textContent = i18n[currentLang][explainEnabled ? 'explain_on' : 'explain_off'];
+            button.setAttribute('aria-pressed', String(explainEnabled));
         }
 
         function setExplainMode(enabled) {
             explainEnabled = enabled;
-            localStorage.setItem('explainMode', enabled);
-            if (enabled) {
-                document.body.classList.add('explainer-active');
-            } else {
-                document.body.classList.remove('explainer-active');
-            }
-            updateExplainBtnText();
+            store.set('explainMode', String(enabled));
+            document.body.classList.toggle('explainer-active', enabled);
+            updateExplainButton();
         }
 
-        // Setup switch event listeners
+        async function copyText(value) {
+            try {
+                await navigator.clipboard.writeText(value);
+                return true;
+            } catch {
+                // The sandboxed report may not get clipboard permission; fall back to a selection copy.
+                const area = document.createElement('textarea');
+                area.value = value;
+                area.setAttribute('readonly', '');
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+                document.body.appendChild(area);
+                area.select();
+                try {
+                    return document.execCommand('copy');
+                } catch {
+                    return false;
+                } finally {
+                    area.remove();
+                }
+            }
+        }
+
         document.getElementById('langToggleBtn').addEventListener('click', () => {
             setLanguage(currentLang === 'en' ? 'ko' : 'en');
         });
-
-
         document.getElementById('explainToggleBtn').addEventListener('click', () => {
             setExplainMode(!explainEnabled);
         });
-
-        // Setup File Upload in Report
-        const uploadBtnReport = document.getElementById('uploadBtnReport');
-        const uploadFileReport = document.getElementById('uploadFileReport');
-        const uploadStatusTextReport = document.getElementById('uploadStatusTextReport');
-        const uploadBtnTextReport = document.getElementById('uploadBtnTextReport');
-
-        if (uploadBtnReport && uploadFileReport) {
-            uploadBtnReport.addEventListener('click', () => {
-                uploadFileReport.click();
-            });
-
-            uploadFileReport.addEventListener('change', async (event) => {
-                const file = event.target.files[0];
-                if (!file) return;
-
-                if (!file.name.toLowerCase().endsWith('.py')) {
-                    alert(currentLang === 'en' ? 'Only Python (.py) files are allowed!' : '파이썬 (.py) 파일만 업로드할 수 있습니다!');
-                    uploadFileReport.value = '';
-                    return;
-                }
-
-                uploadBtnReport.disabled = true;
-                uploadBtnReport.style.opacity = '0.6';
-                uploadBtnTextReport.innerText = i18n[currentLang]['upload_btn_scanning'] || 'AUDITING CODE...';
-                if (uploadStatusTextReport) {
-                    uploadStatusTextReport.style.display = 'block';
-                    uploadStatusTextReport.innerText = currentLang === 'en' ? 'Uploading and auditing file...' : '파일 업로드 및 검사 중...';
-                }
-
-                const formData = new FormData();
-                formData.append('file', file);
-
-                try {
-                    const response = await fetch('/run-scan', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    const result = await response.json();
-                    if (result.status === 'success') {
-                        uploadBtnTextReport.innerText = i18n[currentLang]['upload_btn_scanned'] || '✅ AUDIT COMPLETED!';
-                        if (uploadStatusTextReport) {
-                            uploadStatusTextReport.innerText = currentLang === 'en' ? 'Scan completed. Loading fresh report...' : '검사 완료. 새 보고서 불러오는 중...';
-                        }
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 1000);
-                    } else {
-                        alert('SCAN ABORTED: ' + result.message);
-                        uploadBtnTextReport.innerText = currentLang === 'en' ? 'SCAN ABORTED' : '검사 중단됨';
-                        uploadBtnReport.disabled = false;
-                        uploadBtnReport.style.opacity = '';
-                        if (uploadStatusTextReport) {
-                            uploadStatusTextReport.style.display = 'none';
-                        }
-                    }
-                } catch (e) {
-                    alert('FATAL: Scanner daemon offline. ' + e);
-                    uploadBtnTextReport.innerText = currentLang === 'en' ? 'UPLOAD ERROR' : '업로드 오류';
-                    uploadBtnReport.disabled = false;
-                    uploadBtnReport.style.opacity = '';
-                    if (uploadStatusTextReport) {
-                        uploadStatusTextReport.style.display = 'none';
-                    }
-                } finally {
-                    uploadFileReport.value = '';
-                }
-            });
-        }
-
-        // Initialize state on page load
-        setLanguage(currentLang);
-        setExplainMode(explainEnabled);
-        setTheme(currentTheme);
-        setTimeout(() => setTheme(currentTheme), 100);
-    </script>
-    <script>
-        document.getElementById('printReportBtn')?.addEventListener('click', () => window.print());
+        document.getElementById('printReportBtn').addEventListener('click', () => window.print());
         document.querySelectorAll('.copy-fix-btn').forEach((button) => {
             button.addEventListener('click', async () => {
-                const original = button.textContent;
-                try {
-                    await navigator.clipboard.writeText(button.dataset.copy || '');
-                    button.textContent = 'Copied';
-                    window.setTimeout(() => { button.textContent = original; }, 1600);
-                } catch {
-                    button.textContent = 'Copy failed';
-                    window.setTimeout(() => { button.textContent = original; }, 1600);
-                }
+                const label = button.querySelector('[data-i18n]');
+                const copied = await copyText(button.dataset.copy || '');
+                label.textContent = i18n[currentLang][copied ? 'copied' : 'copy_failed'];
+                window.setTimeout(() => { label.textContent = i18n[currentLang].copy; }, 1600);
             });
         });
         document.querySelector('.report-skip-link')?.addEventListener('click', () => {
             window.setTimeout(() => document.getElementById('report-content')?.focus(), 0);
         });
+        // A report opened from a downloaded bundle has no workbench to link back to.
+        if (location.protocol === 'file:') {
+            document.querySelectorAll('[data-app-only]').forEach((el) => el.remove());
+            document.querySelectorAll('a[href^="/"]').forEach((el) => el.removeAttribute('href'));
+        }
+
+        setLanguage(currentLang);
+        setExplainMode(explainEnabled);
     </script>
 </body>
 </html>

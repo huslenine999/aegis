@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import math
 from collections import Counter
@@ -18,6 +19,7 @@ from app.dependencies import DependencyManifest, DependencyPackage, discover_dep
 from app.findings import (
     BASELINE_FINGERPRINT_KEY,
     UNSCORED_ADVISORY_REASON,
+    _stable_path,
     escalate_osv_severity,
     extract_findings,
     osv_base_severity,
@@ -109,7 +111,8 @@ def get_ruff_severity(code: str) -> str:
 
 def _severity_counts(findings: List[Dict[str, Any]]) -> Dict[str, int]:
     counts = Counter(str(item.get("severity", "LOW")).upper() for item in findings)
-    return dict(sorted(counts.items()))
+    rank = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    return dict(sorted(counts.items(), key=lambda item: (rank.index(item[0]) if item[0] in rank else len(rank), item[0])))
 
 
 def _format_dependency_fix(package_name: str | None, fixed_versions: Any = None) -> str:
@@ -132,14 +135,21 @@ def _suppression_example(tool: str, issue: Dict[str, Any]) -> str:
         or issue.get("type")
         or ""
     )
-    path = issue.get("filename") or issue.get("path") or "requirements.txt"
+    # Suppressions match the first word of the tool name ("Ruff", not "Ruff (SAST)").
+    scope = (
+        [f"      fingerprint: {issue['occurrence']}"] if issue.get("occurrence")
+        else [f"      path: {issue.get('display_path') or issue.get('path') or 'requirements.txt'}"]
+    )
     return "\n".join([
         "scan:",
         "  suppressions:",
-        f"    - tool: {tool}",
+        f"    - tool: {tool.split()[0]}",
         f"      rule: {rule}",
-        f"      path: {path}",
+        *scope,
         "      reason: Reviewed and accepted by the security owner.",
+        "      approved_by: security-owner",
+        "      ticket: SEC-000",
+        "      expires_at: YYYY-MM-DD",
     ])
 
 
@@ -151,14 +161,13 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
     guidance = {
         "why": "This finding can weaken the security gate and should be reviewed before release.",
         "fix": "Review the affected code or dependency, apply the smallest safe change, and rerun Aegis.",
-        "suggestion": "aegis scan . --fast",
+        "suggestion": "",
     }
 
     if tool == "Ruff (SAST)":
         guidance.update({
             "why": "A Python security rule matched source code that may allow unsafe runtime behavior.",
             "fix": "Replace the risky API or add input validation before user-controlled data reaches it.",
-            "suggestion": "# Fix the flagged Python line, then rerun\naegis scan . --fast",
         })
         ruff_guidance = {
             "S307": {
@@ -203,7 +212,6 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
         guidance.update({
             "why": "A Semgrep rule matched a risky source pattern that may become exploitable in production.",
             "fix": "Follow the rule message, validate untrusted input, and prefer framework-safe APIs.",
-            "suggestion": "# Inspect the matched line, apply the rule-specific fix, then rerun\naegis scan . --fast",
         })
         if "sql" in check_id:
             guidance.update({
@@ -218,7 +226,7 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
                 "suggestion": "{{ user_value | e }}",
             })
     elif tool == "OSV Dependency Audit":
-        fixed_versions = issue.get("fixed_versions") or issue.get("fixed") or issue.get("version")
+        fixed_versions = issue.get("fixed_versions") or issue.get("fixed")
         guidance.update({
             "why": " ".join(filter(None, [
                 "The dependency version is associated with a published vulnerability advisory.",
@@ -230,7 +238,7 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
     elif tool == "Secrets Scanner":
         guidance.update({
             "why": "A plaintext credential can be copied from source history and used outside the application.",
-            "fix": "Revoke and rotate the credential, move it to a secret manager or environment variable, and remove it from history.",
+            "fix": "If this is a real credential, revoke and rotate it, load it from a secret manager or environment variable, and remove it from history. If it is a hash, commit ID, or public key, suppress it with that reason.",
             "suggestion": "export SERVICE_TOKEN=\"...\"\n# read it with os.environ[\"SERVICE_TOKEN\"]",
         })
     elif tool == "YARA Scanner":
@@ -243,9 +251,22 @@ def enrich_finding(tool: str, issue: Dict[str, Any]) -> Dict[str, Any]:
         guidance.update({
             "why": "CodeQL identified a potentially unsafe data or control path that requires review.",
             "fix": "Inspect the reported path and validate input before it reaches the unsafe operation.",
-            "suggestion": "# Review the CodeQL path, apply a targeted fix, then rerun a deep scan",
         })
 
+    path = _stable_path(issue.get("filename")) if issue.get("filename") else ""
+    line = issue.get("line_number")
+    package = " ".join(str(part) for part in (package_name, issue.get("version")) if part)
+    enriched["display_path"] = path
+    enriched["display_location"] = (f"{path}:{line}" if path and line else path) or package or issue.get("target") or ""
+    # CodeQL messages carry SARIF link markup such as "[user-provided value](1)".
+    enriched["display_title"] = re.sub(r"\[([^\]]+)\]\(\d+\)", r"\1", str(
+        issue.get("issue_text")
+        or issue.get("summary")
+        or (f"Possible secret: {issue['type']}" if issue.get("type") else "")
+        or (f"Signature match: {issue['rule']}" if issue.get("rule") else "")
+        or issue.get("id")
+        or tool
+    ))
     enriched.setdefault("finding_status", "Unclassified in this standalone report")
     enriched.pop(BASELINE_FINGERPRINT_KEY, None)
     enriched["why_it_matters"] = guidance["why"]
@@ -278,6 +299,7 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
             "filename": r.get("filename"),
             "line_number": r.get("location", {}).get("row"),
             "issue_text": r.get("message"),
+            "occurrence": r.get("aegis_occurrence"),
         }))
 
     blocking_issues = [
@@ -339,6 +361,7 @@ def analyze_semgrep(
             "line_number": r.get("start", {}).get("line"),
             "issue_text": extra.get("message"),
             "code": extra.get("lines"),
+            "occurrence": r.get("aegis_occurrence"),
         }))
 
     blocking_issues = [
@@ -385,6 +408,7 @@ def analyze_osv(
             "severity_reason": reason,
             "summary": f.get("summary"),
             "details": f.get("details"),
+            "occurrence": f.get("aegis_occurrence"),
         }))
 
     blocking_issues = [
@@ -417,7 +441,7 @@ def analyze_codeql(report: Any, fail_on: set[str] | None = None) -> Dict[str, An
         or coverage.get("complete") is not True
         or not isinstance(coverage.get("languages"), list)
         or not coverage["languages"]
-        or coverage.get("isolation") != "verified"
+        or coverage.get("isolation") not in {"verified", "imported"}
         or not isinstance(raw_findings, list)
     ):
         return error
@@ -432,6 +456,7 @@ def analyze_codeql(report: Any, fail_on: set[str] | None = None) -> Dict[str, An
             **item,
             "test_id": item["rule_id"],
             "severity": severity,
+            "occurrence": item.get("aegis_occurrence"),
         }))
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
     blocking = [item for item in findings if item["severity"] in threshold]
@@ -469,6 +494,7 @@ def analyze_secrets(
                 "type": secret.get("type"),
                 "filename": filename,
                 "line_number": secret.get("line_number"),
+                "occurrence": secret.get("aegis_occurrence"),
             }))
 
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
@@ -503,7 +529,8 @@ def analyze_yara(
             "rule": f.get("rule"),
             "filename": f.get("filename"),
             "description": f.get("description"),
-            "author": f.get("author")
+            "author": f.get("author"),
+            "occurrence": f.get("aegis_occurrence"),
         }))
 
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
@@ -1320,53 +1347,45 @@ def generate_reports(
         "*This index is a relative severity signal, not a probability of exploitation.*",
         "",
         "## Tool Results",
-        "| Tool | Status | Total Issues | Blocking Issues |",
-        "| --- | --- | --- | --- |",
+        "| Tool | Status | Total Issues | Blocking Issues | By severity |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for r in results:
-        md_lines.append(f"| {r['tool']} | {r['status']} | {r['total_issues']} | {r['blocking_issues']} |")
+        severities = " · ".join(f"{name} {count}" for name, count in (r.get("severity_counts") or {}).items())
+        md_lines.append(f"| {r['tool']} | {r['status']} | {r['total_issues']} | {r['blocking_issues']} | {severities or '-'} |")
 
     md_lines.extend([
         "",
-        "## Finding Guidance",
+        "## Findings",
         "",
-        "Each finding below answers what failed, why it matters, how to fix it, whether Aegis can classify it as new, and when suppression is acceptable.",
+        "Up to five findings per scanner are listed, blocking ones first. This standalone report cannot tell new findings from existing ones. Suppress a finding only after a named owner accepts the risk, confirms it is not exploitable, or names a compensating control.",
     ])
     for result in results:
         if not result.get("examples"):
             continue
         md_lines.extend(["", f"### {result['tool']}"])
         for example in result["examples"]:
-            title = (
-                example.get("issue_text")
-                or example.get("summary")
-                or example.get("description")
-                or example.get("title")
-                or example.get("vulnerability_id")
-                or example.get("id")
-                or "Finding"
-            )
-            location = example.get("filename") or example.get("target") or example.get("package_name") or example.get("route") or "N/A"
+            rule = example.get("test_id") or example.get("id") or example.get("vulnerability_id") or example.get("rule") or example.get("type") or result["tool"]
             md_lines.extend([
                 "",
-                f"#### {title}",
-                f"- **What failed:** {example.get('test_id') or example.get('id') or example.get('vulnerability_id') or example.get('rule') or result['tool']}",
-                f"- **Location/package:** {location}",
+                f"#### {' '.join(filter(None, [example.get('severity'), example.get('display_title') or rule]))}",
+                f"- **Rule:** `{rule}`" + (f" · **Location:** `{example['display_location']}`" if example.get("display_location") else ""),
                 f"- **Why it matters:** {example.get('why_it_matters', 'Review before release.')}",
                 f"- **How to fix:** {example.get('remediation', 'Apply the scanner recommendation and rerun Aegis.')}",
-                f"- **New or pre-existing:** {example.get('finding_status', 'Unclassified in this standalone report')}",
-                f"- **Safe to suppress:** {example.get('suppression_guidance', 'Suppress only with documented risk acceptance.')}",
-                "",
-                "```bash",
-                str(example.get("fix_suggestion", "aegis scan . --fast")),
-                "```",
-                "",
-                "Suppression example:",
-                "",
-                "```yaml",
-                str(example.get("suppression_example", "")),
-                "```",
             ])
+            if example.get("fix_suggestion"):
+                md_lines.extend(["", "```", str(example["fix_suggestion"]), "```"])
+            if example.get("suppression_example"):
+                md_lines.extend([
+                    "",
+                    "<details><summary>Suppression example</summary>",
+                    "",
+                    "```yaml",
+                    str(example["suppression_example"]),
+                    "```",
+                    "",
+                    "</details>",
+                ])
 
     md_lines.append("\n---\n*Generated by Aegis Policy Engine*")
     if output_root:
@@ -1589,7 +1608,7 @@ def run_policy_engine(
         print("\n=== Final Decision ===")
         print(f"DEPLOYMENT {final_status}")
         print(f"Reason: {reason}")
-        print(f"Exploitability Score: {exploitability_score}%")
+        print(f"Heuristic risk index: {exploitability_score}/100")
 
     generate_reports(
         results,

@@ -48,6 +48,13 @@ def preview():
     return requests.get(target, timeout=5).text
 
 
+@app.get("/preview-session")
+def preview_session():
+    session = requests.Session()
+    # ruleid: python-tainted-request
+    return session.get(request.args["url"], timeout=5).text
+
+
 @app.get("/preview-feed")
 def preview_feed():
     feed = FEEDS.get(request.args.get("feed", ""))

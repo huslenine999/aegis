@@ -5,7 +5,6 @@ scan:
   sarif: aegis.sarif
   exclude_paths:
     - .env.aegis
-    - app/demo_lab.py
     - app/scanners.py
     - app/templates/report_template.html
     - benchmarks/results
@@ -102,13 +101,6 @@ scan:
       reason: CLI scanner test fixture generation intentionally writes payload strings used to validate detections.
       approved_by: security-owner
       ticket: AEGIS-RISK-009
-      expires_at: 2027-07-20
-    - tool: Semgrep
-      rule: javascript-xss-html-sink
-      path: app/static/enhanced-dashboard.js
-      reason: Dependency topology SVG is assembled from computed numeric coordinates, fixed class names, and escapeHtml() labels; no raw response text reaches innerHTML.
-      approved_by: security-owner
-      ticket: AEGIS-RISK-013
       expires_at: 2027-07-20
     - tool: Ruff
       rule: S607

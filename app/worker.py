@@ -15,7 +15,7 @@ from typing import Any
 
 from rq import Worker
 
-from .database import BASE_DIR, PROJECT_ROOT, SCANS_DIR, redis_client
+from .database import PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
 from .dependencies import discover_dependency_manifests, first_requirements_manifest
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
@@ -777,11 +777,7 @@ def async_scan_task(
             dependency_manifests = discover_dependency_manifests(target_path)
             mark_tool("OSV", "skipped", detail="single-file scan")
         else:
-            if target == "secure":
-                target_path = str(BASE_DIR / "secure_main.py")
-            elif target == "vulnerable":
-                target_path = str(BASE_DIR / "demo_lab.py")
-            elif not project_id:
+            if not project_id:
                 target_path = str(PROJECT_ROOT)
 
             if target_path is None:

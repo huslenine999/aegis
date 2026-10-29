@@ -30,7 +30,6 @@ os.environ.update({
     "AEGIS_AUDIT_HMAC_KEY": "a" * 40,
     "AEGIS_ENCRYPTION_KEY": Fernet.generate_key().decode(),
     "AEGIS_SKIP_EXTERNAL_SCANNERS": "true",
-    "AEGIS_ENABLE_DEMO_LAB": "false",
     "REDIS_URL": "redis://127.0.0.1:1/0",
     **{name: "1000000000" for name in ("AEGIS_RATE_LIMIT_PER_MINUTE", "AEGIS_AGGREGATE_RATE_LIMIT_PER_MINUTE",
                                        "AEGIS_SCAN_RATE_LIMIT_PER_MINUTE", "AEGIS_LOGIN_RATE_LIMIT_PER_MINUTE")},
@@ -240,10 +239,10 @@ def main() -> int:
          patch("urllib.request.urlopen", side_effect=OSError("network disabled for monkey testing")):
         import app.main
         import app.worker
-        from app.routes import demo_scan_routes, project_routes
+        from app.routes import project_routes, scan_routes
 
         redis = MockRedis()
-        for module in (app.main, app.worker, project_routes, demo_scan_routes):
+        for module in (app.main, app.worker, project_routes, scan_routes):
             module.redis_client = redis
             module.REDIS_AVAILABLE = True
         users, owned = _seed()

@@ -196,6 +196,15 @@ The web application turns one-off scanner output into an operational workflow:
 Deep scans are unavailable in the default local topology. `make codeql-setup`
 provisions the pinned local image and trusted query suites for the optional
 Deep worker. An unavailable runtime is an operational error, never a pass.
+
+Teams that already run CodeQL (for example GitHub code scanning) can gate on
+that SARIF instead: `aegis scan . --codeql-sarif python.sarif --codeql-sarif
+javascript.sarif`. It works with any preset and replaces the CodeQL run. Every
+Python and JavaScript/TypeScript language in the target needs a completed
+CodeQL run, or the scan is an operational error. Scan the same repository root
+and commit that CodeQL analyzed: Aegis checks that paths stay inside the
+target, but it cannot tell which commit produced the SARIF. The CodeQL report
+records `"isolation": "imported"`.
 Test folders (`test/`, `tests/`, `testsuite/`, `*_test.go`) are scanned and
 block like any other code. To make a test root non-blocking, add a suppression
 with a folder path such as `path: tests/` to the trusted config.
@@ -303,6 +312,24 @@ tracking ticket, and future ISO-8601 expiry. Applied, invalid, and expired
 exceptions are written to `suppressions-report.json`; malformed exceptions never
 hide findings. A `path` that ends in `/` covers every file under that folder.
 
+A `path` suppression also hides any new finding of the same rule in that file.
+To accept one finding only, use its `fingerprint` instead of `path`. The
+suppression example in `report.md` and the SARIF `partialFingerprints` show it
+for the findings they list, and every entry in the scanner reports
+(`*-report.json`) carries it as `aegis_occurrence`. It is built from the tool, rule, repository-relative path and the text of
+the flagged line, so it survives line moves. Editing that line, or copying it
+elsewhere in the file, produces a finding the suppression does not cover.
+
+```yaml
+    - tool: Semgrep
+      rule: python-rce
+      fingerprint: 3f9c2a1b7d4e8f60
+      reason: cmd is a fixed maintenance command chosen at deploy time.
+      approved_by: application-security
+      ticket: SEC-124
+      expires_at: 2027-07-20
+```
+
 Each completed scan also writes `source-descriptor.json` and a schema-3,
 source-bound `scan-manifest.json`. The descriptor records the admitted regular
 files and their content digests; scanners run against a stable copy so later
@@ -345,6 +372,24 @@ read-only) is a warning and never changes the gate decision. Code scanning
 matches file paths from the repository root, so keep `scan-target: .` when
 uploading. Code scanning on private repositories requires GitHub Advanced
 Security or GitHub Code Security.
+
+To add CodeQL findings without provisioning CodeQL, run GitHub's CodeQL
+analysis first and pass its SARIF directory:
+
+```yaml
+      - uses: github/codeql-action/init@<reviewed-commit-sha>
+        with:
+          languages: python, javascript-typescript
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@<reviewed-commit-sha>
+        with:
+          output: codeql-results
+      - name: Aegis security gate
+        uses: huslenine999/aegis@<reviewed-commit-sha>
+        with:
+          codeql-sarif: codeql-results
+```
 
 Pin Aegis and every third-party Action to reviewed immutable commit SHAs in a
 protected production workflow.
@@ -527,10 +572,13 @@ Benchmark results are in [`benchmarks/results/`](benchmarks/results/README.md):
 - Held-out corpus v3, 28 cases: the Aegis Semgrep rules found 13/14 with 0
   false alarms, and CodeQL found 9/14. The Koa rules changed after this run,
   so v3 is now a regression set.
-- A pinned seven-repository inventory and a first triage.
+- A pinned seven-repository inventory and a first triage. In the 2026-10-28
+  re-run, 14 of the 16 Semgrep ERROR findings were true; on the three
+  maintained applications, 1 of 2 was. Seven release-blocking false alarms
+  found in that run were fixed before the final run.
 
 Docker-level isolation probes of the CodeQL analysis container pass with the
-pinned image (`aegis-codeql@sha256:cdb756b8…`). The Deep worker that starts the container is still privileged
+pinned image (`aegis-codeql@sha256:74982310…`, which adds Node.js for TypeScript). The Deep worker that starts the container is still privileged
 (F06). See the [capstone review](docs/research/CAPSTONE_REVIEW.md) and
 [scanner migration plan](docs/SCANNER_MIGRATION_PLAN.md) for the open security
 questions and release gates.

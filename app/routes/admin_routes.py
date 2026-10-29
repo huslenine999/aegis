@@ -9,7 +9,7 @@ from ..audit import create_audit_checkpoint, list_audit_events, verify_audit_cha
 from ..database import REDIS_AVAILABLE, SCANS_DIR, get_connection, redis_client
 from ..github_integration import github_enabled
 from ..observability import recent_requests
-from ..web_common import DEMO_LAB_ENABLED, json_object, require_access, templates
+from ..web_common import json_object, require_access, templates
 
 router = APIRouter()
 logger = logging.getLogger("aegis.main")
@@ -52,7 +52,6 @@ def admin_diagnostics(principal=Depends(require_access("admin"))):
         "smtp": bool(os.environ.get("AEGIS_SMTP_HOST")),
         "environment": os.environ.get("AEGIS_ENV", "development"),
         "report_storage": str(SCANS_DIR),
-        "demo_lab_enabled": DEMO_LAB_ENABLED,
         "scanner_quick": "ready",
         "scanner_standard": "ready" if shutil.which("semgrep") else "semgrep unavailable",
         "scanner_deep": "requires an isolated CodeQL runtime",

@@ -200,8 +200,6 @@ def validate_runtime_configuration() -> None:
         )
     except RuntimeError as exc:
         errors.append(str(exc))
-    if environment_bool("AEGIS_ENABLE_DEMO_LAB"):
-        errors.append("AEGIS_ENABLE_DEMO_LAB must be false")
     if not environment_bool("AEGIS_REQUIRE_REDIS"):
         errors.append("AEGIS_REQUIRE_REDIS must be true")
     if not environment_bool("AEGIS_REQUIRE_WORKER"):

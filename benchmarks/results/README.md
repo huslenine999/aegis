@@ -230,6 +230,7 @@ How it was run:
 
 - CodeQL CLI 2.27.0 through the production isolated runner (offline container,
   `aegis-codeql@sha256:cdb756b8…`, isolation verified), same suites as v1 and v2.
+  That image had no Node.js; see the 2026-10-28 repository re-run.
 - Semgrep 1.179.0 with `rules/semgrep_rules.yaml` (`cdde3e04…`).
 - The `corpus_sha256` in the output matches the SHA-256 above.
 - Command:
@@ -278,3 +279,95 @@ measures it: re-running v3 catches 14/14 with no false alarms, which is only a
 regression check. The labeled fixture `tests/fixtures/semgrep/koa_routes.js`
 covers the change. Held-out recall for Koa is unmeasured until a fresh corpus
 is written.
+
+## Real-repository re-run (`repositories-v1`), 2026-10-28
+
+The same seven pinned repositories, re-run after the Express/Koa rule fixes, to
+count release-blocking false alarms. CodeQL ran through the production isolated
+runner this time (the 2026-10-22 run used the CLI directly).
+
+Command:
+`python scripts/run_codeql_benchmark.py --repositories --output benchmarks/results/repositories-v1.2026-10-28.json`
+
+The first attempt had two operational failures: full-stack-fastapi-template and
+node-express-realworld-example-app failed CodeQL's TypeScript extraction
+(`Could not start Node.js. It is required for TypeScript extraction.`). The
+CodeQL image had no Node.js, so every Deep scan of a TypeScript repository was
+an operational error. `Dockerfile.codeql` now copies Node.js 22.21.1 from the
+pinned official image. The rebuilt image is
+`aegis-codeql@sha256:74982310b2a8aa34395343e2d133aa5f75f4b117adea6fae1803c718d8c3a6ed`.
+`tests/integration/test_codeql_isolation.py` passes on it, on the developer's
+Mac.
+
+Result with that image and Semgrep rules `6fbfdd88…`: all seven completed (0
+operational failures). The CodeQL pairs match the 2026-10-22 run exactly.
+
+| Repository | CodeQL pairs | Semgrep pairs (2026-10-22 → now) |
+| --- | ---: | ---: |
+| pygoat | 33 | 10 → 11 |
+| VAmPI | 2 | 0 → 1 |
+| NodeGoat | 14 | 2 → 2 |
+| dvpwa | 5 | 3 → 3 |
+| microblog | 4 | 2 → 3 |
+| full-stack-fastapi-template | 8 | 0 → 0 |
+| node-express-realworld-example-app | 1 | 0 → 0 |
+
+The new Semgrep pairs are `python-tainted-request` in pygoat
+`introduction/views.py` and in microblog `app/auth/routes.py`, plus
+`python-sql-string-from-parameter` in VAmPI `models/user_model.py`. The VAmPI
+pair is the documented SQL injection that both detectors missed on 2026-10-22.
+
+### Two false alarms fixed during triage
+
+Triage of the first attempt found two rule defects. Both produced ERROR
+findings, which block a release:
+
+1. `python-tainted-request` treated a variable named `session` or `client` as
+   an HTTP client. In full-stack-fastapi-template, `session.delete(item)` is a
+   SQLModel session call, and it raised 3 ERROR findings
+   (`backend/app/api/routes/items.py:111`, `users.py:141`, `users.py:230`).
+   A bare `session` or `client` now counts only in modules that use `requests`
+   or `httpx`. Fixture: `tests/fixtures/semgrep/python_orm_session.py`.
+2. `python-rce` flagged `os.system` and `subprocess(..., shell=True)` with a
+   constant command string. That raised 4 ERROR findings in microblog
+   `app/cli.py` (lines 18, 29, 31 and 39). A constant string cannot carry
+   injected input, so those calls no longer match. Fixtures are in
+   `tests/fixtures/semgrep/python_rules.py`.
+
+These fixes were made after seeing the findings, so this run is not a held-out
+measure. The v2 and v3 corpora still pass with the changed rules (Semgrep 14/14
+with 0 false alarms on each; both are regression sets now):
+`codeql-heldout-v2.2026-10-28.regression.json` and
+`codeql-heldout-v3.2026-10-28.regression.json`.
+
+### Triage of every Semgrep ERROR finding
+
+One reviewer (Claude), 2026-10-28, using the final rules. This needs a second
+reviewer before it is cited.
+
+| Repository | Rule | Location | Verdict |
+| --- | --- | --- | --- |
+| NodeGoat | `javascript-eval` | `app/routes/contributions.js:32`, `:33`, `:34` | True: `req.body` fields reach `eval` (documented lab flaw) |
+| NodeGoat | `javascript-express-tainted-request` | `app/routes/index.js:72` | True: open redirect from `req.query.url` (documented) |
+| VAmPI | `python-sql-string-from-parameter` | `models/user_model.py:73` | True: f-string SQL passed to `text()` (documented) |
+| dvpwa | `javascript-eval` | `sqli/static/js/materialize.js:6283` | False: vendored Materialize builds `new Function` from a developer-supplied callback option |
+| microblog | `python-tainted-request` | `app/auth/routes.py:29` | True, low: `next` checked only for an empty netloc (same flaw CodeQL reports) |
+| microblog | `python-rce` | `app/cli.py:20` | Not exploitable: the language code is a developer CLI argument |
+| pygoat | `python-pickle` | `dockerized_labs/insec_des_lab/main.py:36`, `introduction/views.py:214` | True: form field and cookie reach `pickle.loads` (lab) |
+| pygoat | `python-eval` | `introduction/mitre.py:218`, `introduction/views.py:460` | True: POST fields reach `eval` (lab) |
+| pygoat | `python-rce` | `introduction/mitre.py:233`, `introduction/views.py:430` | True: request-built commands run with `shell=True` (lab) |
+| pygoat | `python-tainted-request` | `introduction/views.py:927`, `:963` | True: path traversal through `open`, SSRF through `requests.get` (lab) |
+
+Totals: 16 ERROR findings, 14 true and 2 false or not exploitable. On the three
+maintained applications there are 2 ERROR findings: 1 true (low) and 1 not
+exploitable. Before the two fixes there were 9: the same 2, plus 7 false
+alarms.
+
+The default `fail_on` (`medium,high,critical`) also blocks WARNING findings.
+Those were not triaged here. On the applications, the one WARNING is
+`python-weak-hash` in microblog `app/models.py:141`, which was already judged
+false on 2026-10-22 (MD5 builds a Gravatar URL).
+
+Files:
+
+- `repositories-v1.2026-10-28.json`: isolated runner plus Semgrep, final rules.

@@ -23,8 +23,6 @@ def route_class(path: str) -> str:
 
     if path in SENSITIVE_PATHS:
         return "sensitive"
-    if path == "/run-scan":
-        return "scan"
     if path.startswith("/api/auth/"):
         return "auth"
     if path.startswith("/api/github/"):
@@ -57,15 +55,12 @@ class RateLimitMiddleware:
         self.aggregate_limit = _configured_limit(
             "AEGIS_AGGREGATE_RATE_LIMIT_PER_MINUTE", 240
         )
-        self.scan_limit = _configured_limit("AEGIS_SCAN_RATE_LIMIT_PER_MINUTE", 10)
         self.login_limit = _configured_limit("AEGIS_LOGIN_RATE_LIMIT_PER_MINUTE", 5)
         self.fail_closed = os.environ.get("AEGIS_ENV", "development").lower() == "production"
 
     def _limit(self, path: str) -> int:
         if path in SENSITIVE_PATHS:
             return self.login_limit
-        if path == "/run-scan":
-            return self.scan_limit
         return self.default_limit
 
     def _increment(self, key: str) -> int:

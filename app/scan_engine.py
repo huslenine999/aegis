@@ -36,7 +36,11 @@ def exclude_files_pattern(
 EXCLUDE_FILES_PATTERN = exclude_files_pattern()
 # The scanned repository must not allowlist its own secrets with inline
 # "pragma: allowlist secret" comments; reviewed exceptions belong in trusted config.
-DETECT_SECRETS_TRUSTED_FLAGS = ("--disable-filter", "detect_secrets.filters.allowlist.is_line_allowlisted")
+DETECT_SECRETS_TRUSTED_FLAGS = (
+    "--disable-filter", "detect_secrets.filters.allowlist.is_line_allowlisted",
+    # A whole line that only pins a GitHub Action or checkout to a commit SHA holds no secret.
+    "--exclude-lines", r'''^\s*(-\s*)?(uses:\s*["']?[\w.-]+/[\w./-]+@|ref:\s*["']?)[0-9a-f]{40}["']?(\s+#\s*[\w.-]*)?\s*$''',
+)
 
 
 def detect_secrets_target(target_path: str | Path) -> tuple[Path, str]:

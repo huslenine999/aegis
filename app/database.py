@@ -24,14 +24,12 @@ def _database_path(root: Path) -> Path:
 
 if os.environ.get("VERCEL"):
     DB_PATH = Path("/tmp/aegis.db")
-    DOWNLOAD_DIR = Path("/tmp/downloads")
     SCANS_DIR = Path("/tmp/scans")
 else:
     data_dir = os.environ.get("AEGIS_DATA_DIR")
     if data_dir:
         data_root = Path(data_dir).expanduser().resolve()
         DB_PATH = _database_path(data_root)
-        DOWNLOAD_DIR = data_root / "downloads"
         SCANS_DIR = data_root / "scans"
     else:
         try:
@@ -40,14 +38,12 @@ else:
             test_file.unlink()
 
             DB_PATH = _database_path(BASE_DIR)
-            DOWNLOAD_DIR = BASE_DIR / "downloads"
             SCANS_DIR = local_root / "scans"
         except (IOError, OSError):
             user_root = Path.home() / ".aegis"
             user_root.mkdir(parents=True, exist_ok=True)
 
             DB_PATH = _database_path(user_root)
-            DOWNLOAD_DIR = user_root / "downloads"
             SCANS_DIR = user_root / "scans"
 
 

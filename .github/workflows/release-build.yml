@@ -102,10 +102,7 @@ jobs:
               "app/signer_entrypoint.py",
               "app/evidence_signer.py",
               "app/github_broker_entrypoint.py",
-              "app/templates/index.html",
               "app/templates/report_template.html",
-              "app/static/enhanced-dashboard.css",
-              "app/static/enhanced-dashboard.js",
               "policy_engine.py",
               "rules/semgrep_rules.yaml",
           }
