@@ -1283,8 +1283,7 @@ def enrich_exploit_intelligence(
     return enriched
 
 
-def calculate_exploitability_score(results: List[Dict[str, Any]], waf_enabled: bool) -> float:
-    del waf_enabled
+def calculate_exploitability_score(results: List[Dict[str, Any]]) -> float:
     severity_cvss = {"LOW": 2.0, "MEDIUM": 5.5, "HIGH": 8.5, "CRITICAL": 9.8}
     severities = []
     for result in results:
@@ -1469,7 +1468,6 @@ def run_policy_engine(
     reporter_callback = None,
     operational_failures: List[str] | None = None,
     tool_states: Dict[str, str] | None = None,
-    waf_enabled: bool | None = None,
     fail_on_severities: set[str] | None = None,
     fail_on_scanner_errors: bool = True,
     output_root: SafeOutputRoot | None = None,
@@ -1595,10 +1593,7 @@ def run_policy_engine(
             "excluded from this decision."
         )
 
-    # Determine WAF status from environment (injected by main.py)
-    if waf_enabled is None:
-        waf_enabled = os.environ.get("WAF_ENABLED", "false").lower() == "true"
-    exploitability_score = calculate_exploitability_score(results, waf_enabled)
+    exploitability_score = calculate_exploitability_score(results)
 
     if reporter_callback:
         reporter_callback(results, final_status, reason, exploitability_score)

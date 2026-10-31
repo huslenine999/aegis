@@ -169,7 +169,6 @@ def test_postgres_unpooled_adapter_closes_after_commit_failure():
 def test_postgres_initialization_keeps_migrations_in_one_transaction(postgres_pool, monkeypatch):
     migration = Mock()
     monkeypatch.setattr(database, "run_migrations", migration)
-    monkeypatch.setattr(database, "_seed_default_rows", Mock())
     monkeypatch.setattr(database, "apply_service_roles", Mock())
 
     database.initialize_database()

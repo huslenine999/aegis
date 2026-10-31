@@ -31,10 +31,9 @@ and prevent one project from reading another project's results.
 | Scanned repository hides code from a scanner | Ruff runs `--isolated`, ignoring inline `noqa` comments and the target's `.gitignore` and `.ignore` files. detect-secrets ignores inline `pragma: allowlist secret` comments. Semgrep ignores `nosemgrep` comments and repository `.semgrepignore` files, has no file-size limit, and a timeout or fatal error marks Semgrep failed rather than complete. Unpinned, wildcard, or unparseable dependency declarations make the inventory incomplete. |
 | Viewer reads another project's report | Run-scoped artifact APIs require project membership; legacy shared reports are administrator-only. |
 | Disabled user keeps an old session | Opaque server-side sessions join the current active user and role and can be revoked. |
-| Oversized body exhausts WAF memory | A body-size middleware runs before WAF request buffering. |
+| Oversized body exhausts memory | A body-size middleware rejects oversized requests before they are buffered. |
 | Webhook targets an internal service | HTTPS, strict global-address validation, redirect denial, bounded timeout, and bounded retries. |
 | Deep scan lacks a pinned CodeQL image, trusted suites, or registered Deep worker | Startup/readiness and request admission fail; incomplete CodeQL evidence produces `ERROR`, never `ALLOWED`. |
-| Malicious regex blocks the service | WAF rules are administrator-only, length-bounded, and syntax validated; deployment monitoring remains required. |
 | Tenant administrator accesses another company | Tenant IDs are carried by principals and enforced in project, user, token, scan, artifact, membership, and audit queries; cross-tenant tests exercise denial paths. |
 | Database token hashes are cracked offline | Current-format API tokens use server-keyed HMAC, explicit scopes, expiry, revocation, and last-used tracking; Migration 20 disables unclassifiable legacy rows and no legacy fallback remains. |
 | Scanner report output exhausts worker storage | Built-in scanner output crosses a bounded stdout pipe into a parent-owned temporary sink; process-group termination, atomic promotion, in-process findings, and serialized reports are also bounded. |

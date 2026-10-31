@@ -33,7 +33,7 @@ def workflow(tmp_path, monkeypatch):
     monkeypatch.setattr(web_common, "AUTH_REQUIRED", True)
     for module in (bac_projects, artifact_routes, project_routes):
         monkeypatch.setattr(module, "SCANS_DIR", tmp_path / "scans")
-    database.initialize_database(reset=True)
+    database.initialize_database()
     with database.get_connection() as connection:
         connection.execute("INSERT INTO tenants (id, slug, name, created_at) VALUES (2, 'other', 'Other', '2026-10-08')")
         connection.executemany(

@@ -21,7 +21,6 @@ def test_scan_job_payload_is_typed_and_immutable():
         job_id="job-1",
         target="project",
         custom_file_path=None,
-        waf_enabled=False,
         scan_run_id=7,
         project_id=11,
         requested_by=13,
@@ -32,19 +31,6 @@ def test_scan_job_payload_is_typed_and_immutable():
     )
 
     assert payload.job_id == "job-1"
-    assert payload.as_rq_kwargs() == {
-        "job_id": "job-1",
-        "target": "project",
-        "custom_file_path": None,
-        "waf_enabled": False,
-        "scan_run_id": 7,
-        "project_id": 11,
-        "requested_by": 13,
-        "preset": "standard",
-        "source_revision": "a" * 40,
-        "github_installation_id": None,
-        "diff_aware": False,
-    }
     with pytest.raises(FrozenInstanceError):
         payload.job_id = "other"
 

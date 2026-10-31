@@ -13,7 +13,7 @@ def configure_database(tmp_path, monkeypatch):
     monkeypatch.setattr(github_lifecycle, "get_connection", database.get_connection)
     monkeypatch.setattr(projects, "get_connection", database.get_connection)
     monkeypatch.setattr(projects, "USING_POSTGRES", False)
-    database.initialize_database(reset=True)
+    database.initialize_database()
 
 
 def add_user(connection, username: str, tenant_id: int, role: str = "operator") -> int:

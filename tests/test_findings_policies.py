@@ -23,7 +23,7 @@ def configure_database(tmp_path, monkeypatch):
     monkeypatch.setattr(projects, "USING_POSTGRES", False)
     monkeypatch.setattr(policies, "USING_POSTGRES", False)
     monkeypatch.setattr(findings, "USING_POSTGRES", False)
-    database.initialize_database(reset=True)
+    database.initialize_database()
     with database.get_connection() as connection:
         connection.executemany(
             """INSERT INTO auth_users
@@ -710,4 +710,4 @@ def test_artifact_limits_reject_oversized_files_and_bundles(tmp_path, monkeypatc
 
     monkeypatch.setenv("AEGIS_MAX_REPORT_BUNDLE_BYTES", "1")
     with pytest.raises(artifact_storage.ArtifactLimitError, match="Report bundle"):
-        reporting.build_report_bundle_from_artifacts({"report.html": b"ok"})
+        reporting.build_report_bundle_to_path({"report.html": b"ok"}, tmp_path / "bundle.zip")

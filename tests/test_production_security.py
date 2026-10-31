@@ -22,7 +22,7 @@ def test_server_session_rejects_tampering_and_can_be_revoked(tmp_path, monkeypat
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "sessions.db")
     monkeypatch.setattr(database, "USING_POSTGRES", False)
     monkeypatch.setattr(auth, "get_connection", database.get_connection)
-    database.initialize_database(reset=True)
+    database.initialize_database()
     with database.get_connection() as connection:
         connection.execute(
             """INSERT INTO auth_users
@@ -167,7 +167,7 @@ def test_initial_setup_rotates_admin_and_persists_workspace(tmp_path, monkeypatc
     monkeypatch.setattr(auth, "get_connection", database.get_connection)
     monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_USERNAME", "admin")
     monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "temporary-password")
-    database.initialize_database(reset=True)
+    database.initialize_database()
     auth.ensure_bootstrap_admin()
 
     principal = auth.complete_initial_setup(
@@ -195,7 +195,7 @@ def test_setup_token_can_create_an_unusable_temporary_bootstrap_identity(
     monkeypatch.setattr(auth, "get_connection", database.get_connection)
     monkeypatch.delenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
     monkeypatch.setenv("AEGIS_SETUP_TOKEN", "s" * 32)
-    database.initialize_database(reset=True)
+    database.initialize_database()
 
     auth.ensure_bootstrap_admin()
 
@@ -218,7 +218,7 @@ def test_unauthenticated_development_mode_uses_a_real_database_identity(
     monkeypatch.setattr(projects, "get_connection", database.get_connection)
     monkeypatch.setattr(projects, "USING_POSTGRES", False)
     monkeypatch.setattr(auth, "AUTH_REQUIRED", False)
-    database.initialize_database(reset=True)
+    database.initialize_database()
     auth.ensure_development_admin()
 
     principal = auth._development_principal()

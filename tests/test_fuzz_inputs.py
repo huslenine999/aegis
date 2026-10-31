@@ -210,7 +210,7 @@ def webhook_database(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "USING_POSTGRES", False)
     monkeypatch.setattr(github_integration, "get_connection", database.get_connection)
     monkeypatch.setenv("AEGIS_GITHUB_WEBHOOK_SECRET", "w" * 40)
-    database.initialize_database(reset=True)
+    database.initialize_database()
     return github_integration
 
 

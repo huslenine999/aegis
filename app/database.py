@@ -1,6 +1,5 @@
 import os
 import time
-import secrets
 import sqlite3
 import threading
 import json
@@ -244,36 +243,6 @@ def get_connection():
     connection = SQLiteConnection(sqlite3.connect(DB_PATH))
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
-
-
-DEMO_USER_ROLES = (
-    ("admin", "administrator"),
-    ("devuser", "developer"),
-    ("guest", "guest"),
-)
-
-
-def _generated_demo_users() -> tuple[tuple[str, str, str], ...]:
-    return tuple(
-        (username, role, secrets.token_urlsafe(32))
-        for username, role in DEMO_USER_ROLES
-    )
-
-DEFAULT_WAF_RULES = [
-    ("' OR '", "SQL Injection (OR operator bypass)", 1),
-    ("1=1", "SQL Injection (tautology bypass)", 1),
-    ("--", "SQL comment character block", 1),
-    ("cat /etc/passwd", "LFI/Command execution pattern 1", 1),
-    ("\\.\\./", "Directory Traversal pattern (../)", 1),
-    ("pickle\\.loads", "Python deserialization hijack detector", 1),
-    ("eval\\(", "Python dynamic expression injection detector", 1),
-    ("__import__|system\\(|subprocess", "Python code execution attempt", 1),
-    ("<\\s*script", "XSS (Dangerous script tags)", 1),
-    ("on\\w+\\s*=", "XSS (HTML event handler hijacking)", 1),
-    ("javascript\\s*:", "XSS (Javascript URI prefix)", 1),
-    ("169\\.254\\.169\\.254", "SSRF (Cloud metadata server IP)", 1),
-    ("localhost|127\\.0\\.0\\.1", "SSRF (Localhost lookup blocker)", 1),
-]
 
 
 @dataclass(frozen=True)
@@ -1682,6 +1651,11 @@ def require_least_privilege_role(timeout: float = 120.0) -> None:
         )
 
 
+def _migration_026_drop_demo_lab_tables(cursor) -> None:
+    cursor.execute("DROP TABLE IF EXISTS waf_rules")
+    cursor.execute("DROP TABLE IF EXISTS users")
+
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1708,6 +1682,7 @@ MIGRATIONS = (
     Migration(23, "evidence_signature_ledger", _migration_023_evidence_signature_ledger),
     Migration(24, "final_scan_runs", _migration_024_final_scan_runs),
     Migration(25, "least_privilege_support", _migration_025_least_privilege_support),
+    Migration(26, "drop_demo_lab_tables", _migration_026_drop_demo_lab_tables),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
@@ -1725,26 +1700,7 @@ def run_migrations(cursor) -> list[Migration]:
     return applied_now
 
 
-def _seed_default_rows(cursor, *, reset: bool = False) -> None:
-    if reset:
-        cursor.execute("DELETE FROM users")
-    seed_demo_users = os.environ.get("AEGIS_ENV", "development").lower() != "production"
-    if seed_demo_users and cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO users (username, role, api_key) VALUES (?, ?, ?)",
-            _generated_demo_users(),
-        )
-
-    if reset:
-        cursor.execute("DELETE FROM waf_rules")
-    if cursor.execute("SELECT COUNT(*) FROM waf_rules").fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO waf_rules (pattern, description, enabled) VALUES (?, ?, ?)",
-            DEFAULT_WAF_RULES,
-        )
-
-
-def initialize_database(*, reset: bool = False):
+def initialize_database():
     if not USING_POSTGRES:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection()
@@ -1757,7 +1713,6 @@ def initialize_database(*, reset: bool = False):
                 ("aegis_schema_migrations",),
             )
         run_migrations(cursor)
-        _seed_default_rows(cursor, reset=reset)
         apply_service_roles(conn)
         conn.commit()
     except Exception:
@@ -1779,22 +1734,6 @@ def get_application_state(key: str, default=None):
     except (json.JSONDecodeError, TypeError):
         return default
 
-
-def set_application_state(key: str, value) -> None:
-    encoded = json.dumps(value, separators=(",", ":"))
-    now = datetime.now(timezone.utc).isoformat()
-    with get_connection() as connection:
-        updated = connection.execute(
-            "UPDATE application_state SET state_value = ?, updated_at = ? WHERE state_key = ?",
-            (encoded, now, key),
-        )
-        rowcount = getattr(updated, "rowcount", 0)
-        if not rowcount:
-            connection.execute(
-                """INSERT INTO application_state (state_key, state_value, updated_at)
-                   VALUES (?, ?, ?)""",
-                (key, encoded, now),
-            )
 
 class InMemoryRedis:
     def __init__(self):

@@ -59,9 +59,6 @@ curl -H "Authorization: Bearer $AEGIS_METRICS_TOKEN" \
 - Treat scanner errors as release-blocking for CI gates by running
   `aegis scan --strict`. Non-strict mode is useful for local exploration, but
   scan summaries still include `operational_failures` when a scanner fails.
-- Keep `AEGIS_ENABLE_DEMO_LAB=false`. The `secure` and `vulnerable` built-in
-  targets are compatibility fixtures for demonstrations and tests, not
-  production application routes.
 - Set `AEGIS_ARTIFACT_RETENTION_DAYS` to the approved evidence-retention
   period. Run downloads remain authorized by project membership and include
   SHA-256 integrity metadata.

@@ -1,4 +1,3 @@
-import io
 import json
 import zipfile
 from policy_engine import (
@@ -7,7 +6,7 @@ from policy_engine import (
     generate_cyclonedx_sbom,
 )
 from app.worker import run_yara_scan
-from app.reporting import build_report_bundle
+from app.reporting import build_report_bundle_to_path
 
 def test_analyze_secrets_pass():
     report = {"results": {}}
@@ -128,6 +127,8 @@ def test_local_bundle_preserves_raw_and_normalized_codeql_evidence(tmp_path):
     (tmp_path / "codeql.sarif").write_bytes(raw)
     (tmp_path / "codeql-report.json").write_bytes(normalized)
 
-    with zipfile.ZipFile(io.BytesIO(build_report_bundle(tmp_path))) as bundle:
+    bundle_path = tmp_path / "bundle.zip"
+    build_report_bundle_to_path({p.name: p for p in tmp_path.iterdir()}, bundle_path)
+    with zipfile.ZipFile(bundle_path) as bundle:
         assert bundle.read("raw/codeql.sarif") == raw
         assert bundle.read("raw/codeql-report.json") == normalized

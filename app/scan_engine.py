@@ -7,7 +7,7 @@ drifting while the scanner phases are migrated into this module incrementally.
 """
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
@@ -124,7 +124,6 @@ class ScanJobPayload:
     job_id: str
     target: str
     custom_file_path: str | None = None
-    waf_enabled: bool = False
     scan_run_id: int | None = None
     project_id: int | None = None
     requested_by: int | None = None
@@ -132,10 +131,6 @@ class ScanJobPayload:
     source_revision: str | None = None
     github_installation_id: int | None = None
     diff_aware: bool = False
-
-    def as_rq_kwargs(self) -> dict[str, Any]:
-        """Return a stable, explicit representation for queue diagnostics."""
-        return asdict(self)
 
 
 @dataclass(frozen=True)

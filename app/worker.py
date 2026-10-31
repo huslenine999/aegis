@@ -17,7 +17,7 @@ from rq import Worker
 
 from .database import PROJECT_ROOT, SCANS_DIR, redis_client
 from .config import environment_positive_int
-from .dependencies import discover_dependency_manifests, first_requirements_manifest
+from .dependencies import discover_dependency_manifests
 from policy_engine import query_osv_vulnerabilities, run_policy_engine
 from .scan_engine import RedisEventSink, ScanJobPayload, ScanRunner, SCAN_PROFILE_VERSION, SEMGREP_SOURCE_EXTENSIONS
 from .scan_engine import (
@@ -573,11 +573,6 @@ def _github_check_annotations(
     return annotations
 
 
-def _target_requirements_file(target_path: str | Path) -> Path | None:
-    manifest = first_requirements_manifest(discover_dependency_manifests(target_path))
-    return manifest.path if manifest else None
-
-
 def _mirror_latest_reports(source_dir: Path) -> None:
     source_output = SafeOutputRoot(source_dir)
     latest_output = SafeOutputRoot(SCANS_DIR)
@@ -647,7 +642,6 @@ def async_scan_task(
     payload: ScanJobPayload | str,
     target: str | None = None,
     custom_file_path: str | None = None,
-    waf_enabled: bool = False,
     scan_run_id: int | None = None,
     project_id: int | None = None,
     requested_by: int | None = None,
@@ -664,7 +658,6 @@ def async_scan_task(
             job_id=payload,
             target=target,
             custom_file_path=custom_file_path,
-            waf_enabled=waf_enabled,
             scan_run_id=scan_run_id,
             project_id=project_id,
             requested_by=requested_by,
@@ -676,7 +669,6 @@ def async_scan_task(
     target = job_payload.target
     assert target is not None
     custom_file_path = job_payload.custom_file_path
-    waf_enabled = job_payload.waf_enabled
     scan_run_id = job_payload.scan_run_id
     project_id = job_payload.project_id
     requested_by = job_payload.requested_by
@@ -1059,7 +1051,6 @@ def async_scan_task(
             reporter_callback=capture_policy_summary,
             operational_failures=operational_failures or None,
             tool_states=tool_statuses.states(),
-            waf_enabled=waf_enabled,
             output_root=safe_output,
             fail_on_severities=(
                 set(policy_definition["fail_on_severities"])
@@ -1101,7 +1092,6 @@ def async_scan_task(
             "operational_failures": operational_failures,
             "exploitability_score": policy_summary.get("exploitability_score", 0.0),
             "risk_index": policy_summary.get("risk_index", policy_summary.get("exploitability_score", 0.0)),
-            "waf_enabled": waf_enabled,
             "has_run": True,
             "is_blocked": final_status != "ALLOWED",
             "blocked_by": blocking_tools,

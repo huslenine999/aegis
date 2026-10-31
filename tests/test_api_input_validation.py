@@ -9,7 +9,7 @@ import app.main as app_main
 def client():
     from app.database import initialize_database
 
-    initialize_database(reset=True)
+    initialize_database()
     return TestClient(app_main.app)
 
 

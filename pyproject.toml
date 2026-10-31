@@ -17,7 +17,6 @@ keywords = [
   "devsecops",
   "sast",
   "sca",
-  "waf",
   "scanner",
 ]
 dependencies = [

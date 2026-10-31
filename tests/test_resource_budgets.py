@@ -311,21 +311,21 @@ def test_s3_verified_download_rejects_tampered_get_payload(
 
 
 def test_report_bundle_enforces_zip_entry_budget(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AEGIS_MAX_ZIP_ENTRIES", "1")
 
     with pytest.raises(ResourceLimitError):
-        reporting.build_report_bundle_from_artifacts({"report.html": b"ok"})
+        reporting.build_report_bundle_to_path({"report.html": b"ok"}, tmp_path / "bundle.zip")
 
 
 def test_report_bundle_enforces_uncompressed_budget(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AEGIS_MAX_ZIP_UNCOMPRESSED_BYTES", "1")
 
     with pytest.raises(ResourceLimitError):
-        reporting.build_report_bundle_from_artifacts({"report.html": b"ok"})
+        reporting.build_report_bundle_to_path({"report.html": b"ok"}, tmp_path / "bundle.zip")
 
 
 def test_report_bundle_can_be_written_and_streamed_from_disk(

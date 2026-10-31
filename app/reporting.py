@@ -16,7 +16,6 @@ from .resource_budgets import (
     ResourceLimitError,
     iter_file_bytes,
     load_bounded_json,
-    read_bounded,
     resource_budgets,
 )
 
@@ -202,25 +201,3 @@ def build_report_bundle_to_path(
         os.replace(temporary_path, destination)
     finally:
         temporary_path.unlink(missing_ok=True)
-
-
-def build_report_bundle(scans_dir: Path) -> bytes:
-    paths: dict[str, Path] = {}
-    for path in scans_dir.iterdir():
-        if path.is_symlink():
-            raise RuntimeError("Artifact paths must not be symbolic links.")
-        if path.is_file():
-            paths[path.name] = path
-    return _build_report_bundle_bytes(paths)
-
-
-def _build_report_bundle_bytes(artifacts: Mapping[str, ReportSource]) -> bytes:
-    with tempfile.TemporaryDirectory(prefix="aegis-bundle-") as temporary_dir:
-        bundle_path = Path(temporary_dir) / "report-bundle.zip"
-        build_report_bundle_to_path(artifacts, bundle_path)
-        with bundle_path.open("rb") as bundle_file:
-            return read_bounded(bundle_file, artifact_limits()["bundle"])
-
-
-def build_report_bundle_from_artifacts(artifacts: dict[str, bytes]) -> bytes:
-    return _build_report_bundle_bytes(artifacts)

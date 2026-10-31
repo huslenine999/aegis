@@ -32,7 +32,7 @@ def _configure(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("AEGIS_OIDC_CLIENT_ID", "client-id")
     monkeypatch.setenv("AEGIS_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    database.initialize_database(reset=True)
+    database.initialize_database()
     oidc._clear_caches()
 
 

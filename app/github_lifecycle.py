@@ -52,21 +52,6 @@ def _binding_row(connection, project_id: int):
     ).fetchone()
 
 
-def _binding_dict(row) -> dict:
-    return {
-        "id": int(row[0]),
-        "project_id": int(row[1]),
-        "tenant_id": int(row[2]),
-        "installation_id": int(row[3]) if row[3] is not None else None,
-        "repository_id": int(row[4]) if row[4] is not None else None,
-        "repository_full_name": row[5],
-        "state": row[6],
-        "created_at": row[7],
-        "last_seen_at": row[8],
-        "revoked_at": row[9],
-    }
-
-
 def _route_for_binding(connection, project_id: int):
     return connection.execute(
         """SELECT b.id, b.project_id, b.tenant_id, b.installation_id,
@@ -118,45 +103,6 @@ def ensure_legacy_repository_binding(
         (int(project_id), int(tenant_id), name, now, now),
     )
 
-
-def backfill_github_repository_bindings() -> dict:
-    """Backfill legacy placeholders without granting App access.
-
-    Ambiguous repository names remain ``legacy`` and are reported.  They are
-    deliberately not promoted by webhook routing.
-    """
-    created = 0
-    invalid: list[dict] = []
-    with get_connection() as connection:
-        rows = connection.execute(
-            """SELECT id, tenant_id, github_full_name FROM projects
-               WHERE github_full_name IS NOT NULL AND TRIM(github_full_name) <> ''
-               ORDER BY id"""
-        ).fetchall()
-        for project_id, tenant_id, full_name in rows:
-            try:
-                name = _repository_name(full_name)
-            except GitHubLifecycleError:
-                invalid.append({"project_id": int(project_id), "repository": str(full_name)})
-                continue
-            if _binding_row(connection, int(project_id)):
-                continue
-            ensure_legacy_repository_binding(connection, int(project_id), int(tenant_id), name)
-            created += 1
-
-        ambiguous_rows = connection.execute(
-            """SELECT repository_full_name, COUNT(*) FROM github_repository_bindings
-               WHERE state = 'legacy' GROUP BY repository_full_name HAVING COUNT(*) > 1
-               ORDER BY repository_full_name"""
-        ).fetchall()
-    return {
-        "created": created,
-        "ambiguous": [
-            {"repository": row[0], "count": int(row[1])}
-            for row in ambiguous_rows
-        ],
-        "invalid": invalid,
-    }
 
 
 def _ensure_installation(connection, installation_id: int, tenant_id: int) -> None:
@@ -400,18 +346,6 @@ def require_active_github_binding(
         if not route:
             raise GitHubLifecycleError("GitHub project owner is inactive.")
         return _route_dict(route)
-
-
-def github_oauth_capability_active(user_id: int) -> bool:
-    with get_connection() as connection:
-        row = connection.execute(
-            """SELECT 1 FROM github_connections c
-               JOIN auth_users u ON u.id = c.user_id
-               WHERE c.user_id = ? AND u.active = 1 AND c.revoked_at IS NULL
-                 AND c.token_encrypted <> ''""",
-            (int(user_id),),
-        ).fetchone()
-    return bool(row)
 
 
 def revoke_github_capabilities(

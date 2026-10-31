@@ -36,7 +36,7 @@ The repository also hosts a Broken Access Control (BAC) research lab
 app/
   main.py              App factory
   web_common.py        Shared web state: access-control deps, templates, JSON body parsing
-  routes/              Domain routers (auth, projects, github, admin, artifacts, demo/scan)
+  routes/              Domain routers (auth, projects, github, admin, artifacts, scan)
   cli.py               CLI facade; cli_config.py, cli_reports.py, cli_runner.py, cli_stack.py
   scan_engine.py       Shared job payload, event sinks, semgrep/exclude helpers
   worker.py            RQ scan pipeline (sandbox -> scanners -> policy -> evidence)

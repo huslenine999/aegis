@@ -225,21 +225,6 @@ print(DB_PATH.exists())
     assert result.stdout.strip().splitlines()[-1] == "False"
 
 
-def test_worker_dependency_scan_does_not_fall_back_to_project_requirements(tmp_path):
-    target = tmp_path / "target"
-    target.mkdir()
-
-    assert app_worker._target_requirements_file(target) is None
-
-    (target / "pyproject.toml").write_text('[project]\ndependencies = ["requests==2.34.2"]\n')
-    assert app_worker._target_requirements_file(target) is None
-
-    target_requirements = target / "requirements.txt"
-    target_requirements.write_text("requests==2.34.2\n")
-
-    assert app_worker._target_requirements_file(target) == target_requirements
-
-
 def test_worker_mirrors_latest_reports_without_copying_run_workspace(tmp_path, monkeypatch):
     source_dir = tmp_path / "runs" / "job-1"
     source_dir.mkdir(parents=True)
@@ -529,31 +514,10 @@ def test_production_configuration_accepts_explicit_secure_values(monkeypatch):
     validate_runtime_configuration()
 
 
-def test_database_initialization_preserves_existing_rules(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "aegis.db")
-    database.initialize_database(reset=True)
-
-    with database.get_connection() as connection:
-        connection.execute(
-            "INSERT INTO waf_rules (pattern, description, enabled) VALUES (?, ?, ?)",
-            ("production-rule", "must survive restart", 1),
-        )
-        connection.commit()
-
-    database.initialize_database()
-
-    with database.get_connection() as connection:
-        count = connection.execute(
-            "SELECT COUNT(*) FROM waf_rules WHERE pattern = ?",
-            ("production-rule",),
-        ).fetchone()[0]
-    assert count == 1
-
-
 def test_database_initialization_records_schema_migration(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "aegis.db")
 
-    database.initialize_database(reset=True)
+    database.initialize_database()
     database.initialize_database()
 
     with database.get_connection() as connection:
@@ -566,31 +530,15 @@ def test_database_initialization_records_schema_migration(tmp_path, monkeypatch)
     ]
 
 
-def test_production_database_does_not_seed_legacy_api_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "production.db")
+def test_database_drops_demo_lab_tables(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "aegis.db")
     monkeypatch.setattr(database, "USING_POSTGRES", False)
-    monkeypatch.setenv("AEGIS_ENV", "production")
 
-    database.initialize_database(reset=True)
+    database.initialize_database()
 
     with database.get_connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
-
-
-def test_development_demo_users_receive_generated_api_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "development.db")
-    monkeypatch.setattr(database, "USING_POSTGRES", False)
-    monkeypatch.setenv("AEGIS_ENV", "development")
-
-    database.initialize_database(reset=True)
-
-    with database.get_connection() as connection:
-        keys = [row[0] for row in connection.execute("SELECT api_key FROM users")]
-
-    assert len(keys) == 3
-    assert len(set(keys)) == 3
-    assert all(len(key) >= 32 for key in keys)
-    assert not {"ADMIN-API-KEY-12345", "DEV-API-KEY-67890", "GUEST-API-KEY-00000"} & set(keys)
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert not {"users", "waf_rules"} & tables
 
 
 def test_completed_job_metadata_is_bounded_and_expires(monkeypatch):

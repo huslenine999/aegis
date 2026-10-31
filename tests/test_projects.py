@@ -22,7 +22,7 @@ def configure_project_database(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "USING_POSTGRES", False)
     monkeypatch.setattr(projects, "get_connection", database.get_connection)
     monkeypatch.setattr(projects, "USING_POSTGRES", False)
-    database.initialize_database(reset=True)
+    database.initialize_database()
     with database.get_connection() as connection:
         connection.executemany(
             """INSERT INTO auth_users

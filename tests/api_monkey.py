@@ -158,7 +158,7 @@ def _seed():
     from app import auth, findings, notifications, policies, projects
     from app.database import get_connection, initialize_database
 
-    initialize_database(reset=True)
+    initialize_database()
     with get_connection() as connection:
         connection.execute(
             "INSERT INTO tenants (slug, name, created_at) VALUES ('other', 'Other', '2026-01-01T00:00:00+00:00')"

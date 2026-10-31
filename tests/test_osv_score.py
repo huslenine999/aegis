@@ -41,12 +41,7 @@ def test_policy_exploitability_score_calculation():
         ]}
     ]
     # The score uses the worst severity plus a logarithmic volume bonus.
-    score_waf_off = calculate_policy_score(results, False)
-    assert score_waf_off == 89.0
-
-    # WAF state does not discount unrelated static or dependency findings.
-    score_waf_on = calculate_policy_score(results, True)
-    assert score_waf_on == 89.0
+    assert calculate_policy_score(results) == 89.0
 
 def npm_manifest(*names):
     packages = tuple(DependencyPackage(name, "1.0.0", "npm") for name in names)

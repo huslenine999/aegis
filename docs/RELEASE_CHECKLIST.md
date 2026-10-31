@@ -23,7 +23,7 @@ The Docker mode uses a unique Compose project, rehearses database recovery and
 service restart, then removes only its temporary containers and volumes.
 
 1. Update versions in `pyproject.toml`, `package.json`, and `CHANGELOG.md`.
-2. Run `python -m py_compile app/main.py app/cli.py app/worker.py app/scanners.py app/demo_lab.py`.
+2. Run `python -m py_compile app/main.py app/cli.py app/worker.py app/scanners.py`.
 3. Run `pytest -q --timeout=60 --timeout-method=thread`.
 4. Run `python -m app.cli scan . --config aegis.yml --sarif --json`.
 5. Build the Python wheel with `python -m pip wheel . --no-deps -w dist`.
@@ -36,7 +36,7 @@ service restart, then removes only its temporary containers and volumes.
    an operator scan, and confirm another non-admin user cannot access its WebSocket.
 10. Connect a test GitHub account, import public and private repositories, and
     verify quick, standard, deep, cancel, retry, and new-finding behavior.
-11. Restart dashboard and worker containers and verify PostgreSQL users/WAF state,
+11. Restart dashboard and worker containers and verify PostgreSQL users,
     Redis job state, and generated reports remain available.
 12. Update the immutable Aegis SHA in the approval and published-Action E2E
    workflows, then run the E2E workflow manually.
