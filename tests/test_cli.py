@@ -820,6 +820,39 @@ def test_print_ascii_report(capsys):
     assert "SCAN INCOMPLETE" in capsys.readouterr().out
 
 
+def test_ascii_report_lists_blocking_findings_with_aligned_boxes(capsys, tmp_path, monkeypatch):
+    from app.cli import print_ascii_report
+    from app.version import get_package_version
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    findings = [
+        {"severity": "HIGH", "test_id": "python-rce", "filename": str(tmp_path / "web" / "views.py"),
+         "line_number": 5, "issue_text": "Command injection", "blocking": True},
+        {"severity": "LOW", "test_id": "low-rule", "filename": str(tmp_path / "web" / "views.py"),
+         "line_number": 9, "issue_text": "Minor", "blocking": False},
+    ]
+    results = [{"tool": "Semgrep", "status": "FAIL", "total_issues": 2, "blocking_issues": 1, "findings": findings}]
+    print_ascii_report(results, "BLOCKED", "Blocking security issues found by: Semgrep " * 3, 87.5, base=tmp_path)
+    out = capsys.readouterr().out
+
+    assert "\033[" not in out
+    assert f"v{get_package_version()}" in out
+    assert "web/views.py" in out and "L5" in out and "python-rce [Semgrep]" in out
+    assert "low-rule" not in out and "1 non-blocking" in out
+    boxed = [line for line in out.splitlines() if line.lstrip().startswith(("║", "╔", "╚"))]
+    assert boxed and len({len(line) for line in boxed}) == 1
+
+
+def test_sarif_includes_every_finding_not_only_examples(tmp_path):
+    from app.cli_reports import write_sarif_report
+
+    findings = [{"severity": "HIGH", "test_id": "S", "filename": "a.py", "line_number": n} for n in range(1, 9)]
+    sarif_path = tmp_path / "aegis.sarif"
+    write_sarif_report(sarif_path, [{"tool": "Ruff (SAST)", "examples": findings[:5], "findings": findings}])
+
+    assert len(json.loads(sarif_path.read_text())["runs"][0]["results"]) == 8
+
+
 def test_hook_commands_leave_foreign_pre_push_hooks_alone(tmp_path, monkeypatch):
     hooks = tmp_path / ".git" / "hooks"
     hooks.mkdir(parents=True)

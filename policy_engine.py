@@ -302,10 +302,10 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
             "occurrence": r.get("aegis_occurrence"),
         }))
 
-    blocking_issues = [
-        issue for issue in issues
-        if issue["severity"] in (fail_on if fail_on is not None else FAIL_ON_RUFF_SEVERITIES)
-    ]
+    threshold = fail_on if fail_on is not None else FAIL_ON_RUFF_SEVERITIES
+    for issue in issues:
+        issue["blocking"] = issue["severity"] in threshold
+    blocking_issues = [issue for issue in issues if issue["blocking"]]
 
     return {
         "tool": "Ruff (SAST)",
@@ -314,6 +314,7 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
         "status": "FAIL" if blocking_issues else "PASS",
         "severity_counts": _severity_counts(issues),
         "examples": (blocking_issues if blocking_issues else issues)[:5],
+        "findings": issues,
     }
 
 
@@ -364,10 +365,10 @@ def analyze_semgrep(
             "occurrence": r.get("aegis_occurrence"),
         }))
 
-    blocking_issues = [
-        issue for issue in issues
-        if issue["severity"] in (fail_on if fail_on is not None else FAIL_ON_SEMGREP_SEVERITIES)
-    ]
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEMGREP_SEVERITIES
+    for issue in issues:
+        issue["blocking"] = issue["severity"] in threshold
+    blocking_issues = [issue for issue in issues if issue["blocking"]]
 
     return {
         "tool": "Semgrep",
@@ -376,6 +377,7 @@ def analyze_semgrep(
         "status": "FAIL" if blocking_issues else "PASS",
         "severity_counts": _severity_counts(issues),
         "examples": (blocking_issues if blocking_issues else issues)[:5],
+        "findings": issues,
     }
 
 
@@ -411,10 +413,10 @@ def analyze_osv(
             "occurrence": f.get("aegis_occurrence"),
         }))
 
-    blocking_issues = [
-        f for f in findings
-        if f["severity"] in (fail_on if fail_on is not None else FAIL_ON_SEVERITIES)
-    ]
+    threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
+    for f in findings:
+        f["blocking"] = f["severity"] in threshold
+    blocking_issues = [f for f in findings if f["blocking"]]
 
     return {
         "tool": "OSV Dependency Audit",
@@ -423,6 +425,7 @@ def analyze_osv(
         "status": "FAIL" if blocking_issues else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
+        "findings": findings,
     }
 
 
@@ -459,7 +462,9 @@ def analyze_codeql(report: Any, fail_on: set[str] | None = None) -> Dict[str, An
             "occurrence": item.get("aegis_occurrence"),
         }))
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
-    blocking = [item for item in findings if item["severity"] in threshold]
+    for item in findings:
+        item["blocking"] = item["severity"] in threshold
+    blocking = [item for item in findings if item["blocking"]]
     return {
         "tool": "CodeQL", "total_issues": len(findings),
         "blocking_issues": len(blocking),
@@ -499,6 +504,8 @@ def analyze_secrets(
 
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
     blocking_count = len(findings) if "HIGH" in threshold else 0
+    for finding in findings:
+        finding["blocking"] = bool(blocking_count)
     return {
         "tool": "Secrets Scanner",
         "total_issues": len(findings),
@@ -506,6 +513,7 @@ def analyze_secrets(
         "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
+        "findings": findings,
     }
 
 
@@ -535,6 +543,8 @@ def analyze_yara(
 
     threshold = fail_on if fail_on is not None else FAIL_ON_SEVERITIES
     blocking_count = len(findings) if "HIGH" in threshold else 0
+    for finding in findings:
+        finding["blocking"] = bool(blocking_count)
     return {
         "tool": "YARA Scanner",
         "total_issues": len(findings),
@@ -542,6 +552,7 @@ def analyze_yara(
         "status": "FAIL" if blocking_count else "PASS",
         "severity_counts": _severity_counts(findings),
         "examples": findings[:5],
+        "findings": findings,
     }
 
 

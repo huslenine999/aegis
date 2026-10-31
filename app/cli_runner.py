@@ -15,7 +15,6 @@ from .cli_config import (
     EXIT_ALLOWED,
     EXIT_BLOCKED,
     EXIT_OPERATIONAL_ERROR,
-    FAST_MODE_SKIPPED_SCANNERS,
     IGNORED_DIRS,
     PROJECT_ROOT,
     apply_suppressions,
@@ -25,7 +24,7 @@ from .cli_config import (
     resolve_exclude_paths,
     validate_fail_on,
 )
-from .cli_output import print_ascii_report, print_timing_summary
+from .cli_output import print_ascii_report, print_timing_summary, step
 from .cli_reports import read_json, utc_timestamp, write_json, write_sarif_report
 from .codeql_scanner import CodeQLScanError, import_codeql_sarif, operator_runtime_configuration, run_codeql_scan_isolated
 from .config import config_bool, load_advisory_config, load_config
@@ -206,13 +205,13 @@ def run_scanner_command(
             )
         return result.returncode
     except ResourceLimitError as exc:
-        print(f"  [{label} Warn] Output budget exceeded: {exc}")
+        step(label, f"output budget exceeded: {exc}", "warn")
     except subprocess.TimeoutExpired:
-        print(f"  [{label} Warn] Timed out after {timeout}s; continuing with available results.")
+        step(label, f"timed out after {timeout}s; continuing with available results", "warn")
     except FileNotFoundError:
-        print(f"  [{label} Warn] Executable not found; skipping.")
+        step(label, "executable not found; skipped", "warn")
     except Exception as e:
-        print(f"  [{label} Error] Failed to run scanner: {e}")
+        step(label, f"failed to run: {e}", "error")
     return 1
 
 
@@ -359,7 +358,7 @@ def _execute_scan(
 
     submitted_target = Path(target_path_str).expanduser().absolute()
     if not submitted_target.exists():
-        print(f"❌ Error: Path '{submitted_target}' does not exist.")
+        print(f"Error: path '{submitted_target}' does not exist.")
         if return_summary:
             return {
                 "target": str(submitted_target),
@@ -426,7 +425,7 @@ def _execute_scan(
     if _source_snapshot:
         target_path = _source_snapshot.scan_path
 
-    print(f"🛡️  Aegis CLI Scanner: Auditing target path: {source_path}")
+    print(f"Aegis {get_package_version()} · {preset} scan · {source_path}\n")
 
     dependency_manifests = discover_dependency_manifests(target_path)
     requirements_manifest = first_requirements_manifest(dependency_manifests)
@@ -456,24 +455,23 @@ def _execute_scan(
 
     # 1. Dependency analysis (OSV)
     if fast:
-        print(f"ℹ️  [Fast Mode] Skipping slower checks: {FAST_MODE_SKIPPED_SCANNERS}.")
+        step("OSV", "skipped (quick preset)")
         record_timing(timings, "OSV", time.perf_counter(), "skipped")
         mark_tool("OSV", "skipped", detail="fast mode")
     elif dependency_manifests:
         with timed_step(timings, "OSV"):
             manifest_names = ", ".join(sorted({manifest.kind for manifest in dependency_manifests}))
-            print(f"🔍 [SCA] Dependency manifest(s) detected: {manifest_names}. Running OSV audit...")
+            step("OSV", f"auditing dependencies ({manifest_names})")
             osv_report_path = safe_output.file("osv-report.json")
             try:
                 osv_findings = _cli_func("query_osv_vulnerabilities", query_osv_vulnerabilities)(dependency_manifests, raise_on_error=strict)
                 write_json(osv_report_path, osv_findings, safe_output=safe_output)
-                print("  [SCA] OSV API checks completed.")
                 mark_tool("OSV", "completed")
             except Exception as e:
-                print(f"  [SCA Warn] OSV query failed: {e}")
+                step("OSV", f"query failed: {e}", "warn")
                 mark_tool("OSV", "failed", detail=str(e))
     else:
-        print("ℹ️  [SCA] No supported dependency manifest found, skipping dependency scan.")
+        step("OSV", "skipped (no dependency manifest found)")
         record_timing(timings, "OSV", time.perf_counter(), "skipped")
         mark_tool("OSV", "skipped", detail="dependency manifest not found")
 
@@ -483,7 +481,7 @@ def _execute_scan(
 
     # 2. Python SAST (Ruff)
     with timed_step(timings, "Ruff"):
-        print("🔍 [SAST] Running Ruff (SAST) code security audits...")
+        step("Ruff", "checking Python code")
         ruff_report_path = safe_output.file("ruff-report.json")
         ruff_excludes = sorted(IGNORED_DIRS | excluded_paths)
         ruff_cmd = build_ruff_command("python" if sandbox else sys.executable, str(target_path), ruff_excludes)
@@ -509,21 +507,21 @@ def _execute_scan(
             )
 
     # 3. Multi-language SAST (Semgrep)
-    print("🔍 [SAST] Running Semgrep rule-based scans...")
     semgrep_report_path = safe_output.file("semgrep-report.json")
     semgrep_rules_path = PROJECT_ROOT / "rules" / "semgrep_rules.yaml"
 
     semgrep_bin = "semgrep" if sandbox else find_runtime_executable("semgrep")
     if fast:
-        print("ℹ️  [SAST:Semgrep] Fast mode enabled, skipping Semgrep rule check.")
+        step("Semgrep", "skipped (quick preset)")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
         mark_tool("Semgrep", "skipped", detail="fast mode")
     elif not semgrep_rules_path.is_file():
-        print("  [SAST Error] Aegis Semgrep rules are missing; reinstall Aegis.")
+        step("Semgrep", "Aegis rules are missing; reinstall Aegis", "error")
         record_timing(timings, "Semgrep", time.perf_counter(), "failed")
         mark_tool("Semgrep", "failed", detail="rules file missing")
     elif semgrep_bin:
         with timed_step(timings, "Semgrep"):
+            step("Semgrep", "running Aegis rules")
             configure_semgrep_environment()
             semgrep_cmd = [
                 semgrep_bin,
@@ -564,12 +562,12 @@ def _execute_scan(
                     return_code=semgrep_return_code,
                 )
     else:
-        print("  [SAST Warn] semgrep executable not found, skipping rule check.")
+        step("Semgrep", "executable not found; skipped", "warn")
         record_timing(timings, "Semgrep", time.perf_counter(), "skipped")
         mark_tool("Semgrep", "failed", detail="executable not found")
 
     # 4. Secret Auditing (detect-secrets)
-    print("🔍 [Secrets] Scanning codebase for hardcoded keys and credentials...")
+    step("Secrets", "looking for hardcoded credentials")
     secrets_report_path = safe_output.file("secrets-report.json")
     secrets_excludes = [
         EXCLUDE_FILES_PATTERN,
@@ -628,7 +626,7 @@ def _execute_scan(
                     return_code=secrets_return_code,
                 )
         except Exception as e:
-            print(f"  [Secrets Error] Failed to run detect-secrets: {e}")
+            step("Secrets", f"failed to run detect-secrets: {e}", "error")
             write_json(secrets_report_path, {"results": {}}, safe_output=safe_output)
             mark_tool("Secrets", "failed", detail=str(e))
         finally:
@@ -637,7 +635,7 @@ def _execute_scan(
     # Optional signature analysis is enabled only by the CLI operator.
     if enable_yara:
         with timed_step(timings, "YARA"):
-            print("🔍 [YARA] Running optional signature analysis...")
+            step("YARA", "running signature analysis")
             try:
                 yara_findings = shared_run_yara_scan(
                     target_path,
@@ -647,33 +645,35 @@ def _execute_scan(
                 safe_output.write_bounded_json("yara-report.json", yara_findings)
                 mark_tool("YARA", "completed")
             except Exception as exc:
-                print(f"  [YARA Warn] Report was discarded: {exc}")
+                step("YARA", f"report discarded: {exc}", "warn")
                 mark_tool("YARA", "failed", detail=str(exc))
     else:
         mark_tool("YARA", "skipped", detail="optional signature analysis disabled")
 
     if codeql_sarif:
         with timed_step(timings, "CodeQL"):
+            step("CodeQL", "importing your SARIF")
             try:
                 import_codeql_sarif([Path(path) for path in codeql_sarif], Path(target_path), scan_dir)
                 mark_tool("CodeQL", "completed", detail="imported SARIF")
             except (CodeQLScanError, OSError) as exc:
-                print(f"  [CodeQL Error] {exc}")
+                step("CodeQL", str(exc), "error")
                 mark_tool("CodeQL", "failed", detail=str(exc))
     elif preset == "deep":
         with timed_step(timings, "CodeQL"):
+            step("CodeQL", "running deep analysis in the offline container")
             try:
                 image, suites = operator_runtime_configuration()
                 run_codeql_scan_isolated(Path(target_path), scan_dir, image=image, query_suites=suites)
                 mark_tool("CodeQL", "completed")
             except (CodeQLScanError, OSError, ResourceLimitError, subprocess.SubprocessError) as exc:
-                print(f"  [CodeQL Error] {exc}")
+                step("CodeQL", str(exc), "error")
                 mark_tool("CodeQL", "failed", detail=str(exc))
     else:
         mark_tool("CodeQL", "skipped", detail="scan preset")
 
     # 8. Run Policy Engine
-    print("\nEvaluating all reports against Aegis Security Gate rules...")
+    step("Policy", "evaluating results against the gate")
     html_report = safe_output.file("report.html")
     md_report = safe_output.file("report.md")
     policy_summary = {}
@@ -694,7 +694,7 @@ def _execute_scan(
             "results": results,
         })
         if not json_output and not quiet:
-            print_ascii_report(results, final_status, reason, exploitability_score)
+            print_ascii_report(results, final_status, reason, exploitability_score, base=source_path)
     
     pre_policy_failures = tool_statuses.failures()
     with timed_step(timings, "Policy Engine"):
@@ -800,7 +800,7 @@ def _execute_scan(
     write_json(scan_dir / "scan-manifest.json", manifest, safe_output=safe_output)
     policy_summary["tools"] = tool_statuses.records
 
-    print(f"\nScan complete. Dossier report available at: {html_report}")
+    print(f"\nFull report: {html_report}")
     if not json_output and not quiet:
         print_timing_summary(timings)
     if return_summary:

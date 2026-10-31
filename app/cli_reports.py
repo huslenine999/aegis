@@ -82,7 +82,7 @@ def write_sarif_report(
 
     for tool_result in results or []:
         tool_name = tool_result.get("tool", "Aegis")
-        issues = tool_result.get("findings") if tool_result.get("tool") == "IaC" else tool_result.get("examples", [])
+        issues = tool_result.get("findings") or tool_result.get("examples", [])
         for issue in issues or []:
             rule_id = str(issue.get("test_id") or issue.get("vulnerability_id") or issue.get("rule") or tool_name)
             message = str(issue.get("issue_text") or issue.get("description") or issue.get("package_name") or "Aegis finding")

@@ -15,8 +15,17 @@ All notable changes to the Aegis project will be documented in this file.
   on SARIF from a team's own CodeQL run (for example GitHub code scanning)
   instead of running CodeQL. Every detected Python and JavaScript/TypeScript
   language must be covered, or the scan is an operational error.
+- `aegis scan` lists blocking findings by file with line, severity, rule and
+  message (up to 20; the full list stays in the report). Progress lines use
+  one style. Color follows `NO_COLOR`, `FORCE_COLOR` and whether stdout is a
+  terminal (always on in GitHub Actions).
 
 ### Fixed
+
+- `--sarif` wrote at most five findings per tool, so GitHub code scanning
+  missed the rest. Every finding is now written.
+- The scan banner showed `v2.0` and its box edges did not line up; the risk
+  index line overflowed the box.
 
 - Deep scans failed on every TypeScript repository: the CodeQL image had no
   Node.js, which CodeQL needs to extract TypeScript. `Dockerfile.codeql` now
