@@ -4,6 +4,7 @@ from app import notifications
 from app import projects
 from app.routes import artifact_routes, project_routes
 from app import worker
+from app.scan_engine import ScanJobPayload
 from cryptography.fernet import Fernet
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -76,10 +77,10 @@ def test_worker_rejects_queued_project_without_source_before_snapshot(tmp_path, 
     monkeypatch.setattr(worker, "_complete_github_scan_check", lambda *args: None)
 
     with pytest.raises(RuntimeError, match="repository"):
-        worker.async_scan_task(
+        worker.async_scan_task(ScanJobPayload(
             "missing-source", "project", scan_run_id=run_id, project_id=project_id,
             requested_by=10, preset="quick",
-        )
+        ))
 
     assert projects.get_scan_run(run_id)["state"] == "failed"
     assert not list((tmp_path / "scans").rglob("source-descriptor.json"))
@@ -533,14 +534,14 @@ def test_deep_project_scan_fails_closed_without_isolated_runtime(tmp_path, monke
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
     with pytest.raises(worker.ScanOperationalFailure):
-        worker.async_scan_task(
+        worker.async_scan_task(ScanJobPayload(
             "deep-job",
             "project",
             scan_run_id=run_id,
             project_id=project_id,
             requested_by=10,
             preset="deep",
-        )
+        ))
 
     failed = projects.get_scan_run(run_id)
     assert failed["state"] == "failed"
@@ -572,7 +573,7 @@ def test_standard_scan_does_not_launch_retired_scanners(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
-    worker.async_scan_task("legacy-job", "project")
+    worker.async_scan_task(ScanJobPayload("legacy-job", "project", custom_file_path=str(target)))
 
     manifest = json.loads(
         (scans_dir / "runs" / "legacy-job" / "scan-manifest.json").read_text()
@@ -607,7 +608,7 @@ def test_standard_scan_runs_semgrep_for_javascript_only_projects(tmp_path, monke
     monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
-    worker.async_scan_task("js-job", "project")
+    worker.async_scan_task(ScanJobPayload("js-job", "project", custom_file_path=str(target)))
 
     semgrep_commands = [command for command in scanner_commands if "--config" in command]
     assert len(semgrep_commands) == 1
@@ -641,7 +642,7 @@ def test_worker_secrets_scan_sees_the_snapshot_and_ignores_inline_allowlists(tmp
     monkeypatch.setattr(worker, "execute_subprocess_log", run_scanner)
     monkeypatch.setattr(worker.time, "sleep", lambda *args: None)
 
-    worker.async_scan_task("secrets-job", "project")
+    worker.async_scan_task(ScanJobPayload("secrets-job", "project", custom_file_path=str(target)))
 
     run_dir = scans_dir / "runs" / "secrets-job"
     secrets = json.loads((run_dir / "secrets-report.json").read_text())
@@ -911,3 +912,16 @@ def test_webhook_rejects_shared_non_global_address(monkeypatch):
 
     with pytest.raises(ValueError, match="non-public address"):
         notifications._validate_webhook_url("https://hooks.example.com/hook")
+
+
+def test_worker_takes_only_a_payload_and_never_scans_its_own_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker, "SCANS_DIR", tmp_path / "scans")
+    monkeypatch.setattr(worker, "redis_client", database.InMemoryRedis())
+    monkeypatch.setattr(
+        worker, "create_source_snapshot",
+        lambda *args, **kwargs: pytest.fail("scanned Aegis's own source"),
+    )
+    with pytest.raises(TypeError):
+        worker.async_scan_task("legacy-job", "project")
+    with pytest.raises(RuntimeError, match="scan target"):
+        worker.async_scan_task(ScanJobPayload("no-target", "project"))

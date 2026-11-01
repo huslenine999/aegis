@@ -56,7 +56,7 @@ from .artifact_storage import (
     run_directory,
     validate_artifact_sizes,
 )
-from .safe_output import SafeOutputError, SafeOutputRoot
+from .safe_output import SafeOutputRoot
 from .source_attestation import SourceSnapshot, create_source_snapshot, normalize_scan_report_paths
 from . import github_broker
 from .github_integration import github_installation_token, github_token
@@ -578,29 +578,6 @@ def _github_check_annotations(
     return annotations
 
 
-def _mirror_latest_reports(source_dir: Path) -> None:
-    source_output = SafeOutputRoot(source_dir)
-    latest_output = SafeOutputRoot(SCANS_DIR)
-    for path in source_output.root.iterdir():
-        if path.is_symlink():
-            raise SafeOutputError("Output paths may not contain symbolic links.")
-        if not path.is_file():
-            continue
-        if (
-            path.name.endswith("-report.json")
-            or path.name in {
-                "osv-report.json",
-                "codeql-report.json",
-                "codeql.sarif",
-                "source-descriptor.json",
-                "report.html",
-                "report.md",
-                "sbom.json",
-            }
-        ):
-            shutil.copy2(path, latest_output.file(path.name))
-
-
 def _cleanup_expired_artifacts(current_job_id: str) -> None:
     cutoff = time.time() - ARTIFACT_RETENTION_DAYS * 86400
     roots = [SCANS_DIR / "runs"]
@@ -643,33 +620,10 @@ def _finalize_artifacts(
     record_scan_artifacts(scan_run_id, artifacts)
 
 
-def async_scan_task(
-    payload: ScanJobPayload | str,
-    target: str | None = None,
-    custom_file_path: str | None = None,
-    scan_run_id: int | None = None,
-    project_id: int | None = None,
-    requested_by: int | None = None,
-    preset: str = "standard",
-    source_revision: str | None = None,
-    github_installation_id: int | None = None,
-):
-    if isinstance(payload, ScanJobPayload):
-        job_payload = payload
-    else:
-        if target is None:
-            raise ValueError("Legacy scan calls must provide a target.")
-        job_payload = ScanJobPayload(
-            job_id=payload,
-            target=target,
-            custom_file_path=custom_file_path,
-            scan_run_id=scan_run_id,
-            project_id=project_id,
-            requested_by=requested_by,
-            preset=preset,
-            source_revision=source_revision,
-            github_installation_id=github_installation_id,
-        )
+def async_scan_task(payload: ScanJobPayload):
+    if not isinstance(payload, ScanJobPayload):
+        raise TypeError("Scan jobs take a ScanJobPayload.")
+    job_payload = payload
     job_id = job_payload.job_id
     target = job_payload.target
     assert target is not None
@@ -774,9 +728,6 @@ def async_scan_task(
             dependency_manifests = discover_dependency_manifests(target_path)
             mark_tool("OSV", "skipped", detail="single-file scan")
         else:
-            if not project_id:
-                target_path = str(PROJECT_ROOT)
-
             if target_path is None:
                 raise RuntimeError("Unable to resolve the scan target path.")
             attested_source_path = Path(target_path).expanduser().resolve()
@@ -1016,7 +967,7 @@ def async_scan_task(
         operational_failures = tool_statuses.failures()
 
         baseline_fingerprints = None
-        if isinstance(payload, ScanJobPayload) and payload.diff_aware and payload.project_id:
+        if payload.diff_aware and payload.project_id:
             try:
                 baseline_fingerprints = project_baseline_fingerprints(
                     payload.project_id
@@ -1200,9 +1151,7 @@ def async_scan_task(
             }),
         )
 
-        if scan_run_id is None:
-            _mirror_latest_reports(report_dir)
-        else:
+        if scan_run_id is not None:
             if not project or project_id is None:
                 raise ValueError("Project metadata is required to finalize scan artifacts.")
             _finalize_artifacts(
