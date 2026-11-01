@@ -255,51 +255,18 @@ def execute_scan(
 ):
     """Admit the source once, then run every scanner against its stable copy."""
     submitted_target = Path(target_path_str).expanduser().absolute()
-    if not submitted_target.exists():
-        return _execute_scan(
-            target_path_str,
-            use_docker=use_docker,
-            preset=preset,
-            enable_yara=enable_yara,
-            tool_timeout=tool_timeout,
-            output_dir=output_dir,
-            json_output=json_output,
-            quiet=quiet,
-            fail_on=fail_on,
-            fast=fast,
-            config_path=config_path,
-            sarif=sarif,
-            strict=strict,
-            return_summary=return_summary,
-            codeql_sarif=codeql_sarif,
+    snapshot = None
+    # A missing target or config file is reported by _execute_scan itself.
+    if submitted_target.exists() and not (
+        config_path and not Path(config_path).expanduser().is_file()
+    ):
+        source_path = submitted_target.resolve()
+        trusted_config = load_config(source_path, config_path)
+        snapshot = create_source_snapshot(
+            source_path,
+            ignored_names=IGNORED_DIRS,
+            excluded_paths=resolve_exclude_paths(trusted_config, source_path),
         )
-    if config_path and not Path(config_path).expanduser().is_file():
-        return _execute_scan(
-            target_path_str,
-            use_docker=use_docker,
-            preset=preset,
-            enable_yara=enable_yara,
-            tool_timeout=tool_timeout,
-            output_dir=output_dir,
-            json_output=json_output,
-            quiet=quiet,
-            fail_on=fail_on,
-            fast=fast,
-            config_path=config_path,
-            sarif=sarif,
-            strict=strict,
-            return_summary=return_summary,
-            codeql_sarif=codeql_sarif,
-        )
-
-    source_path = submitted_target.resolve()
-    trusted_config = load_config(source_path, config_path)
-    configured_excludes = resolve_exclude_paths(trusted_config, source_path)
-    snapshot = create_source_snapshot(
-        source_path,
-        ignored_names=IGNORED_DIRS,
-        excluded_paths=configured_excludes,
-    )
     try:
         return _execute_scan(
             target_path_str,
@@ -320,7 +287,8 @@ def execute_scan(
             _source_snapshot=snapshot,
         )
     finally:
-        snapshot.cleanup()
+        if snapshot is not None:
+            snapshot.cleanup()
 
 
 def _cli_func(name: str, default):
