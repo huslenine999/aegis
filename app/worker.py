@@ -445,25 +445,30 @@ def _complete_github_scan_check(
         )
 
 
-def fail_unfinished_scan(scan_run_id: int | None, project_id: int | None, reason: str) -> None:
-    """Mark a scan failed unless it already reached a final state."""
+def fail_unfinished_scan(scan_run_id: int | None, project_id: int | None, reason: str) -> bool:
+    """Mark a scan failed unless it already reached a final state.
+
+    Returns True when this call is what failed the run.
+    """
     if not scan_run_id:
-        return
+        return False
     run = get_scan_run(scan_run_id)
     if not run or run["state"] in {"completed", "failed", "cancelled"}:
-        return
+        return False
     update_scan_run(scan_run_id, state="failed", progress=100, result={"error": reason})
     project = get_project(project_id) if project_id else None
     _complete_github_scan_check(scan_run_id, project, "failure", reason)
+    return True
 
 
 def mark_scan_failed(job, connection=None, *exc_info) -> None:
     """RQ failure callback; also runs for jobs abandoned by a dead worker."""
     payload = job.args[0] if job.args else None
-    if isinstance(payload, ScanJobPayload):
-        fail_unfinished_scan(
-            payload.scan_run_id, payload.project_id, "Scan worker stopped before the scan finished."
-        )
+    if isinstance(payload, ScanJobPayload) and fail_unfinished_scan(
+        payload.scan_run_id, payload.project_id, "Scan worker stopped before the scan finished."
+    ):
+        # Live log streams wait for a final state; without this they never end.
+        publish_job_event(payload.job_id, "state", {"state": "failed", "progress": 100})
 
 
 class ScanWorker(Worker):
