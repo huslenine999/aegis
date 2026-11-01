@@ -636,7 +636,6 @@ def test_imported_artifact_routes_preserve_download_bytes_and_sandbox_html(envir
         assert listing.status_code == 200
         inventory = {item["name"]: item for item in listing.json()["artifacts"]}
         assert set(artifacts) <= set(inventory)
-        assert all(inventory[name]["integrity"] == "verified" for name in artifacts)
         for name, content in artifacts.items():
             response = client.get(f"{base}/{name}")
             assert response.status_code == 200, response.text

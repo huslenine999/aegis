@@ -264,9 +264,10 @@ def test_s3_artifact_route_rejects_namespace_mismatch(
     assert error.value.status_code == 409
 
 
-def test_s3_artifact_listing_requires_payload_integrity(
+def test_artifact_listing_does_not_read_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Listing shows stored metadata; verification happens on download."""
     run = {"job_id": "job-1", "tenant_id": 7, "project_id": 11}
     metadata = {
         "name": "report.html",
@@ -276,20 +277,18 @@ def test_s3_artifact_listing_requires_payload_integrity(
         "storage_key": "aegis/tenants/7/projects/11/runs/job-1/report.html",
     }
 
-    class Store:
+    class UnexpectedStore:
         def __init__(self) -> None:
-            pass
-
-        def verify(self, key: str, size: int, digest: str) -> bool:
-            return False
+            raise AssertionError("listing must not read artifact payloads")
 
     monkeypatch.setattr(artifact_routes, "_authorized_scan", lambda *args, **kwargs: run)
     monkeypatch.setattr(artifact_routes, "list_scan_artifacts", lambda *args, **kwargs: [metadata])
-    monkeypatch.setattr(artifact_routes, "S3ArtifactStore", Store)
+    monkeypatch.setattr(artifact_routes, "S3ArtifactStore", UnexpectedStore)
 
     response = artifact_routes.project_scan_artifacts(11, 1, principal=object())
 
-    assert response["artifacts"][0]["integrity"] == "failed"
+    assert response["artifacts"][0]["sha256"] == "a" * 64
+    assert "integrity" not in response["artifacts"][0]
 
 
 def test_s3_verified_download_rejects_tampered_get_payload(

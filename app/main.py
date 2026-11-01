@@ -65,7 +65,6 @@ async def lifespan(application: FastAPI):
         initialize_database()
         ensure_bootstrap_admin()
         ensure_development_admin()
-        application.state.secret_key = os.environ.get("SECRET_KEY")
         yield
     finally:
         close_database_pool()

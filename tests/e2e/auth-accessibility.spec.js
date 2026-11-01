@@ -193,8 +193,8 @@ test("project scan opens its report and downloads verified evidence", async ({ p
   expect(artifactResponse.ok()).toBeTruthy();
   const artifacts = (await artifactResponse.json()).artifacts;
   expect(artifacts).toEqual(expect.arrayContaining([
-    expect.objectContaining({ name: "report.html", integrity: "verified" }),
-    expect.objectContaining({ name: "scan-manifest.json", integrity: "verified" })
+    expect.objectContaining({ name: "report.html" }),
+    expect.objectContaining({ name: "scan-manifest.json" })
   ]));
   const descriptorResponse = await page.request.get(`/api/projects/${match[1]}/scans/${match[2]}/artifacts/source-descriptor.json`);
   expect(descriptorResponse.ok()).toBeTruthy();
@@ -205,8 +205,8 @@ test("project scan opens its report and downloads verified evidence", async ({ p
   expect((await manifestResponse.json()).source.identity).toBe("https://github.com/aegis-e2e/scan-fixture.git");
   if (deepScanEnabled) {
     expect(artifacts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "codeql.sarif", integrity: "verified" }),
-      expect.objectContaining({ name: "codeql-report.json", integrity: "verified" })
+      expect.objectContaining({ name: "codeql.sarif" }),
+      expect.objectContaining({ name: "codeql-report.json" })
     ]));
     const codeqlResponse = await page.request.get(
       `/api/projects/${match[1]}/scans/${match[2]}/artifacts/codeql-report.json`

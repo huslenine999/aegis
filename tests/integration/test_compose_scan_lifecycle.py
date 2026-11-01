@@ -176,8 +176,7 @@ def test_compose_scan_reaches_postgres_artifacts_and_websocket_events() -> None:
             )
             assert artifacts_response.status_code == 200, artifacts_response.text
             artifacts = artifacts_response.json()["artifacts"]
-            report = next(item for item in artifacts if item["name"] == "report.html")
-            assert report["integrity"] == "verified"
+            assert any(item["name"] == "report.html" for item in artifacts)
 
             report_response = client.get(
                 f"/api/projects/{project_id}/scans/{scan_run_id}/artifacts/report.html"

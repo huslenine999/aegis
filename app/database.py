@@ -21,29 +21,25 @@ def _database_path(root: Path) -> Path:
     return legacy if legacy.exists() and not current.exists() else current
 
 
-if os.environ.get("VERCEL"):
-    DB_PATH = Path("/tmp/aegis.db")
-    SCANS_DIR = Path("/tmp/scans")
+data_dir = os.environ.get("AEGIS_DATA_DIR")
+if data_dir:
+    data_root = Path(data_dir).expanduser().resolve()
+    DB_PATH = _database_path(data_root)
+    SCANS_DIR = data_root / "scans"
 else:
-    data_dir = os.environ.get("AEGIS_DATA_DIR")
-    if data_dir:
-        data_root = Path(data_dir).expanduser().resolve()
-        DB_PATH = _database_path(data_root)
-        SCANS_DIR = data_root / "scans"
-    else:
-        try:
-            test_file = local_root / ".test_write"
-            test_file.touch()
-            test_file.unlink()
+    try:
+        test_file = local_root / ".test_write"
+        test_file.touch()
+        test_file.unlink()
 
-            DB_PATH = _database_path(BASE_DIR)
-            SCANS_DIR = local_root / "scans"
-        except (IOError, OSError):
-            user_root = Path.home() / ".aegis"
-            user_root.mkdir(parents=True, exist_ok=True)
+        DB_PATH = _database_path(BASE_DIR)
+        SCANS_DIR = local_root / "scans"
+    except (IOError, OSError):
+        user_root = Path.home() / ".aegis"
+        user_root.mkdir(parents=True, exist_ok=True)
 
-            DB_PATH = _database_path(user_root)
-            SCANS_DIR = user_root / "scans"
+        DB_PATH = _database_path(user_root)
+        SCANS_DIR = user_root / "scans"
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")

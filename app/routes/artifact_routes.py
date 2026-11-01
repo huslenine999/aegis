@@ -89,39 +89,6 @@ def _s3_artifact_key_is_valid(metadata: dict, run: dict, project_id: int) -> boo
     )
 
 
-def _artifact_bytes(metadata: dict, path: Path) -> bytes:
-    try:
-        validate_artifact_sizes([(str(metadata.get("name", "artifact")), metadata["size"])])
-    except (ArtifactLimitError, KeyError, TypeError, ValueError) as exc:
-        record_artifact_integrity_failure()
-        raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
-    if not _artifact_integrity(metadata, path):
-        record_artifact_integrity_failure()
-        raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
-    if metadata.get("backend") == "s3":
-        content = S3ArtifactStore().read(
-            metadata["storage_key"], max_bytes=int(metadata["size"])
-        )
-        if len(content) != metadata["size"] or hashlib.sha256(content).hexdigest() != metadata["sha256"]:
-            record_artifact_integrity_failure()
-            raise HTTPException(status_code=409, detail="Artifact integrity verification failed.")
-        try:
-            validate_artifact_sizes([(str(metadata.get("name", "artifact")), len(content))])
-        except ArtifactLimitError as exc:
-            record_artifact_integrity_failure()
-            raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
-        return content
-    content = b"".join(
-        iter_file_bytes(path, max_bytes=int(metadata["size"]), chunk_size=1024 * 1024)
-    )
-    try:
-        validate_artifact_sizes([(str(metadata.get("name", "artifact")), len(content))])
-    except ArtifactLimitError as exc:
-        record_artifact_integrity_failure()
-        raise HTTPException(status_code=413, detail="Artifact exceeds configured size limit.") from exc
-    return content
-
-
 class _ArtifactStreamingResponse(StreamingResponse):
     def __init__(
         self, content: Iterable[bytes], *, cleanup: Callable[[], None] | None = None, **kwargs: Any
@@ -227,44 +194,17 @@ def project_scan_artifacts(
 ):
     run = _authorized_scan(project_id, run_id, principal)
     artifact_types = BAC_ARTIFACTS if run.get("target") == "bac-research" else RUN_ARTIFACTS
-    report_dir = run_directory(
-        SCANS_DIR,
-        run["job_id"],
-        tenant_id=run.get("tenant_id"),
-        project_id=project_id,
-    )
-    artifacts = []
-    for metadata in list_scan_artifacts(run_id):
-        name = metadata["name"]
-        path = report_dir / name
-        if name not in artifact_types:
-            continue
-        try:
-            integrity = (
-                _s3_artifact_key_is_valid(metadata, run, project_id)
-                and S3ArtifactStore().verify(
-                    str(metadata["storage_key"]), metadata["size"], metadata["sha256"]
-                )
-                if metadata.get("backend") == "s3"
-                else _artifact_integrity(metadata, path)
-            )
-        except Exception as exc:
-            logger.warning(
-                "Artifact integrity verification failed for run %s artifact %s: %s",
-                run_id,
-                name,
-                exc,
-            )
-            integrity = False
-        if not integrity:
-            record_artifact_integrity_failure()
-        artifacts.append(
-            {
-                **metadata,
-                "url": f"/api/projects/{project_id}/scans/{run_id}/artifacts/{name}",
-                "integrity": "verified" if integrity else "failed",
-            }
-        )
+    # Stored metadata only: listing must not read every artifact (a large
+    # SARIF file, or an S3 object) on each page view. Every download
+    # verifies size and SHA-256 before it serves a byte.
+    artifacts = [
+        {
+            **metadata,
+            "url": f"/api/projects/{project_id}/scans/{run_id}/artifacts/{metadata['name']}",
+        }
+        for metadata in list_scan_artifacts(run_id)
+        if metadata["name"] in artifact_types
+    ]
     if any(item["name"] == "report.html" for item in artifacts):
         artifacts.append(
             {

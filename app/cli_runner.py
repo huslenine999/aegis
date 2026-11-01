@@ -824,7 +824,6 @@ def install_hook():
     if pre_push_path.exists() and AEGIS_HOOK_MARKER not in pre_push_path.read_text(errors="replace"):
         print("❌ Error: .git/hooks/pre-push already exists and was not installed by Aegis. Remove it first.")
         return 1
-    aegis_bin_abs = PROJECT_ROOT / "bin" / "aegis"
     
     hook_content = f"""#!/bin/bash
 {AEGIS_HOOK_MARKER}
@@ -834,11 +833,7 @@ echo "🛡️ Running Aegis pre-push security scans..."
 REPO_DIR="$(git rev-parse --show-toplevel)"
 
 # Run Aegis scan
-if [ -f "{aegis_bin_abs}" ]; then
-  "{aegis_bin_abs}" scan "$REPO_DIR" --fast
-else
-  aegis scan "$REPO_DIR" --fast
-fi
+aegis scan "$REPO_DIR" --fast
 RESULT=$?
 
 if [ $RESULT -ne 0 ]; then
