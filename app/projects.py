@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from .artifact_storage import artifact_key
 from .database import USING_POSTGRES, get_connection
+from .findings import extract_findings
 from .github_lifecycle import ensure_legacy_repository_binding, revoke_github_capabilities
 
 
@@ -388,82 +389,10 @@ def claim_bac_import_run(
 
 
 def _fingerprints(result: dict | None) -> set[str]:
-    result = result or {}
-    values = set()
-
-    def stable_path(value) -> str:
-        text = str(value or "").replace("\\", "/")
-        for marker in ("/workspaces/", "/uploads/"):
-            if marker not in text:
-                continue
-            remainder = text.split(marker, 1)[1]
-            return remainder.split("/", 1)[1] if "/" in remainder else remainder
-        return text
-
-    for item in result.get("ruff") or []:
-        values.add(
-            f"ruff:{item.get('code')}:{stable_path(item.get('filename'))}:{item.get('message')}"
-        )
-    for item in (result.get("semgrep") or {}).get("results", []):
-        values.add(
-            f"semgrep:{item.get('check_id')}:{stable_path(item.get('path'))}:{item.get('extra', {}).get('message')}"
-        )
-    for family, keys in {
-        "osv": ("id", "package"),
-        "yara": ("rule", "filename"),
-        "clamav": ("virus", "filename"),
-        "zap": ("vuln_type", "route"),
-    }.items():
-        for item in result.get(family) or []:
-            parts = [
-                stable_path(item.get(key)) if key == "filename" else str(item.get(key))
-                for key in keys
-            ]
-            values.add(f"{family}:" + ":".join(parts))
-    safety = result.get("safety") or {}
-    if isinstance(safety, dict):
-        safety_items = safety.get("vulnerabilities", []) or safety.get("results", [])
-    else:
-        safety_items = safety
-    for item in safety_items or []:
-        values.add(
-            "safety:"
-            + ":".join(
-                str(item.get(key))
-                for key in ("vulnerability_id", "advisory", "package_name", "package")
-            )
-        )
-    for target in (result.get("trivy") or {}).get("Results", []):
-        for item in target.get("Vulnerabilities", []) or []:
-            values.add(
-                f"trivy:{item.get('VulnerabilityID')}:{target.get('Target')}:{item.get('PkgName')}"
-            )
-    for filename, items in (result.get("secrets") or {}).get("results", {}).items():
-        for item in items:
-            values.add(f"secrets:{item.get('type')}:{stable_path(filename)}")
-    iac = result.get("iac") or {}
-    if isinstance(iac, dict):
-        for item in iac.get("findings", []) or []:
-            values.add(
-                "iac:"
-                + ":".join(
-                    str(item.get(key))
-                    for key in ("rule_id", "framework", "resource")
-                )
-                + ":"
-                + stable_path(item.get("path"))
-            )
-        for item in iac.get("unmanaged_suppressions", []) or []:
-            values.add(
-                "iac-suppression:"
-                + ":".join(
-                    str(item.get(key))
-                    for key in ("rule_id", "framework", "resource")
-                )
-                + ":"
-                + stable_path(item.get("path"))
-            )
-    return values
+    """The same finding identities that durable findings and the gate use."""
+    # extract_findings tags the raw entries it reads; work on a copy.
+    copy = json.loads(json.dumps(result or {}))
+    return {item["fingerprint"] for item in extract_findings(copy)}
 
 
 def scan_result_summary(result: dict | None) -> dict:
@@ -499,6 +428,9 @@ def update_scan_run(
                 new_findings = int(finding_sync.get("created", 0)) + int(
                     finding_sync.get("reopened", 0)
                 )
+            elif isinstance(result.get("new_findings"), int):
+                # Diff-aware scans count against the baseline they were gated on.
+                new_findings = int(result["new_findings"])
             else:
                 row = connection.execute(
                     "SELECT project_id FROM scan_runs WHERE id = ?", (run_id,)

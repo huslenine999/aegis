@@ -1656,6 +1656,66 @@ def _migration_026_drop_demo_lab_tables(cursor) -> None:
     cursor.execute("DROP TABLE IF EXISTS users")
 
 
+
+def _migration_027_remove_pull_request_findings(cursor) -> None:
+    """Undo what pull request scans wrote into durable findings.
+
+    PR scans used to sync their findings into the project baseline, so a
+    blocked PR passed on its next push, and they could auto-resolve project
+    findings the branch did not contain. Remove their occurrences, drop
+    findings that only PR scans ever saw, reopen findings a PR scan resolved,
+    and point last_seen at the latest non-PR run.
+    """
+    pr_runs = "SELECT id FROM scan_runs WHERE github_pull_request IS NOT NULL"
+    pr_run_ids = {int(row[0]) for row in cursor.execute(pr_runs).fetchall()}
+    if not pr_run_ids:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for row in cursor.execute(
+        """SELECT e.finding_id, e.details_json FROM finding_events e
+           JOIN security_findings f ON f.id = e.finding_id
+           WHERE f.status = 'resolved' AND e.event_type = 'auto_resolved'
+           AND e.id = (SELECT MAX(id) FROM finding_events
+                       WHERE finding_id = e.finding_id AND event_type = 'auto_resolved')"""
+    ).fetchall():
+        try:
+            run_id = int(json.loads(row[1] or "{}").get("scan_run_id"))
+        except (TypeError, ValueError):
+            continue
+        if run_id not in pr_run_ids:
+            continue
+        cursor.execute(
+            "UPDATE security_findings SET status = 'open', resolution_note = NULL, updated_at = ? WHERE id = ?",
+            (now, int(row[0])),
+        )
+        cursor.execute(
+            """INSERT INTO finding_events
+               (finding_id, actor_id, event_type, from_status, to_status, note, details_json, created_at)
+               VALUES (?, NULL, 'reopened', 'resolved', 'open', ?, ?, ?)""",
+            (
+                int(row[0]),
+                "A pull request scan resolved this finding; PR scans no longer change project findings.",
+                json.dumps({"migration": 27, "scan_run_id": run_id}),
+                now,
+            ),
+        )
+    cursor.execute(f"DELETE FROM finding_occurrences WHERE scan_run_id IN ({pr_runs})")
+    # Explicit, so SQLite without foreign-key enforcement leaves no orphans.
+    cursor.execute(
+        """DELETE FROM finding_events WHERE NOT EXISTS (
+               SELECT 1 FROM finding_occurrences o WHERE o.finding_id = finding_events.finding_id)"""
+    )
+    cursor.execute(
+        """DELETE FROM security_findings WHERE NOT EXISTS (
+               SELECT 1 FROM finding_occurrences o WHERE o.finding_id = security_findings.id)"""
+    )
+    cursor.execute(
+        f"""UPDATE security_findings SET last_seen_run_id = (
+                SELECT MAX(o.scan_run_id) FROM finding_occurrences o
+                WHERE o.finding_id = security_findings.id)
+            WHERE last_seen_run_id IN ({pr_runs})"""
+    )
+
 MIGRATIONS = (
     Migration(1, "initial_schema", _migration_001_initial_schema),
     Migration(2, "server_sessions_and_indexes", _migration_002_sessions_and_indexes),
@@ -1683,6 +1743,7 @@ MIGRATIONS = (
     Migration(24, "final_scan_runs", _migration_024_final_scan_runs),
     Migration(25, "least_privilege_support", _migration_025_least_privilege_support),
     Migration(26, "drop_demo_lab_tables", _migration_026_drop_demo_lab_tables),
+    Migration(27, "remove_pull_request_findings", _migration_027_remove_pull_request_findings),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version

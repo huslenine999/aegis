@@ -46,7 +46,7 @@ from .projects import (
     record_scan_artifacts,
     update_scan_run,
 )
-from .findings import project_baseline_fingerprints, sync_findings
+from .findings import extract_findings, project_baseline_fingerprints, sync_findings
 from .policies import get_policy
 from .evidence import canonical_json
 from .evidence_signer import sign_scan_manifest
@@ -1213,12 +1213,24 @@ def async_scan_task(
 
         # 5. State: REPORTING -> COMPLETED
         if scan_run_id:
-            finding_sync = sync_findings(scan_run_id, result_payload)
-            result_payload = {
-                **result_payload,
-                "finding_sync": finding_sync,
-                "new_findings": int(finding_sync.get("created", 0)) + int(finding_sync.get("reopened", 0)),
-            }
+            if job_payload.diff_aware:
+                # A diff-aware (pull request) scan gates a proposed change. Its
+                # findings must never become project baseline: otherwise the
+                # next push of the same PR, or another PR, would see them as
+                # pre-existing and pass. It must not auto-resolve project
+                # findings either, since the branch is not the project.
+                observed = {item["fingerprint"] for item in extract_findings(result_payload)}
+                result_payload = {
+                    **result_payload,
+                    "new_findings": len(observed - (baseline_fingerprints or set())),
+                }
+            else:
+                finding_sync = sync_findings(scan_run_id, result_payload)
+                result_payload = {
+                    **result_payload,
+                    "finding_sync": finding_sync,
+                    "new_findings": int(finding_sync.get("created", 0)) + int(finding_sync.get("reopened", 0)),
+                }
             update_scan_run(
                 scan_run_id, state="completed", progress=100, result=result_payload
             )
