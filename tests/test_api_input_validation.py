@@ -49,3 +49,18 @@ def test_github_import_without_connection_is_a_conflict(client, monkeypatch):
     monkeypatch.setattr(github_routes, "list_repositories", not_connected)
     response = client.post("/api/github/import", json={"full_name": "example/api"})
     assert response.status_code == 409
+
+
+def test_github_import_with_an_invalid_preset_is_a_bad_request(client, monkeypatch):
+    from app.routes import github_routes
+
+    repository = {
+        "name": "api", "full_name": "example/api", "default_branch": "main",
+        "clone_url": "https://github.com/example/api.git",
+    }
+    monkeypatch.setattr(github_routes, "list_repositories", lambda user_id: [repository])
+    response = client.post(
+        "/api/github/import", json={"full_name": "example/api", "scan_preset": "turbo"}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid scan preset."

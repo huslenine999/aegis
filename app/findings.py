@@ -61,7 +61,8 @@ def _fingerprint(*parts: Any) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _severity_from_ruff(code: str) -> str:
+def severity_from_ruff(code: str) -> str:
+    """The one Ruff rule severity table: the gate and durable findings both use it."""
     high = {
         "S102", "S105", "S106", "S107", "S301", "S304", "S305", "S307",
         "S312", "S501", "S506", "S601", "S602", "S605", "S608", "S701",
@@ -169,7 +170,7 @@ def extract_findings(result: dict | None) -> list[dict]:
             "Ruff",
             code,
             item.get("message"),
-            _severity_from_ruff(str(code or "")),
+            severity_from_ruff(str(code or "")),
             path=item.get("filename"),
             line_number=(item.get("location") or {}).get("row"),
             raw=item,

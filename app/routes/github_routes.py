@@ -275,14 +275,17 @@ async def github_import(
     repository = next((repo for repo in repositories if repo["full_name"] == full_name), None)
     if not repository:
         raise HTTPException(status_code=404, detail="GitHub repository not found.")
-    project_id = await asyncio.to_thread(
-        create_project,
-        name=repository["name"],
-        repository_url=repository["clone_url"],
-        github_full_name=repository["full_name"],
-        default_branch=repository["default_branch"],
-        scan_preset=str(body.get("scan_preset", "standard")).lower(),
-        user_id=principal.user_id,
-        tenant_id=principal.tenant_id,
-    )
+    try:
+        project_id = await asyncio.to_thread(
+            create_project,
+            name=repository["name"],
+            repository_url=repository["clone_url"],
+            github_full_name=repository["full_name"],
+            default_branch=repository["default_branch"],
+            scan_preset=str(body.get("scan_preset", "standard")).lower(),
+            user_id=principal.user_id,
+            tenant_id=principal.tenant_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"id": project_id, "name": repository["name"]}

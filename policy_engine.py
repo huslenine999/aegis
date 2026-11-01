@@ -23,6 +23,7 @@ from app.findings import (
     escalate_osv_severity,
     extract_findings,
     osv_base_severity,
+    severity_from_ruff,
     strip_baseline_findings,
 )
 from app.safe_output import SafeOutputRoot
@@ -69,44 +70,6 @@ def load_json(path: Path) -> Any:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ResourceLimitError):
         print(f"[WARN] Invalid JSON report: {path}")
         return None
-
-
-def get_ruff_severity(code: str) -> str:
-    # Basic mapping of flake8-bandit S-rules in Ruff to severity levels
-    high_rules = {
-        "S102",  # exec
-        "S105", "S106", "S107",  # hardcoded password
-        "S301",  # pickle
-        "S304", "S305",  # insecure ciphers
-        "S307",  # eval
-        "S312",  # telnet
-        "S501",  # ssl no verify
-        "S506",  # unsafe yaml load
-        "S601", "S602", "S605",  # shell injection / subprocess shell=True
-        "S608",  # SQL injection
-        "S701",  # jinja2 autoescape=False
-    }
-    medium_rules = {
-        "S103", "S104",  # bad permissions, bind all interfaces
-        "S113",  # requests without timeout
-        "S302",  # marshal
-        "S303",  # insecure hash
-        "S306",  # mktemp
-        "S308",  # django mark_safe
-        "S310",  # urllib urlopen
-        "S313", "S314", "S315", "S316", "S317", "S318", "S319", "S320",  # xml issues
-        "S324",  # hashlib insecure
-        "S508",  # snmp insecure
-        "S604",  # shell/subprocess
-        "S607",  # partial path
-        "S609",  # wildcard injection
-    }
-    code_upper = code.upper()
-    if code_upper in high_rules:
-        return "HIGH"
-    elif code_upper in medium_rules:
-        return "MEDIUM"
-    return "LOW"
 
 
 def _severity_counts(findings: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -292,7 +255,7 @@ def analyze_ruff(report: Any, fail_on: set[str] | None = None) -> Dict[str, Any]
     
     for r in results:
         code = r.get("code", "UNKNOWN")
-        severity = get_ruff_severity(code)
+        severity = severity_from_ruff(code)
         issues.append(enrich_finding("Ruff (SAST)", {
             "severity": severity,
             "test_id": code,
