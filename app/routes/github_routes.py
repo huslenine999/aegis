@@ -46,12 +46,26 @@ async def github_webhook(request: Request):
     if not github_webhook_enabled():
         raise HTTPException(status_code=404, detail="GitHub webhooks are not enabled.")
     body = await request.body()
+    # Everything after reading the body is blocking database, Redis and
+    # GitHub work; run it in the threadpool, off the shared event loop.
+    return await asyncio.to_thread(
+        _process_github_webhook,
+        body,
+        request.headers.get("X-Hub-Signature-256", ""),
+        request.headers.get("X-GitHub-Delivery", ""),
+        request.headers.get("X-GitHub-Event", ""),
+    )
+
+
+def _process_github_webhook(
+    body: bytes, signature_header: str, delivery_id: str, event_type: str
+) -> dict:
     try:
         delivery = verify_and_record_webhook(
             body,
-            signature_header=request.headers.get("X-Hub-Signature-256", ""),
-            delivery_id=request.headers.get("X-GitHub-Delivery", ""),
-            event_type=request.headers.get("X-GitHub-Event", ""),
+            signature_header=signature_header,
+            delivery_id=delivery_id,
+            event_type=event_type,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -145,8 +159,7 @@ async def github_webhook(request: Request):
             details_url = (
                 f"{details_base}/projects" if details_base.startswith("https://") else ""
             )
-            check_run_id = await asyncio.to_thread(
-                create_check_run,
+            check_run_id = create_check_run(
                 installation_id,
                 delivery["repository"],
                 head_sha,
